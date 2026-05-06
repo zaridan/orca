@@ -124,6 +124,9 @@ function QuickTabBody({
   const [quickAgentOverride, setQuickAgentOverride] = useState<TuiAgent | null | undefined>(
     undefined
   )
+  const [quickCustomAgentOverride, setQuickCustomAgentOverride] = useState<
+    string | null | undefined
+  >(undefined)
   const preferredQuickAgent = useMemo<TuiAgent | null>(() => {
     const pref = settings?.defaultTuiAgent
     if (pref === 'blank') {
@@ -131,21 +134,42 @@ function QuickTabBody({
       // model already uses null to mean "blank terminal", so translate here.
       return null
     }
+    if (pref && typeof pref === 'object' && pref.kind === 'custom') {
+      const profile = (settings?.customAgents ?? []).find((p) => p.id === pref.id)
+      return profile?.baseAgent ?? null
+    }
     if (pref) {
-      return pref
+      return pref as TuiAgent
     }
     const detected = cardProps.detectedAgentIds
     return AGENT_CATALOG.find((agent) => detected === null || detected.has(agent.id))?.id ?? null
-  }, [cardProps.detectedAgentIds, settings?.defaultTuiAgent])
+  }, [cardProps.detectedAgentIds, settings?.defaultTuiAgent, settings?.customAgents])
+  const preferredQuickCustomAgentId = useMemo<string | null>(() => {
+    const pref = settings?.defaultTuiAgent
+    if (pref && typeof pref === 'object' && pref.kind === 'custom') {
+      const profile = (settings?.customAgents ?? []).find((p) => p.id === pref.id)
+      return profile ? profile.id : null
+    }
+    return null
+  }, [settings?.defaultTuiAgent, settings?.customAgents])
   const quickAgent = quickAgentOverride === undefined ? preferredQuickAgent : quickAgentOverride
+  const quickCustomAgentId =
+    quickCustomAgentOverride === undefined ? preferredQuickCustomAgentId : quickCustomAgentOverride
 
   const handleQuickAgentChange = useCallback((agent: TuiAgent | null) => {
     setQuickAgentOverride(agent)
+    // Why: switching to a built-in or blank explicitly clears any active
+    // custom selection. Mirrors how onValueChange in AgentCombobox sends
+    // both updates together for a custom → builtin transition.
+    setQuickCustomAgentOverride(null)
+  }, [])
+  const handleQuickCustomAgentChange = useCallback((id: string | null) => {
+    setQuickCustomAgentOverride(id)
   }, [])
 
   const handleCreate = useCallback(async (): Promise<void> => {
-    await submitQuick(quickAgent)
-  }, [quickAgent, submitQuick])
+    await submitQuick(quickAgent, quickCustomAgentId)
+  }, [quickAgent, quickCustomAgentId, submitQuick])
 
   // Cmd/Ctrl+Enter submits, Esc first blurs the focused input (like the full page).
   useEffect(() => {
@@ -208,6 +232,8 @@ function QuickTabBody({
         nameInputRef={nameInputRef}
         quickAgent={quickAgent}
         onQuickAgentChange={handleQuickAgentChange}
+        quickCustomAgentId={quickCustomAgentId}
+        onQuickCustomAgentChange={handleQuickCustomAgentChange}
         {...cardProps}
         onOpenAgentSettings={() => setAgentSettingsOpen(true)}
         onCreate={() => void handleCreate()}

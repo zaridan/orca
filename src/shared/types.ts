@@ -994,6 +994,28 @@ export type TuiAgent =
   | 'hermes' // Hermes Agent
   | 'copilot' // GitHub Copilot CLI
 
+/** A user-defined CLI agent profile — a named variant of a built-in TuiAgent
+ *  with its own launch command and optional env vars. Surfaced in the agent
+ *  picker alongside built-ins; resolved by `id` at launch time. */
+export type CustomAgentProfile = {
+  /** Stable opaque id (uuid). Referenced by `defaultTuiAgent` and composer state. */
+  id: string
+  /** Display label shown in the picker, e.g. "Claude (zai)". */
+  label: string
+  /** Built-in agent this profile inherits prompt-injection mode, icon, and
+   *  telemetry kind from. The profile's `command` replaces the catalog
+   *  `launchCmd` for this profile only. */
+  baseAgent: TuiAgent
+  /** Full launch command, e.g. `claude --dangerously-skip-permissions`.
+   *  May include shell metacharacters; runs in the user's interactive shell
+   *  via the existing startup-command path. */
+  command: string
+  /** Optional env vars merged into the launch as a `KEY='value' …` shell
+   *  prefix. Stored as a record so the settings UI can edit individual keys
+   *  without parsing arbitrary shell. */
+  env?: Record<string, string>
+}
+
 export type TaskViewPresetId = 'all' | 'issues' | 'review' | 'my-issues' | 'my-prs' | 'prs'
 
 /** Where the repo setup script runs when a worktree is created.
@@ -1153,8 +1175,11 @@ export type GlobalSettings = {
   /** Which agent to pre-select in the new-workspace composer.
    *  - null: auto (first detected agent)
    *  - 'blank': blank terminal (no agent launched)
-   *  - TuiAgent: a specific agent id */
-  defaultTuiAgent: TuiAgent | 'blank' | null
+   *  - TuiAgent: a specific built-in agent id
+   *  - { kind: 'custom', id }: a user-defined custom agent profile (see
+   *    `customAgents`). Resolved by id at launch; if the id no longer
+   *    exists the picker falls back to auto. */
+  defaultTuiAgent: TuiAgent | 'blank' | { kind: 'custom'; id: string } | null
   /** Why: worktree deletion is destructive (git worktree remove + rm -rf of the
    *  working directory), so Orca shows a confirmation dialog by default. Users
    *  who delete frequently can opt into skipping the dialog via a "Don't ask
@@ -1187,6 +1212,12 @@ export type GlobalSettings = {
   geminiCliOAuthEnabled: boolean
   /** Per-agent CLI command overrides. A missing key means use the catalog default binary name. */
   agentCmdOverrides: Partial<Record<TuiAgent, string>>
+  /** User-defined CLI agent profiles. Each profile is a named variant of a
+   *  built-in `baseAgent` with its own launch command and optional env vars,
+   *  e.g. "Claude (zai)" pointing the same `claude` binary at a different
+   *  ANTHROPIC_BASE_URL. Inherits the base agent's prompt-injection mode,
+   *  icon, and telemetry kind so the launch flow stays unchanged. */
+  customAgents: CustomAgentProfile[]
   /** Why: macOS terminals must choose between letting Option compose layout
    *  characters (@ on German, € on French) or treating Option as Meta/Esc for
    *  readline shortcuts. Mirrors Ghostty's macos-option-as-alt setting — and

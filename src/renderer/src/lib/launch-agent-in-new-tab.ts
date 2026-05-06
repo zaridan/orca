@@ -1,5 +1,6 @@
 import { useAppStore } from '@/store'
 import { buildAgentStartupPlan, type AgentStartupPlan } from '@/lib/tui-agent-startup'
+import { findCustomAgentProfile } from '@/lib/custom-agent-resolve'
 import { CLIENT_PLATFORM } from '@/lib/new-workspace'
 import { reconcileTabOrder } from '@/components/tab-bar/reconcile-order'
 import { tuiAgentToAgentKind } from '@/lib/telemetry'
@@ -11,6 +12,9 @@ export type LaunchAgentInNewTabArgs = {
   /** The tab group the user clicked from. Keeps split-group launches in the
    *  pane the user initiated from instead of falling through to the active group. */
   groupId?: string
+  /** Optional custom-agent profile id. When set, the launch uses the
+   *  profile's command + env vars instead of the catalog default for `agent`. */
+  customAgentId?: string | null
 }
 
 export type LaunchAgentInNewTabResult = {
@@ -35,8 +39,9 @@ export type LaunchAgentInNewTabResult = {
  * not happen with `allowEmptyPromptLaunch: true` but guarded for safety).
  */
 export function launchAgentInNewTab(args: LaunchAgentInNewTabArgs): LaunchAgentInNewTabResult {
-  const { agent, worktreeId, groupId } = args
+  const { agent, worktreeId, groupId, customAgentId = null } = args
   const store = useAppStore.getState()
+  const customProfile = findCustomAgentProfile(store.settings, customAgentId)
 
   // Why: empty-prompt launch is the whole point of quick-launch — the user
   // just wants to get into the agent's input box with no prefilled prompt.
@@ -45,7 +50,8 @@ export function launchAgentInNewTab(args: LaunchAgentInNewTabArgs): LaunchAgentI
     prompt: '',
     cmdOverrides: store.settings?.agentCmdOverrides ?? {},
     platform: CLIENT_PLATFORM,
-    allowEmptyPromptLaunch: true
+    allowEmptyPromptLaunch: true,
+    customProfile
   })
   if (!startupPlan) {
     return null

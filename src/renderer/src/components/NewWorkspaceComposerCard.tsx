@@ -33,6 +33,10 @@ type NewWorkspaceComposerCardProps = {
   nameInputRef?: React.RefObject<HTMLInputElement | null>
   quickAgent: TuiAgent | null
   onQuickAgentChange: (agent: TuiAgent | null) => void
+  /** Custom-agent profile id selected in the quick-create flow, or null when
+   *  the user has the blank/builtin path. */
+  quickCustomAgentId?: string | null
+  onQuickCustomAgentChange?: (id: string | null) => void
   eligibleRepos: RepoOption[]
   repoId: string
   onRepoChange: (value: string) => void
@@ -178,6 +182,8 @@ export default function NewWorkspaceComposerCard({
   nameInputRef,
   quickAgent,
   onQuickAgentChange,
+  quickCustomAgentId = null,
+  onQuickCustomAgentChange,
   eligibleRepos,
   repoId,
   onRepoChange,
@@ -212,10 +218,11 @@ export default function NewWorkspaceComposerCard({
   const { isFileDragOver, dragHandlers } = useComposerFileDragOver()
   const openModal = useAppStore((s) => s.openModal)
   const defaultTuiAgent = useAppStore((s) => s.settings?.defaultTuiAgent ?? null)
+  const customAgents = useAppStore((s) => s.settings?.customAgents ?? [])
   const updateSettings = useAppStore((s) => s.updateSettings)
 
   const handleSetDefaultAgent = React.useCallback(
-    (next: TuiAgent | 'blank' | null) => {
+    (next: TuiAgent | 'blank' | { kind: 'custom'; id: string } | null) => {
       updateSettings({ defaultTuiAgent: next })
     },
     [updateSettings]
@@ -353,8 +360,37 @@ export default function NewWorkspaceComposerCard({
           </div>
           <AgentCombobox
             agents={visibleQuickAgents}
-            value={quickAgent}
-            onValueChange={onQuickAgentChange}
+            customAgents={customAgents}
+            value={
+              quickCustomAgentId
+                ? (() => {
+                    const profile = customAgents.find((p) => p.id === quickCustomAgentId)
+                    return profile
+                      ? { kind: 'custom' as const, profile }
+                      : quickAgent === null
+                        ? { kind: 'blank' as const }
+                        : { kind: 'builtin' as const, agent: quickAgent }
+                  })()
+                : quickAgent === null
+                  ? { kind: 'blank' as const }
+                  : { kind: 'builtin' as const, agent: quickAgent }
+            }
+            onValueChange={(selection) => {
+              if (selection.kind === 'blank') {
+                onQuickAgentChange(null)
+                onQuickCustomAgentChange?.(null)
+              } else if (selection.kind === 'builtin') {
+                onQuickAgentChange(selection.agent)
+                onQuickCustomAgentChange?.(null)
+              } else {
+                // Why: custom selections set the underlying TuiAgent to the
+                // profile's baseAgent so prompt-injection mode and telemetry
+                // stay valid downstream; the customAgentId carries the
+                // override.
+                onQuickAgentChange(selection.profile.baseAgent)
+                onQuickCustomAgentChange?.(selection.profile.id)
+              }
+            }}
             onOpenManageAgents={onOpenAgentSettings}
             defaultAgent={defaultTuiAgent}
             onSetDefault={handleSetDefaultAgent}

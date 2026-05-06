@@ -1,5 +1,6 @@
 import { TUI_AGENT_CONFIG } from '../../../shared/tui-agent-config'
-import type { TuiAgent } from '../../../shared/types'
+import { resolveCustomAgentBaseCommand } from '../../../shared/custom-agent-profile'
+import type { CustomAgentProfile, TuiAgent } from '../../../shared/types'
 
 export type AgentStartupPlan = {
   /** Why: surfaces the agent id so downstream paste-draft logic can resolve
@@ -31,11 +32,26 @@ export function buildAgentStartupPlan(args: {
   cmdOverrides: Partial<Record<TuiAgent, string>>
   platform: NodeJS.Platform
   allowEmptyPromptLaunch?: boolean
+  /** Why: when set, the launch command comes from the profile (with its env
+   *  vars rendered as a shell prefix) instead of the catalog default + the
+   *  generic per-agent override. The base agent (passed via `agent`) still
+   *  drives prompt-injection mode, telemetry kind, and paste-draft logic, so
+   *  custom profiles ride the existing flow without a new code path. */
+  customProfile?: CustomAgentProfile | null
 }): AgentStartupPlan | null {
-  const { agent, prompt, cmdOverrides, platform, allowEmptyPromptLaunch = false } = args
+  const {
+    agent,
+    prompt,
+    cmdOverrides,
+    platform,
+    allowEmptyPromptLaunch = false,
+    customProfile = null
+  } = args
   const trimmedPrompt = prompt.trim()
   const config = TUI_AGENT_CONFIG[agent]
-  const baseCommand = cmdOverrides[agent] ?? config.launchCmd
+  const baseCommand = customProfile
+    ? resolveCustomAgentBaseCommand(customProfile, platform)
+    : (cmdOverrides[agent] ?? config.launchCmd)
 
   if (!trimmedPrompt) {
     if (!allowEmptyPromptLaunch) {
@@ -121,8 +137,11 @@ export function buildAgentDraftLaunchPlan(args: {
   draft: string
   cmdOverrides: Partial<Record<TuiAgent, string>>
   platform: NodeJS.Platform
+  /** Same role as in `buildAgentStartupPlan`: when set, the launch command
+   *  comes from the profile + env shell prefix. */
+  customProfile?: CustomAgentProfile | null
 }): AgentDraftLaunchPlan | null {
-  const { agent, draft, cmdOverrides, platform } = args
+  const { agent, draft, cmdOverrides, platform, customProfile = null } = args
   const config = TUI_AGENT_CONFIG[agent]
   if (!config.draftPromptFlag) {
     return null
@@ -131,7 +150,9 @@ export function buildAgentDraftLaunchPlan(args: {
   if (!trimmed) {
     return null
   }
-  const baseCommand = cmdOverrides[agent] ?? config.launchCmd
+  const baseCommand = customProfile
+    ? resolveCustomAgentBaseCommand(customProfile, platform)
+    : (cmdOverrides[agent] ?? config.launchCmd)
   const quoted = quoteStartupArg(trimmed, platform)
   return {
     agent,

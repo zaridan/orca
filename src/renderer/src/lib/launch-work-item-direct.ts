@@ -3,6 +3,7 @@ import { useAppStore } from '@/store'
 import { AGENT_CATALOG } from '@/lib/agent-catalog'
 import { pasteDraftWhenAgentReady } from '@/lib/agent-paste-draft'
 import { buildAgentDraftLaunchPlan, buildAgentStartupPlan } from '@/lib/tui-agent-startup'
+import { resolveDefaultTuiAgentPreference } from '@/lib/custom-agent-resolve'
 import { TUI_AGENT_CONFIG } from '../../../shared/tui-agent-config'
 import { activateAndRevealWorktree, type AgentStartedTelemetry } from '@/lib/worktree-activation'
 import {
@@ -14,6 +15,8 @@ import {
 import { ensureHooksConfirmed } from '@/lib/ensure-hooks-confirmed'
 import { track, tuiAgentToAgentKind } from '@/lib/telemetry'
 import type {
+  CustomAgentProfile,
+  GlobalSettings,
   OrcaHooks,
   RepoHookSettings,
   SetupDecision,
@@ -66,20 +69,31 @@ export type LaunchWorkItemDirectArgs = {
 }
 
 function pickAgent(
-  preferred: TuiAgent | 'blank' | null | undefined,
+  settings:
+    | {
+        defaultTuiAgent?: GlobalSettings['defaultTuiAgent']
+        customAgents?: GlobalSettings['customAgents']
+      }
+    | null
+    | undefined,
   detected: Set<TuiAgent>
-): TuiAgent | null {
-  // Why: honor the explicit default when the agent is actually installed. A
-  // stale preference (uninstalled binary) must not block the flow — fall
+): { agent: TuiAgent; customProfile: CustomAgentProfile | null } | null {
+  // Why: honor the explicit default when the underlying base agent is
+  // actually installed. A stale preference (uninstalled binary, or a custom
+  // profile referencing a deleted base) must not block the flow — fall
   // through to the first matching detected agent in catalog order, which
   // matches the quick-composer's auto-pick behavior and keeps the experience
   // consistent regardless of where the user launches the workspace from.
-  if (preferred && preferred !== 'blank' && detected.has(preferred)) {
-    return preferred
+  const resolved = resolveDefaultTuiAgentPreference(settings as GlobalSettings | null | undefined)
+  if (resolved.kind === 'builtin' && detected.has(resolved.agent)) {
+    return { agent: resolved.agent, customProfile: null }
+  }
+  if (resolved.kind === 'custom' && detected.has(resolved.agent)) {
+    return { agent: resolved.agent, customProfile: resolved.profile }
   }
   for (const entry of AGENT_CATALOG) {
     if (detected.has(entry.id)) {
-      return entry.id
+      return { agent: entry.id, customProfile: null }
     }
   }
   return null
@@ -205,6 +219,7 @@ export async function launchWorkItemDirect(args: LaunchWorkItemDirectArgs): Prom
   let primaryTabId: string | null
   let startupPlan: ReturnType<typeof buildAgentStartupPlan> = null
   let effectiveAgent: TuiAgent | null = null
+  let effectiveCustomProfile: CustomAgentProfile | null = null
   let draftLaunchedNatively = false
   try {
     const result = await store.createWorktree(
@@ -219,7 +234,9 @@ export async function launchWorkItemDirect(args: LaunchWorkItemDirectArgs): Prom
     const worktreePath = result.worktree.path
 
     const detectedIds = new Set(await detectedAgentsPromise)
-    effectiveAgent = pickAgent(settings?.defaultTuiAgent, detectedIds)
+    const picked = pickAgent(settings, detectedIds)
+    effectiveAgent = picked?.agent ?? null
+    effectiveCustomProfile = picked?.customProfile ?? null
     const draftContent = item.pasteContent ?? item.url
 
     // Why: agents that gate first-launch behind a "Do you trust this folder?"
@@ -257,7 +274,8 @@ export async function launchWorkItemDirect(args: LaunchWorkItemDirectArgs): Prom
             agent: effectiveAgent,
             draft: draftContent,
             cmdOverrides: settings?.agentCmdOverrides ?? {},
-            platform: CLIENT_PLATFORM
+            platform: CLIENT_PLATFORM,
+            customProfile: effectiveCustomProfile
           })
     if (draftLaunchPlan) {
       startupPlan = {
@@ -273,7 +291,8 @@ export async function launchWorkItemDirect(args: LaunchWorkItemDirectArgs): Prom
         prompt: '',
         cmdOverrides: settings?.agentCmdOverrides ?? {},
         platform: CLIENT_PLATFORM,
-        allowEmptyPromptLaunch: true
+        allowEmptyPromptLaunch: true,
+        customProfile: effectiveCustomProfile
       })
     }
 

@@ -14,6 +14,7 @@ import {
 } from '@/lib/github-links'
 import { activateAndRevealWorktree, type AgentStartedTelemetry } from '@/lib/worktree-activation'
 import { buildAgentDraftLaunchPlan, buildAgentStartupPlan } from '@/lib/tui-agent-startup'
+import { findCustomAgentProfile } from '@/lib/custom-agent-resolve'
 import { TUI_AGENT_CONFIG } from '../../../shared/tui-agent-config'
 import { tuiAgentToAgentKind } from '@/lib/telemetry'
 import { isGitRepoKind } from '../../../shared/repo-kind'
@@ -110,6 +111,12 @@ export type ComposerCardProps = {
   onSelectLinkedItem: (item: GitHubWorkItem) => void
   tuiAgent: TuiAgent
   onTuiAgentChange: (value: TuiAgent) => void
+  /** Currently selected custom-agent profile id, or null when a built-in is
+   *  selected. The picker treats this as a parallel selection — setting it
+   *  also updates `tuiAgent` to the profile's `baseAgent` so prompt-injection
+   *  mode and telemetry stay valid. */
+  customAgentId: string | null
+  onCustomAgentChange: (id: string | null) => void
   detectedAgentIds: Set<TuiAgent> | null
   onOpenAgentSettings: () => void
   advancedOpen: boolean
@@ -158,7 +165,7 @@ export type UseComposerStateResult = {
   promptTextareaRef: React.RefObject<HTMLTextAreaElement | null>
   nameInputRef: React.RefObject<HTMLInputElement | null>
   submit: () => Promise<void>
-  submitQuick: (agent: TuiAgent | null) => Promise<void>
+  submitQuick: (agent: TuiAgent | null, customAgentId?: string | null) => Promise<void>
   /** Invoked by the Enter handler to re-check whether submission should fire. */
   createDisabled: boolean
 }
@@ -294,12 +301,31 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   // null/blank), so 'blank' preferences from global settings must collapse to
   // the Claude default here — the blank-terminal affordance only lives in the
   // quick-create flow.
-  const fallbackDefaultAgent: TuiAgent =
-    settings?.defaultTuiAgent && settings.defaultTuiAgent !== 'blank'
+  const defaultPrefAgent: TuiAgent =
+    settings?.defaultTuiAgent &&
+    settings.defaultTuiAgent !== 'blank' &&
+    typeof settings.defaultTuiAgent !== 'object'
       ? settings.defaultTuiAgent
       : 'claude'
+  // Why: when the saved default is a custom profile, surface its baseAgent
+  // here so the long-form composer's required `tuiAgent` slot is consistent
+  // with the customAgentId we initialize below — otherwise the picker would
+  // show a built-in pill while customAgentId is set, confusing the user.
+  const defaultPrefCustomProfile = (() => {
+    const pref = settings?.defaultTuiAgent
+    if (pref && typeof pref === 'object' && pref.kind === 'custom') {
+      return (settings?.customAgents ?? []).find((p) => p.id === pref.id) ?? null
+    }
+    return null
+  })()
+  const fallbackDefaultAgent: TuiAgent = defaultPrefCustomProfile?.baseAgent ?? defaultPrefAgent
   const [tuiAgent, setTuiAgent] = useState<TuiAgent>(
     persistDraft ? (newWorkspaceDraft?.agent ?? fallbackDefaultAgent) : fallbackDefaultAgent
+  )
+  const [customAgentId, setCustomAgentId] = useState<string | null>(
+    persistDraft
+      ? (newWorkspaceDraft?.customAgentId ?? defaultPrefCustomProfile?.id ?? null)
+      : (defaultPrefCustomProfile?.id ?? null)
   )
   // Why: when the selected repo is remote (has a connectionId), read the
   // per-connection agent list instead of the local one. This ensures the
@@ -383,10 +409,12 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       return
     }
     let cancelled = false
-    void (window.api.gh.repoSlug({ repoPath: selectedRepoPath }) as Promise<{
-      owner: string
-      repo: string
-    } | null>)
+    void (
+      window.api.gh.repoSlug({ repoPath: selectedRepoPath }) as Promise<{
+        owner: string
+        repo: string
+      } | null>
+    )
       .then((result) => {
         if (cancelled) {
           return
@@ -593,6 +621,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       attachments: attachmentPaths,
       linkedWorkItem,
       agent: tuiAgent,
+      customAgentId,
       linkedIssue,
       linkedPR,
       ...(baseBranch !== undefined ? { baseBranch } : {})
@@ -609,7 +638,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     name,
     repoId,
     setNewWorkspaceDraft,
-    tuiAgent
+    tuiAgent,
+    customAgentId
   ])
 
   // Auto-pick the first eligible repo if we somehow start with none selected.
@@ -1326,7 +1356,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         agent: tuiAgent,
         prompt: startupPrompt,
         cmdOverrides: settings?.agentCmdOverrides ?? {},
-        platform: CLIENT_PLATFORM
+        platform: CLIENT_PLATFORM,
+        customProfile: findCustomAgentProfile(settings, customAgentId)
       })
 
       // Why: thread agent_started telemetry through the queued startup so
@@ -1390,8 +1421,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     requiresExplicitSetupChoice,
     resolvedSetupDecision,
     selectedRepo,
-    settings?.agentCmdOverrides,
-    settings?.rightSidebarOpenByDefault,
+    settings,
+    customAgentId,
     setRightSidebarOpen,
     setRightSidebarTab,
     setSidebarOpen,
@@ -1409,7 +1440,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   ])
 
   const submitQuick = useCallback(
-    async (agent: TuiAgent | null): Promise<void> => {
+    async (agent: TuiAgent | null, quickCustomAgentId: string | null = null): Promise<void> => {
+      const customProfile = findCustomAgentProfile(settings, quickCustomAgentId)
       const workspaceName = getWorkspaceSeedName({
         explicitName: name,
         prompt: '',
@@ -1500,7 +1532,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
                 agent,
                 draft: quickDraftPrompt,
                 cmdOverrides: settings?.agentCmdOverrides ?? {},
-                platform: CLIENT_PLATFORM
+                platform: CLIENT_PLATFORM,
+                customProfile
               })
 
         let startupPlan: ReturnType<typeof buildAgentStartupPlan> = null
@@ -1517,7 +1550,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
             prompt: quickPrompt,
             cmdOverrides: settings?.agentCmdOverrides ?? {},
             platform: CLIENT_PLATFORM,
-            allowEmptyPromptLaunch: true
+            allowEmptyPromptLaunch: true,
+            customProfile
           })
           if (startupPlan && quickDraftPrompt) {
             startupPlan.draftPrompt = quickDraftPrompt
@@ -1589,8 +1623,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       requiresExplicitSetupChoice,
       resolvedSetupDecision,
       selectedRepo,
-      settings?.agentCmdOverrides,
-      settings?.rightSidebarOpenByDefault,
+      settings,
       setRightSidebarOpen,
       setRightSidebarTab,
       setSidebarOpen,
@@ -1646,6 +1679,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     onSelectLinkedItem: handleSelectLinkedItem,
     tuiAgent,
     onTuiAgentChange: setTuiAgent,
+    customAgentId,
+    onCustomAgentChange: setCustomAgentId,
     detectedAgentIds,
     onOpenAgentSettings: handleOpenAgentSettings,
     advancedOpen,
