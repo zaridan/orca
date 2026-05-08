@@ -212,6 +212,8 @@ function performQuitAndInstall(): void {
 
   killAllPty()
   onBeforeQuitCleanup?.()
+  clearPendingTransitionRetryTimer()
+  clearTransitionRetryInFlight()
 
   for (const win of BrowserWindow.getAllWindows()) {
     win.removeAllListeners('close')
@@ -247,14 +249,12 @@ async function sendCheckFailureStatus(message: string, userInitiated?: boolean):
         if (pendingTransitionRetryTimer) {
           clearTimeout(pendingTransitionRetryTimer)
         }
-        // Why: each timer callback clears the other so app-nap-delayed events
-        // can't trigger two concurrent autoUpdater.checkForUpdates() calls.
+        // Why: each callback only nulls its own handle; both timers stay armed
+        // until a terminal event clears them centrally. The 1h backstop is
+        // belt-and-suspenders for app-nap-throttled retries — at most two
+        // extra round-trips per the design doc's probe budget.
         pendingTransitionRetryTimer = setTimeout(() => {
           pendingTransitionRetryTimer = null
-          if (pendingTransitionBackstopTimer) {
-            clearTimeout(pendingTransitionBackstopTimer)
-            pendingTransitionBackstopTimer = null
-          }
           forceLaunchUpdateCheck({ userInitiated: Boolean(userInitiated) })
         }, TRANSITION_RETRY_DELAY_MS)
         // Why: belt-and-suspenders for macOS app-nap, where a throttled 30s
@@ -267,10 +267,6 @@ async function sendCheckFailureStatus(message: string, userInitiated?: boolean):
         }
         pendingTransitionBackstopTimer = setTimeout(() => {
           pendingTransitionBackstopTimer = null
-          if (pendingTransitionRetryTimer) {
-            clearTimeout(pendingTransitionRetryTimer)
-            pendingTransitionRetryTimer = null
-          }
           forceLaunchUpdateCheck({ userInitiated: Boolean(userInitiated) })
         }, AUTO_UPDATE_RETRY_INTERVAL_MS)
         return
@@ -424,7 +420,13 @@ export function checkForUpdates(): void {
 // retry's success/error handlers read getUserInitiatedCheck() === false and
 // silently drop the user-initiated styling/recurrence-toast path.
 function forceLaunchUpdateCheck(opts: { userInitiated: boolean }): void {
-  userInitiatedCheck = opts.userInitiated
+  // Why: OR-merge — never DOWNGRADE userInitiatedCheck. If a manual click
+  // arrived during the 30s wait (checkForUpdatesFromMenu set it to true),
+  // the timer's `opts.userInitiated` was captured at schedule time from the
+  // ORIGINAL failed check (e.g. false for a background-originated cycle).
+  // An unconditional write would clobber the click's upgrade and the retry's
+  // result handlers would silently drop the user-initiated toast path.
+  userInitiatedCheck = userInitiatedCheck || opts.userInitiated
   const launch = (): Promise<unknown> => autoUpdater.checkForUpdates()
   // Why: Promise.resolve().then(launch) on the non-prerelease branch converts
   // a synchronous throw from autoUpdater.checkForUpdates into a rejection so
@@ -434,7 +436,10 @@ function forceLaunchUpdateCheck(opts: { userInitiated: boolean }): void {
     ? pinPrereleaseFeed().then(launch)
     : Promise.resolve().then(launch)
   void run.catch((err) => {
-    void sendCheckFailureStatus(String(err?.message ?? err), opts.userInitiated || undefined)
+    // Why: read the OR-merged module flag, NOT opts.userInitiated. The opts
+    // value was captured at schedule time, so it would lose a manual-click
+    // upgrade that arrived during the 30s wait. Mirrors the OR-merge above.
+    void sendCheckFailureStatus(String(err?.message ?? err), userInitiatedCheck || undefined)
   })
 }
 
@@ -476,6 +481,12 @@ export function checkForUpdatesFromMenu(options?: { includePrerelease?: boolean 
   // wait. We deliberately do NOT add a `state === 'checking'` guard — that's
   // exactly the condition the retry helpers are designed to fire through.
   if (transitionRetryInFlight) {
+    // Why: a manual click during the 30s wait must NOT launch a parallel
+    // checkForUpdates(), but it should still upgrade the in-flight retry's
+    // user-initiated flavor so the result toast (or calmer recurrence error)
+    // shows for this click. Without this upgrade, a click during a retry
+    // that originated from a background check is silently absorbed.
+    userInitiatedCheck = true
     return
   }
 
