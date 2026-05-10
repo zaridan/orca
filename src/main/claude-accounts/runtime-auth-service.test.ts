@@ -112,6 +112,13 @@ function createClaudeCredentialsJson(email: string, accessToken: string): string
   })}\n`
 }
 
+function readManagedCredentialsForTest(accountId: string, managedAuthPath: string): string | null {
+  if (process.platform === 'darwin') {
+    return testState.managedKeychainCredentials.get(accountId) ?? null
+  }
+  return readFileSync(join(managedAuthPath, '.credentials.json'), 'utf-8')
+}
+
 describe('ClaudeRuntimeAuthService', () => {
   beforeEach(() => {
     vi.resetModules()
@@ -212,7 +219,7 @@ describe('ClaudeRuntimeAuthService', () => {
     writeFileSync(runtimeCredentialsPath, refreshedCredentials, 'utf-8')
     await service.syncForCurrentSelection()
 
-    expect(testState.managedKeychainCredentials.get('account-1')).toBe(refreshedCredentials)
+    expect(readManagedCredentialsForTest('account-1', managedAuthPath)).toBe(refreshedCredentials)
     expect(readFileSync(runtimeCredentialsPath, 'utf-8')).toBe(refreshedCredentials)
   })
 
@@ -238,7 +245,7 @@ describe('ClaudeRuntimeAuthService', () => {
     writeFileSync(runtimeCredentialsPath, staleCredentials, 'utf-8')
     await service.syncForCurrentSelection()
 
-    expect(testState.managedKeychainCredentials.get('account-1')).toBe(selectedCredentials)
+    expect(readManagedCredentialsForTest('account-1', managedAuthPath)).toBe(selectedCredentials)
     expect(readFileSync(runtimeCredentialsPath, 'utf-8')).toBe(selectedCredentials)
   })
 })
