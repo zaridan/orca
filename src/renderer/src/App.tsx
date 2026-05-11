@@ -496,8 +496,7 @@ function App(): React.JSX.Element {
         // on focus/visibility) and the in-memory ack cleanup paths in
         // agent-status.ts (close/dismiss) both flow to disk through map
         // identity changes. Without persisting, agent rows that survive
-        // restart (per docs/agent-dashboard-retention-restart.md) come back
-        // bold even when the user had already visited them.
+        // restart come back bold even when the user had already visited them.
         acknowledgedAgentsByPaneKey
       })
     }, 150)

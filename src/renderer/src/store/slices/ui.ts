@@ -189,9 +189,8 @@ export type UISlice = {
    *  dashboard. A row is considered unvisited when no ack exists OR the
    *  agent's current stateStartedAt is newer than the last ack (i.e. the
    *  agent has transitioned state since the user last saw it). Persisted
-   *  via PersistedUIState because agent rows themselves now survive restart
-   *  (see docs/agent-dashboard-retention-restart.md) — without this, rows
-   *  you'd already visited come back bold on relaunch. */
+   *  via PersistedUIState because agent rows themselves now survive restart —
+   *  without this, rows you'd already visited come back bold on relaunch. */
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   /** Per-worktree collapsed state for the inline agents section shown inside

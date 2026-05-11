@@ -1463,8 +1463,7 @@ export type PersistedUIState = {
   updateReassuranceSeen?: boolean
   /** Per-paneKey "user has visited this row" timestamps, used by the inline
    *  agents list to mute rows the user has already seen. Persisted because
-   *  agent rows themselves now survive restart (see
-   *  docs/agent-dashboard-retention-restart.md); without persisting acks too,
+   *  agent rows themselves now survive restart; without persisting acks too,
    *  rows you'd already clicked come back bold on relaunch. Stale entries
    *  keyed on dead panes are inert: a future paneKey reuse stamps a fresh
    *  stateStartedAt that beats the old ack via the existing comparison in
