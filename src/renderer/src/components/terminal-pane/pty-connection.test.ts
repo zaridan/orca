@@ -785,6 +785,32 @@ describe('connectPanePty', () => {
     }
   })
 
+  it('writes visible split-pane PTY bytes immediately even when the tab is not active', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport()
+    const capturedDataCallback: { current: ((data: string) => void) | null } = { current: null }
+    transport.connect.mockImplementation(async ({ callbacks }: { callbacks: ConnectCallbacks }) => {
+      capturedDataCallback.current = callbacks.onData ?? null
+      return 'pty-id'
+    })
+    transportFactoryQueue.push(transport)
+
+    const pane = createPane(1)
+    const manager = createManager(1)
+    const deps = createDeps({
+      isActiveRef: { current: false },
+      isVisibleRef: { current: true }
+    })
+
+    connectPanePty(pane as never, manager as never, deps as never)
+    await flushAsyncTicks(6)
+
+    expect(capturedDataCallback.current).not.toBeNull()
+    capturedDataCallback.current?.('visible split output\r\n')
+
+    expect(pane.terminal.write).toHaveBeenCalledWith('visible split output\r\n')
+  })
+
   it('marks panes that receive Arabic output for DOM rendering', async () => {
     const { connectPanePty } = await import('./pty-connection')
     const transport = createMockTransport()
