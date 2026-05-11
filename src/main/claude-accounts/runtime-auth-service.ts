@@ -525,6 +525,13 @@ export class ClaudeRuntimeAuthService {
 
     const snapshotPath = this.getSystemDefaultSnapshotPath()
     if (!existsSync(snapshotPath)) {
+      // Why: when Orca never materialized runtime credentials
+      // (lastWrittenCredentialsJson === null) and no snapshot exists, the
+      // user's system-default credentials are untouched. Deleting them here
+      // would log out the Claude CLI as a side-effect of a failed rollback.
+      if (this.lastWrittenCredentialsJson === null) {
+        return
+      }
       rmSync(this.pathResolver.getRuntimePaths().credentialsPath, { force: true })
       if (process.platform === 'darwin') {
         await deleteActiveClaudeKeychainCredentials()
