@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Alert, Animated, AppState, type AppStateStatus } from 'react-native'
+import { Animated, AppState, type AppStateStatus } from 'react-native'
 import * as Clipboard from 'expo-clipboard'
 import {
   BackHandler,
@@ -47,6 +47,7 @@ import {
 import { StatusDot } from '../../../../src/components/StatusDot'
 import { ActionSheetModal } from '../../../../src/components/ActionSheetModal'
 import { TextInputModal } from '../../../../src/components/TextInputModal'
+import { ConfirmModal } from '../../../../src/components/ConfirmModal'
 import {
   CustomKeyModal,
   loadCustomKeys,
@@ -102,6 +103,12 @@ type MarkdownDocState =
       readOnlyReason?: string
     }
   | { status: 'error'; message: string }
+
+type DirtyMarkdownDraft = {
+  tabId: string
+  title: string
+  content: string
+}
 
 type TerminalCreateResult = {
   terminal: {
@@ -345,6 +352,11 @@ export default function SessionScreen() {
     MobileSessionTab,
     { type: 'markdown' }
   > | null>(null)
+  const [discardMarkdownTarget, setDiscardMarkdownTarget] = useState<Extract<
+    MobileSessionTab,
+    { type: 'markdown' }
+  > | null>(null)
+  const [leaveDrafts, setLeaveDrafts] = useState<DirtyMarkdownDraft[] | null>(null)
   const [renameTarget, setRenameTarget] = useState<Terminal | null>(null)
   const [customKeys, setCustomKeys] = useState<CustomKey[]>([])
   const [showCustomKeyModal, setShowCustomKeyModal] = useState(false)
@@ -957,7 +969,7 @@ export default function SessionScreen() {
   )
 
   const getDirtyMarkdownDrafts = useCallback(() => {
-    const drafts: Array<{ tabId: string; title: string; content: string }> = []
+    const drafts: DirtyMarkdownDraft[] = []
     for (const [tabId, doc] of markdownDocs) {
       if (doc.status === 'ready' && doc.isDirty) {
         const tab = sessionTabs.find((candidate) => candidate.id === tabId)
@@ -973,23 +985,7 @@ export default function SessionScreen() {
       router.back()
       return
     }
-    Alert.alert('Unsaved markdown changes', 'Copy or discard phone drafts before leaving.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Copy All & Leave',
-        onPress: () => {
-          const combined = dirtyDrafts
-            .map((draft) => `# ${draft.title}\n\n${draft.content}`)
-            .join('\n\n---\n\n')
-          void Clipboard.setStringAsync(combined).finally(() => router.back())
-        }
-      },
-      {
-        text: 'Discard',
-        style: 'destructive',
-        onPress: () => router.back()
-      }
-    ])
+    setLeaveDrafts(dirtyDrafts)
   }, [getDirtyMarkdownDrafts, router])
 
   useEffect(() => {
@@ -1011,17 +1007,18 @@ export default function SessionScreen() {
         void readMarkdownTab(tab)
         return
       }
-      Alert.alert('Discard changes?', 'This will replace the phone draft with the desktop file.', [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Discard',
-          style: 'destructive',
-          onPress: () => void readMarkdownTab(tab)
-        }
-      ])
+      setDiscardMarkdownTarget(tab)
     },
     [markdownDocs, readMarkdownTab]
   )
+
+  const confirmDiscardMarkdown = useCallback(() => {
+    const target = discardMarkdownTarget
+    setDiscardMarkdownTarget(null)
+    if (target) {
+      void readMarkdownTab(target)
+    }
+  }, [discardMarkdownTarget, readMarkdownTab])
 
   const saveMarkdownTab = useCallback(
     async (tab: Extract<MobileSessionTab, { type: 'markdown' }>) => {
@@ -2282,6 +2279,43 @@ export default function SessionScreen() {
           }
         ]}
         onClose={() => setMarkdownActionTarget(null)}
+      />
+      <ActionSheetModal
+        visible={leaveDrafts != null}
+        title="Unsaved markdown changes"
+        message="Copy or discard phone drafts before leaving."
+        actions={[
+          {
+            label: 'Copy All & Leave',
+            icon: FileText,
+            onPress: () => {
+              const drafts = leaveDrafts ?? []
+              const combined = drafts
+                .map((draft) => `# ${draft.title}\n\n${draft.content}`)
+                .join('\n\n---\n\n')
+              setLeaveDrafts(null)
+              void Clipboard.setStringAsync(combined).finally(() => router.back())
+            }
+          },
+          {
+            label: 'Discard & Leave',
+            destructive: true,
+            onPress: () => {
+              setLeaveDrafts(null)
+              router.back()
+            }
+          }
+        ]}
+        onClose={() => setLeaveDrafts(null)}
+      />
+      <ConfirmModal
+        visible={discardMarkdownTarget != null}
+        title="Discard Changes"
+        message="Replace the phone draft with the latest desktop file?"
+        confirmLabel="Discard"
+        destructive
+        onConfirm={confirmDiscardMarkdown}
+        onCancel={() => setDiscardMarkdownTarget(null)}
       />
       <TextInputModal
         visible={renameTarget != null}
