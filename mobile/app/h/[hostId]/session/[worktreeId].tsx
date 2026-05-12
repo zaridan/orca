@@ -338,17 +338,7 @@ function MarkdownReader({
   )
 }
 
-function FileReader({
-  doc,
-  title,
-  onRefresh,
-  onCopy
-}: {
-  doc: FileDocState | undefined
-  title: string
-  onRefresh: () => void
-  onCopy: () => void
-}) {
+function FileReader({ doc, title }: { doc: FileDocState | undefined; title: string }) {
   if (!doc || doc.status === 'loading') {
     return (
       <View style={styles.markdownState}>
@@ -360,41 +350,20 @@ function FileReader({
     return (
       <View style={styles.markdownState}>
         <Text style={styles.markdownError}>{doc.message}</Text>
-        <Pressable style={styles.markdownRefreshButton} onPress={onRefresh}>
-          <RefreshCw size={14} color={colors.textPrimary} />
-          <Text style={styles.markdownRefreshText}>Retry</Text>
-        </Pressable>
       </View>
     )
   }
 
   return (
     <View style={styles.markdownEditor}>
-      <TextInput
-        style={styles.markdownTextInput}
-        value={doc.content}
-        editable={false}
-        multiline
-        textAlignVertical="top"
-        autoCapitalize="none"
-        autoCorrect={false}
-        spellCheck={false}
-        accessibilityLabel={`${title} preview`}
-      />
-      <View pointerEvents="box-none" style={styles.markdownFloatingBar}>
-        <Text style={styles.markdownFloatingStatus} numberOfLines={2}>
-          {doc.truncated ? 'Read-only preview, truncated' : 'Read-only preview'}
+      <ScrollView
+        style={styles.filePreviewScroll}
+        contentContainerStyle={styles.filePreviewContent}
+      >
+        <Text selectable style={styles.filePreviewText} accessibilityLabel={`${title} preview`}>
+          {doc.content}
         </Text>
-        <View style={styles.markdownFloatingActions}>
-          <Pressable style={styles.markdownFloatingButton} onPress={onCopy}>
-            <Text style={styles.markdownFloatingButtonText}>Copy</Text>
-          </Pressable>
-          <Pressable style={styles.markdownFloatingButton} onPress={onRefresh}>
-            <RefreshCw size={13} color={colors.textPrimary} />
-            <Text style={styles.markdownFloatingButtonText}>Refresh</Text>
-          </Pressable>
-        </View>
-      </View>
+      </ScrollView>
     </View>
   )
 }
@@ -430,6 +399,10 @@ export default function SessionScreen() {
   const [markdownActionTarget, setMarkdownActionTarget] = useState<Extract<
     MobileSessionTab,
     { type: 'markdown' }
+  > | null>(null)
+  const [fileActionTarget, setFileActionTarget] = useState<Extract<
+    MobileSessionTab,
+    { type: 'file' }
   > | null>(null)
   const [discardMarkdownTarget, setDiscardMarkdownTarget] = useState<Extract<
     MobileSessionTab,
@@ -1063,17 +1036,6 @@ export default function SessionScreen() {
       }
     },
     [client, worktreeId]
-  )
-
-  const copyFileContent = useCallback(
-    async (tabId: string) => {
-      const current = fileDocs.get(tabId)
-      if (current?.status !== 'ready') return
-      await Clipboard.setStringAsync(current.content)
-      triggerSuccess()
-      showToast('Copied')
-    },
-    [fileDocs, showToast]
   )
 
   const updateMarkdownLocalContent = useCallback((tabId: string, content: string) => {
@@ -2095,6 +2057,8 @@ export default function SessionScreen() {
                         })
                       } else if (t.type === 'markdown') {
                         setMarkdownActionTarget(t)
+                      } else {
+                        setFileActionTarget(t)
                       }
                     }}
                     delayLongPress={400}
@@ -2179,8 +2143,6 @@ export default function SessionScreen() {
             <FileReader
               doc={fileDocs.get(activeFileTab.id)}
               title={activeFileTab.title || 'File'}
-              onRefresh={() => void readFileTab(activeFileTab)}
-              onCopy={() => void copyFileContent(activeFileTab.id)}
             />
             {toastMessage && (
               <Animated.View
@@ -2464,6 +2426,24 @@ export default function SessionScreen() {
         onClose={() => setMarkdownActionTarget(null)}
       />
       <ActionSheetModal
+        visible={fileActionTarget != null}
+        title={fileActionTarget?.title || 'File'}
+        actions={[
+          {
+            label: 'Refresh',
+            icon: RefreshCw,
+            onPress: () => {
+              const target = fileActionTarget
+              setFileActionTarget(null)
+              if (target) {
+                void readFileTab(target)
+              }
+            }
+          }
+        ]}
+        onClose={() => setFileActionTarget(null)}
+      />
+      <ActionSheetModal
         visible={leaveDrafts != null}
         title="Unsaved markdown changes"
         message="Copy or discard phone drafts before leaving."
@@ -2672,25 +2652,6 @@ const styles = StyleSheet.create({
     minHeight: 0,
     backgroundColor: colors.bgBase
   },
-  fileTabFrame: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.xl,
-    backgroundColor: colors.bgBase
-  },
-  fileTabTitle: {
-    color: colors.textPrimary,
-    fontSize: typography.bodySize,
-    fontWeight: '600',
-    maxWidth: '100%'
-  },
-  fileTabMeta: {
-    color: colors.textSecondary,
-    fontSize: typography.metaSize,
-    textAlign: 'center'
-  },
   markdownEditor: {
     flex: 1,
     position: 'relative'
@@ -2714,6 +2675,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.lg,
     paddingBottom: spacing.xl * 3,
+    fontSize: typography.bodySize,
+    lineHeight: 22,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' })
+  },
+  filePreviewScroll: {
+    flex: 1,
+    minHeight: 0,
+    backgroundColor: colors.bgBase
+  },
+  filePreviewContent: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xl
+  },
+  filePreviewText: {
+    color: colors.textPrimary,
     fontSize: typography.bodySize,
     lineHeight: 22,
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' })
