@@ -206,7 +206,7 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     rightSidebarOpenByDefault: true,
     showTitlebarAppName: true,
     showTasksButton: true,
-    floatingTerminalEnabled: false,
+    floatingTerminalEnabled: true,
     floatingTerminalCwd: '~',
     floatingTerminalTriggerLocation: 'floating-button',
     notifications: getDefaultNotificationSettings(),
@@ -244,7 +244,7 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     // Why: off by default — opt-in cosmetic joke feature. Leaving the default
     // false keeps the overlay unmounted for users who never enable it.
     experimentalPet: false,
-    experimentalActivity: false,
+    experimentalActivity: true,
     experimentalWorktreeSymlinks: false,
     // Why: hydrate an empty default so the renderer's optional-chained reads
     // (`settings?.githubProjects?.activeProject`) land on a stable shape

@@ -1237,8 +1237,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     async (
       worktreeId: string,
       meta: {
-        linkedIssue?: number
-        linkedPR?: number
         comment?: string
       }
     ): Promise<void> => {
@@ -1297,15 +1295,14 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
             }
           : undefined,
         telemetrySource,
-        linkedWorkItem?.title
+        linkedWorkItem?.title,
+        parsedLinkedIssueNumber ?? undefined,
+        effectiveLinkedPR ?? undefined
       )
       const worktree = result.worktree
 
-      await applyWorktreeMeta(worktree.id, {
-        ...(parsedLinkedIssueNumber !== null ? { linkedIssue: parsedLinkedIssueNumber } : {}),
-        ...(effectiveLinkedPR !== null ? { linkedPR: effectiveLinkedPR } : {}),
-        ...(note.trim() ? { comment: note.trim() } : {})
-      })
+      const trimmedNote = note.trim()
+      await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
 
       const issueCommand =
         shouldRunIssueAutomation && issueCommandTrustDecision === 'run'
@@ -1447,16 +1444,14 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
               }
             : undefined,
           telemetrySource,
-          linkedWorkItem?.title
+          linkedWorkItem?.title,
+          parsedLinkedIssueNumber ?? undefined,
+          effectiveLinkedPR ?? undefined
         )
         const worktree = result.worktree
 
         const trimmedNote = note.trim()
-        await applyWorktreeMeta(worktree.id, {
-          ...(parsedLinkedIssueNumber !== null ? { linkedIssue: parsedLinkedIssueNumber } : {}),
-          ...(effectiveLinkedPR !== null ? { linkedPR: effectiveLinkedPR } : {}),
-          ...(trimmedNote ? { comment: trimmedNote } : {})
-        })
+        await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
 
         // Why: when a linked work item is selected in the quick flow, launch
         // the agent with a blank prompt and type the URL into its input as a

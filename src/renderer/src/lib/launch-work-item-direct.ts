@@ -220,27 +220,22 @@ export async function launchWorkItemDirect(args: LaunchWorkItemDirectArgs): Prom
       finalSetupDecision,
       undefined,
       telemetrySource,
-      item.title
+      item.title,
+      item.type === 'issue' && item.number ? item.number : undefined,
+      item.type === 'pr' && item.number ? item.number : undefined
     )
     worktreeId = result.worktree.id
     const worktreePath = result.worktree.path
     const meta: {
-      linkedIssue?: number
-      linkedPR?: number
       linkedLinearIssue?: string
     } = {}
-    if (item.type === 'issue' && item.number) {
-      meta.linkedIssue = item.number
-    } else if (item.type === 'pr' && item.number) {
-      meta.linkedPR = item.number
-    }
     if (item.linearIdentifier) {
       meta.linkedLinearIssue = item.linearIdentifier
     }
     if (Object.keys(meta).length > 0) {
-      // Why: the Project direct-launch path activates the new workspace
-      // immediately. Persist the link first so the first sidebar render can
-      // show the issue/PR association instead of briefly looking unlinked.
+      // Why: Project direct-launch activates the new workspace immediately.
+      // GitHub issue/PR links are persisted during create; Linear metadata
+      // still uses a best-effort follow-up because create args do not carry it.
       // Best-effort: the worktree is already created on disk, so a meta
       // write failure must not abort activation and orphan it.
       void store.updateWorktreeMeta(worktreeId, meta).catch(() => {

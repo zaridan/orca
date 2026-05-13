@@ -1428,6 +1428,13 @@ export default function SessionScreen() {
     if (initializedHandlesRef.current.size === 0) {
       setTerminalsLoaded(false)
     }
+    // Why: on reconnect the RPC client auto-resends terminal.subscribe and
+    // the server sends a fresh scrollback frame. The subscribe handler drops
+    // scrollback when initializedHandlesRef already contains the handle, so
+    // we'd keep stale pre-disconnect content (and lose any output emitted
+    // during the disconnect). Clear the flag so the fresh snapshot calls
+    // ref.init(...) and replaces the buffer.
+    initializedHandlesRef.current.clear()
     let disposed = false
     const timers: ReturnType<typeof setTimeout>[] = []
     function addTimer(fn: () => void, ms: number) {

@@ -228,6 +228,45 @@ describe('createWorktree base status merge', () => {
     vi.clearAllMocks()
   })
 
+  it('passes linked issue and PR metadata through the create IPC payload', async () => {
+    const store = createTestStore()
+    const wt = makeWorktree({
+      id: 'repo1::/path/wt1',
+      repoId: 'repo1',
+      path: '/path/wt1',
+      linkedIssue: 123,
+      linkedPR: 456
+    })
+    mockApi.worktrees.create.mockResolvedValue({ worktree: wt })
+
+    await store
+      .getState()
+      .createWorktree(
+        'repo1',
+        'feature',
+        'origin/main',
+        'inherit',
+        undefined,
+        'sidebar',
+        'Feature Title',
+        123,
+        456
+      )
+
+    expect(mockApi.worktrees.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoId: 'repo1',
+        name: 'feature',
+        linkedIssue: 123,
+        linkedPR: 456
+      })
+    )
+    expect(store.getState().worktreesByRepo.repo1[0]).toMatchObject({
+      linkedIssue: 123,
+      linkedPR: 456
+    })
+  })
+
   it('does not overwrite a newer reconcile status with the initial checking status', async () => {
     const store = createTestStore()
     const wt = makeWorktree({ id: 'repo1::/path/wt1', repoId: 'repo1', path: '/path/wt1' })

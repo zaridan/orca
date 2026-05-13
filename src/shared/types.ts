@@ -867,6 +867,8 @@ export type CreateWorktreeArgs = {
   baseBranch?: string
   setupDecision?: SetupDecision
   sparseCheckout?: CreateSparseCheckoutRequest
+  linkedIssue?: number
+  linkedPR?: number
   /** Telemetry-only: which UI surface initiated this create. Threaded from
    *  the renderer entry point so main can emit `workspace_created` with the
    *  correct `source`. `unknown` is a valid wire value — an unrecognized
@@ -1282,9 +1284,8 @@ export type GlobalSettings = {
   /** Legacy persisted key from before the sidekick -> pet rename. Read only
    *  during migration; new writes use experimentalPet. */
   experimentalSidekick?: boolean
-  /** Experimental: Slack-style Activity page that groups agent/worktree status
-   *  events by worktree. Opt-in while the UI and backend event model are still
-   *  being refined. */
+  /** Legacy persisted flag from when Activity was experimental. Activity is
+   *  now default-on and this no longer gates the page. */
   experimentalActivity: boolean
   /** Experimental: when creating a worktree, automatically symlink a
    *  user-configured set of files/folders from the primary checkout (e.g.

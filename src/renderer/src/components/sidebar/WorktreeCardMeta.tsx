@@ -11,7 +11,8 @@ import { CircleDot } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import CommentMarkdown from './CommentMarkdown'
 import { PullRequestIcon, prStateLabel, checksLabel } from './WorktreeCardHelpers'
-import type { PRInfo, IssueInfo } from '../../../../shared/types'
+import type { WorktreeCardPrDisplay } from './worktree-card-pr-display'
+import type { IssueInfo } from '../../../../shared/types'
 
 // ── Issue section ────────────────────────────────────────────────────
 
@@ -82,11 +83,14 @@ export function IssueSection({ issue, onClick }: IssueSectionProps): React.JSX.E
 // ── PR section ───────────────────────────────────────────────────────
 
 type PrSectionProps = {
-  pr: PRInfo
+  pr: WorktreeCardPrDisplay
   onClick: (e: React.MouseEvent) => void
 }
 
 export function PrSection({ pr, onClick: _onClick }: PrSectionProps): React.JSX.Element {
+  const state = pr.state
+  const checksStatus = pr.checksStatus
+  const hasChecks = checksStatus && checksStatus !== 'neutral'
   return (
     <HoverCard openDelay={300}>
       <HoverCardTrigger asChild>
@@ -100,11 +104,11 @@ export function PrSection({ pr, onClick: _onClick }: PrSectionProps): React.JSX.
           <PullRequestIcon
             className={cn(
               'size-3 shrink-0',
-              pr.state === 'merged' && 'text-purple-600/70 dark:text-purple-400/70',
-              pr.state === 'open' && 'text-emerald-500/80',
-              pr.state === 'closed' && 'text-muted-foreground/60',
-              pr.state === 'draft' && 'text-muted-foreground/50',
-              (!pr.state || !['merged', 'open', 'closed', 'draft'].includes(pr.state)) &&
+              state === 'merged' && 'text-purple-600/70 dark:text-purple-400/70',
+              state === 'open' && 'text-emerald-500/80',
+              state === 'closed' && 'text-muted-foreground/60',
+              state === 'draft' && 'text-muted-foreground/50',
+              (!state || !['merged', 'open', 'closed', 'draft'].includes(state)) &&
                 'text-muted-foreground opacity-60'
             )}
           />
@@ -122,19 +126,23 @@ export function PrSection({ pr, onClick: _onClick }: PrSectionProps): React.JSX.
         <div className="font-semibold text-[13px]">
           #{pr.number} {pr.title}
         </div>
-        <div className="flex items-center gap-2 text-muted-foreground">
-          <span>State: {prStateLabel(pr.state)}</span>
-          {pr.checksStatus !== 'neutral' && <span>Checks: {checksLabel(pr.checksStatus)}</span>}
-        </div>
-        <a
-          href={pr.url}
-          target="_blank"
-          rel="noreferrer"
-          className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
-          onClick={(e) => e.stopPropagation()}
-        >
-          View on GitHub
-        </a>
+        {state && (
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <span>State: {prStateLabel(state)}</span>
+            {hasChecks && <span>Checks: {checksLabel(checksStatus)}</span>}
+          </div>
+        )}
+        {pr.url && (
+          <a
+            href={pr.url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            onClick={(e) => e.stopPropagation()}
+          >
+            View on GitHub
+          </a>
+        )}
       </HoverCardContent>
     </HoverCard>
   )

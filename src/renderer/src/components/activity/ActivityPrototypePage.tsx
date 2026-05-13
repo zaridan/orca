@@ -3,36 +3,57 @@ and current visual skeleton together until the next refinement pass decides
 which pieces become production modules. */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Bell, BellDot, BellOff, MessageSquareText, Search, TerminalSquare } from 'lucide-react'
+import {
+  Bell,
+  BellDot,
+  ExternalLink,
+  MessageSquareText,
+  MoreVertical,
+  Search,
+  TerminalSquare
+} from 'lucide-react'
 
+import { AgentStateDot, agentStateLabel } from '@/components/AgentStateDot'
 import { AgentIcon } from '@/lib/agent-catalog'
-import { agentTypeToIconAgent, formatAgentTypeLabel } from '@/lib/agent-status'
+import {
+  agentTypeToIconAgent,
+  formatAgentTypeLabel,
+  isExplicitAgentStatusFresh
+} from '@/lib/agent-status'
 import { activateTabAndFocusPane } from '@/lib/activate-tab-and-focus-pane'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { useAppStore } from '@/store'
 import type { RetainedAgentEntry } from '@/store/slices/agent-status'
 import { getRepoMapFromState, getWorktreeMapFromState } from '@/store/selectors'
 import { useSidebarResize } from '@/hooks/useSidebarResize'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Toggle } from '@/components/ui/toggle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { FilledBellIcon } from '../sidebar/WorktreeCardHelpers'
 import {
   setActivityTerminalPortals,
   type ActivityTerminalPortalTarget
 } from './activity-terminal-portal'
 import type { Repo, TerminalTab, Worktree } from '../../../../shared/types'
-import type {
-  AgentStateHistoryEntry,
-  AgentStatusEntry,
-  AgentStatusState,
-  AgentType
+import {
+  AGENT_STATUS_STALE_AFTER_MS,
+  type AgentStateHistoryEntry,
+  type AgentStatusEntry,
+  type AgentStatusState,
+  type AgentType
 } from '../../../../shared/agent-status-types'
 
 type ThreadReadFilter = 'all' | 'unread'
 type ActivityEventState = Extract<AgentStatusState, 'done' | 'blocked' | 'waiting'>
+type ActivityLiveAgentState = Extract<AgentStatusState, 'working' | 'blocked' | 'waiting'>
 
 type ActivityEvent = {
   id: string
@@ -56,6 +77,7 @@ type AgentPaneThread = {
   worktree: Worktree
   repo: Repo | null
   agentType: AgentType
+  currentAgentState: ActivityLiveAgentState | null
   latestEvent: ActivityEvent
   events: ActivityEvent[]
   unread: boolean
@@ -295,6 +317,20 @@ function isActivityEventState(state: AgentStatusState): state is ActivityEventSt
   return state === 'done' || state === 'blocked' || state === 'waiting'
 }
 
+function isActivityLiveAgentState(state: AgentStatusState): state is ActivityLiveAgentState {
+  return state === 'working' || state === 'blocked' || state === 'waiting'
+}
+
+function freshActivityLiveAgentState(
+  entry: AgentStatusEntry,
+  now: number
+): ActivityLiveAgentState | null {
+  if (!isActivityLiveAgentState(entry.state)) {
+    return null
+  }
+  return isExplicitAgentStatusFresh(entry, now, AGENT_STATUS_STALE_AFTER_MS) ? entry.state : null
+}
+
 // Why: per-pane cap guarantees each agent appears in the left list even when one pane has a long history.
 const EVENTS_PER_PANE_CAP = 5
 
@@ -391,10 +427,15 @@ export function buildActivityEvents(args: {
   worktreeMap: Map<string, Worktree>
   repoMap: Map<string, Repo>
   acknowledgedAgentsByPaneKey: Record<string, number>
-}): ActivityEvent[] {
+  now: number
+}): {
+  events: ActivityEvent[]
+  liveAgentStateByPaneKey: Record<string, ActivityLiveAgentState>
+} {
   const events: ActivityEvent[] = []
   const seenEventIds = new Set<string>()
   const tabContext = new Map<string, { worktree: Worktree; tab: TerminalTab }>()
+  const liveAgentStateByPaneKey: Record<string, ActivityLiveAgentState> = {}
 
   for (const worktree of args.worktreeMap.values()) {
     const tabs = args.tabsByWorktree[worktree.id] ?? []
@@ -414,6 +455,14 @@ export function buildActivityEvents(args: {
       continue
     }
     const ackAt = args.acknowledgedAgentsByPaneKey[paneKey] ?? 0
+    // Why: live state is a per-pane overlay computed once from the live entry,
+    // not a property duplicated onto every event in the thread. Retained-only
+    // panes don't contribute here — the agent is gone, so there is no live
+    // state to overlay.
+    const liveState = freshActivityLiveAgentState(entry, args.now)
+    if (liveState) {
+      liveAgentStateByPaneKey[paneKey] = liveState
+    }
     appendActivityEventsForEntry({
       events,
       seenEventIds,
@@ -461,10 +510,13 @@ export function buildActivityEvents(args: {
       break
     }
   }
-  return capped
+  return { events: capped, liveAgentStateByPaneKey }
 }
 
-function buildAgentPaneThreads(events: ActivityEvent[]): AgentPaneThread[] {
+function buildAgentPaneThreads(
+  events: ActivityEvent[],
+  liveAgentStateByPaneKey: Record<string, ActivityLiveAgentState>
+): AgentPaneThread[] {
   const byPaneKey = new Map<string, AgentPaneThread>()
   for (const event of events) {
     const paneKey = event.entry.paneKey
@@ -476,6 +528,9 @@ function buildAgentPaneThreads(events: ActivityEvent[]): AgentPaneThread[] {
         worktree: event.worktree,
         repo: event.repo,
         agentType: event.agentType,
+        // Why: live status is a per-pane overlay from the hook stream, looked
+        // up once by paneKey rather than merged across historical events.
+        currentAgentState: liveAgentStateByPaneKey[paneKey] ?? null,
         latestEvent: event,
         events: [event],
         unread: event.unread
@@ -513,7 +568,7 @@ function EventTime({ timestamp }: { timestamp: number }): React.JSX.Element {
           {formatRelativeTime(timestamp)}
         </button>
       </TooltipTrigger>
-      <TooltipContent side="left" sideOffset={6}>
+      <TooltipContent side="right" sideOffset={6}>
         {absolute}
       </TooltipContent>
     </Tooltip>
@@ -534,19 +589,49 @@ function EventRepoBadge({ repo }: { repo: Repo | null }): React.JSX.Element | nu
   )
 }
 
+function threadAgentState(thread: AgentPaneThread): AgentStatusState {
+  return thread.currentAgentState ?? thread.latestEvent.state
+}
+
+function threadAgentStateLabel(thread: AgentPaneThread): string {
+  const state = threadAgentState(thread)
+  if (!thread.currentAgentState && state === 'done' && thread.latestEvent.entry.interrupted) {
+    return 'Interrupted'
+  }
+  return agentStateLabel(state)
+}
+
+function ThreadAgentStateIndicator({ thread }: { thread: AgentPaneThread }): React.JSX.Element {
+  const state = threadAgentState(thread)
+  const label = threadAgentStateLabel(thread)
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex size-4 shrink-0 items-center justify-center">
+          <AgentStateDot state={state} size="md" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={4}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 function ThreadRow({
   thread,
   selected,
   onSelect,
-  onToggleRead
+  onJump,
+  onMarkUnread
 }: {
   thread: AgentPaneThread
   selected: boolean
   onSelect: () => void
-  onToggleRead: () => void
+  onJump: () => void
+  onMarkUnread: () => void
 }): React.JSX.Element {
   const latest = thread.latestEvent
-  const toggleLabel = thread.unread ? 'Mark thread read' : 'Mark thread unread'
   return (
     <div
       data-current={selected ? 'true' : undefined}
@@ -572,8 +657,8 @@ function ThreadRow({
         // Why (asymmetric padding): the title uses leading-snug, which adds
         // ~3px of internal space above the cap-height that isn't present
         // below the secondary badge row. Symmetric py made the top read
-        // heavier; pt-2 / pb-2.5 visually evens the row.
-        'group relative flex w-full flex-col gap-1 border-b border-border px-3 pt-2 pb-2.5 text-left transition-colors',
+        // heavier; the smaller top pad visually evens the row.
+        'group relative flex w-full cursor-pointer flex-col gap-1 border-b border-border px-3 pt-2.5 pb-3 text-left transition-colors',
         selected
           ? 'bg-black/[0.08] shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:bg-white/[0.10] dark:shadow-[0_1px_2px_rgba(0,0,0,0.03)]'
           : 'hover:bg-accent/40'
@@ -583,67 +668,100 @@ function ThreadRow({
         <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r-full bg-primary" />
       ) : null}
       {/* Why (right cluster aligned to title, not centered between rows):
-          parking time + count on the title row leaves the secondary row
+          parking the timestamp on the title row leaves the secondary row
           full-width for the repo badge + branch name, which used to get
           truncated when the right cluster ate horizontal space. */}
       <div className="flex min-w-0 items-start gap-2">
-        <span className="inline-flex shrink-0 pt-[3px]">
-          <AgentIcon agent={agentTypeToIconAgent(thread.agentType)} size={14} />
+        <span className="inline-flex shrink-0 items-start gap-1">
+          <ThreadAgentStateIndicator thread={thread} />
+          <span className="inline-flex shrink-0 pt-px">
+            <AgentIcon agent={agentTypeToIconAgent(thread.agentType)} size={14} />
+          </span>
         </span>
         <span
           className={cn(
-            'line-clamp-2 min-w-0 flex-1 break-words text-[11px] leading-snug',
+            'line-clamp-3 min-w-0 flex-1 break-words text-xs leading-snug',
             thread.unread ? 'font-semibold text-foreground' : 'font-medium text-foreground'
           )}
         >
           {thread.paneTitle}
         </span>
-        <span className="inline-flex shrink-0 items-center gap-1.5 pt-[3px]">
-          <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">
-            {thread.events.length}
-          </Badge>
-          {/* Why (single right-most slot): the unread BellDot, the timestamp,
-              and the hover toggle all share this slot. Layered with opacity
-              transitions so on hover the static bell + timestamp fade out and
-              the bell-toggle button fades in — no double-bell on hover. */}
-          <span className="relative inline-flex h-5 min-w-16 items-center justify-end">
-            <span className="inline-flex items-center gap-1.5 transition-opacity group-hover:opacity-0">
-              {thread.unread ? (
-                <BellDot
-                  className="size-3.5 shrink-0 text-primary"
-                  fill="currentColor"
-                  aria-label="Unread"
-                />
-              ) : null}
-              <EventTime timestamp={latest.timestamp} />
-            </span>
-            <span className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="inline-flex shrink-0 items-center gap-1.5 pt-px">
+          {/* Why (bell matches WorktreeCard pattern): unread → amber filled
+              bell as a static, non-interactive cue (selecting the thread
+              auto-marks it read, so a Mark-read button would be redundant);
+              read → outline Bell that fades in on row hover and acts as
+              Mark-unread. Bare button (no shadcn outline) so it reads as
+              an inline cue rather than a discrete control square. */}
+          <span className="inline-flex size-4 shrink-0 items-center justify-center">
+            {thread.unread ? (
+              <FilledBellIcon
+                className="size-[13px] shrink-0 text-amber-500 drop-shadow-sm"
+                aria-label="Unread"
+              />
+            ) : (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button
+                  <button
                     type="button"
-                    variant="outline"
-                    size="icon-xs"
-                    aria-label={toggleLabel}
                     onClick={(event) => {
                       event.stopPropagation()
-                      onToggleRead()
+                      onMarkUnread()
                     }}
                     onMouseDown={(event) => event.stopPropagation()}
+                    className={cn(
+                      'group/unread flex size-4 shrink-0 cursor-pointer items-center justify-center rounded transition-all',
+                      'hover:bg-accent/80 active:scale-95',
+                      'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
+                    )}
+                    aria-label="Mark thread unread"
                   >
-                    {thread.unread ? <BellOff className="size-3" /> : <Bell className="size-3" />}
-                  </Button>
+                    <Bell className="size-3 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 group-hover/unread:opacity-100" />
+                  </button>
                 </TooltipTrigger>
-                <TooltipContent side="left">{toggleLabel}</TooltipContent>
+                <TooltipContent side="left">Mark thread unread</TooltipContent>
               </Tooltip>
-            </span>
+            )}
           </span>
+          <EventTime timestamp={latest.timestamp} />
         </span>
       </div>
       <div className="flex min-w-0 items-center gap-1.5">
         <EventRepoBadge repo={thread.repo} />
-        <span className="truncate text-[11px] text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
           {thread.worktree.displayName}
+        </span>
+        {/* Why (Jump-to-workspace lives on the secondary row): the bell slot
+            on the title row already holds the unread/Mark-unread state, so
+            the navigation action gets its own slot down here aligned with
+            the worktree name. Reserved layout via `invisible` +
+            `pointer-events-none` keeps the worktree-name's flex-1 width
+            stable across hover. */}
+        <span
+          className={cn(
+            'ml-auto inline-flex shrink-0 items-center transition-opacity',
+            'pointer-events-none invisible opacity-0',
+            'group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100'
+          )}
+        >
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-xs"
+                aria-label="Jump to workspace"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onJump()
+                }}
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <ExternalLink className="size-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left">Jump to workspace</TooltipContent>
+          </Tooltip>
         </span>
       </div>
     </div>
@@ -659,7 +777,12 @@ export default function ActivityPrototypePage(): React.JSX.Element {
     useState<ActivityTerminalPortalSlotId>('primary')
   const [primaryPortalTargetEl, setPrimaryPortalTargetEl] = useState<HTMLElement | null>(null)
   const [secondaryPortalTargetEl, setSecondaryPortalTargetEl] = useState<HTMLElement | null>(null)
-  const [threadListWidth, setThreadListWidth] = useState(340)
+  // Why (default width): the thread cards are the primary surface in the
+  // Activity view; the terminal is supplementary. A narrow list squeezed the
+  // prompts to truncated single-liners and made the per-card actions feel
+  // cramped. 480px gives prompts room to breathe at line-clamp-3 and leaves
+  // the action buttons clearly readable.
+  const [threadListWidth, setThreadListWidth] = useState(480)
   const {
     containerRef: threadListRef,
     isResizing: isThreadListResizing,
@@ -667,8 +790,8 @@ export default function ActivityPrototypePage(): React.JSX.Element {
   } = useSidebarResize<HTMLDivElement>({
     isOpen: true,
     width: threadListWidth,
-    minWidth: 280,
-    maxWidth: 560,
+    minWidth: 320,
+    maxWidth: 720,
     deltaSign: 1,
     setWidth: setThreadListWidth
   })
@@ -685,10 +808,34 @@ export default function ActivityPrototypePage(): React.JSX.Element {
       unacknowledgeAgents: s.unacknowledgeAgents
     }))
   )
+  // Why: agentStatusEpoch is included in the dependency array (but not in the
+  // computation itself) so the memo recomputes when freshness boundaries expire,
+  // even if no new PTY data arrives.
+  const agentStatusEpoch = useAppStore((s) => s.agentStatusEpoch)
 
-  const allEvents = useMemo(() => buildActivityEvents(storeData), [storeData])
+  const { events: allEvents, liveAgentStateByPaneKey } = useMemo(
+    () =>
+      buildActivityEvents({
+        agentStatusByPaneKey: storeData.agentStatusByPaneKey,
+        retainedAgentsByPaneKey: storeData.retainedAgentsByPaneKey,
+        tabsByWorktree: storeData.tabsByWorktree,
+        worktreeMap: storeData.worktreeMap,
+        repoMap: storeData.repoMap,
+        acknowledgedAgentsByPaneKey: storeData.acknowledgedAgentsByPaneKey,
+        // Why: Date.now() is read inside the memo (not as a dep) so stale-decay
+        // recalculates whenever agentStatusEpoch ticks. The epoch bumps when the
+        // freshness boundary crosses, driving re-evaluation without coupling to
+        // wall-clock time directly.
+        now: Date.now()
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [storeData, agentStatusEpoch]
+  )
 
-  const allThreads = useMemo(() => buildAgentPaneThreads(allEvents), [allEvents])
+  const allThreads = useMemo(
+    () => buildAgentPaneThreads(allEvents, liveAgentStateByPaneKey),
+    [allEvents, liveAgentStateByPaneKey]
+  )
 
   const visibleThreads = useMemo(() => {
     const trimmedQuery = query.trim().toLowerCase()
@@ -703,8 +850,9 @@ export default function ActivityPrototypePage(): React.JSX.Element {
         return true
       }
       const latest = thread.latestEvent
+      const stateLabel = threadAgentStateLabel(thread)
       const text =
-        `${thread.paneTitle} ${thread.worktree.displayName} ${thread.repo?.displayName ?? ''} ${agentTitle(latest)} ${agentSummary(latest)} ${agentMeta(latest)}`.toLowerCase()
+        `${thread.paneTitle} ${thread.worktree.displayName} ${thread.repo?.displayName ?? ''} ${stateLabel} ${agentTitle(latest)} ${agentSummary(latest)} ${agentMeta(latest)}`.toLowerCase()
       return text.includes(trimmedQuery)
     })
   }, [allThreads, readFilter, query, selectedPaneKey])
@@ -898,12 +1046,19 @@ export default function ActivityPrototypePage(): React.JSX.Element {
     activateThreadTerminal(thread)
   }
 
-  const toggleThreadRead = (thread: AgentPaneThread): void => {
-    if (thread.unread) {
-      markThreadRead(thread)
+  const jumpToWorkspace = (thread: AgentPaneThread): void => {
+    markThreadRead(thread)
+    activateAndRevealWorktree(thread.worktree.id)
+  }
+
+  const hasUnreadThreads = allThreads.some((thread) => thread.unread)
+
+  const markAllThreadsRead = (): void => {
+    const unreadKeys = allThreads.filter((t) => t.unread).map((t) => t.paneKey)
+    if (unreadKeys.length === 0) {
       return
     }
-    markThreadUnread(thread)
+    storeData.acknowledgeAgents(unreadKeys)
   }
 
   // Why (page padding): drop top + horizontal padding so the page extends to
@@ -919,12 +1074,7 @@ export default function ActivityPrototypePage(): React.JSX.Element {
           className="relative flex min-h-0 shrink-0 flex-col border-r border-border"
           style={{ width: threadListWidth }}
         >
-          <div className="shrink-0 border-b border-border px-2 pt-1.5 pb-2">
-            <div className="mb-2 flex items-center gap-2">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">
-                Agents
-              </div>
-            </div>
+          <div className="shrink-0 border-b border-border px-2 pt-2 pb-2">
             <div className="flex items-center gap-2">
               <div className="relative min-w-0 flex-1">
                 <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -955,6 +1105,37 @@ export default function ActivityPrototypePage(): React.JSX.Element {
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Show unread threads only</TooltipContent>
               </Tooltip>
+              {/* Why (overflow menu): "Mark all read" is a low-frequency,
+                  destructive-feeling action — parking it behind a `…` keeps
+                  the toolbar focused on the high-frequency Filter + unread
+                  toggle while still giving the action a stable home next to
+                  the list it acts on (rather than the titlebar). */}
+              <DropdownMenu>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="size-8 shrink-0 border-input bg-transparent p-0 text-muted-foreground shadow-xs hover:bg-accent hover:text-accent-foreground dark:bg-transparent dark:hover:bg-accent dark:hover:text-accent-foreground"
+                        aria-label="Thread list options"
+                      >
+                        <MoreVertical className="size-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">More options</TooltipContent>
+                </Tooltip>
+                <DropdownMenuContent align="end" sideOffset={6}>
+                  <DropdownMenuItem
+                    onSelect={() => markAllThreadsRead()}
+                    disabled={!hasUnreadThreads}
+                  >
+                    Mark all read
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto scrollbar-sleek">
@@ -964,7 +1145,8 @@ export default function ActivityPrototypePage(): React.JSX.Element {
                 thread={thread}
                 selected={thread.paneKey === selectedThread?.paneKey}
                 onSelect={() => selectThread(thread)}
-                onToggleRead={() => toggleThreadRead(thread)}
+                onJump={() => jumpToWorkspace(thread)}
+                onMarkUnread={() => markThreadUnread(thread)}
               />
             ))}
             {visibleThreads.length === 0 ? (
@@ -995,17 +1177,22 @@ export default function ActivityPrototypePage(): React.JSX.Element {
         <section className="min-w-0 flex-1 overflow-hidden">
           {selectedThread ? (
             <div className="flex h-full min-h-0 flex-col">
-              <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-4 pt-2 pb-3">
+              {/* Why (no header action button): per-card hover actions on the
+                  thread list (Mark unread, Open) are the primary controls now,
+                  so the header keeps just the thread identity. */}
+              <div className="flex shrink-0 items-start gap-4 border-b border-border px-4 pt-2 pb-3">
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-start gap-2">
-                    <span className="inline-flex shrink-0 pt-[3px]">
-                      <AgentIcon agent={agentTypeToIconAgent(selectedThread.agentType)} size={16} />
+                    <span className="inline-flex shrink-0 items-start gap-1">
+                      <ThreadAgentStateIndicator thread={selectedThread} />
+                      <span className="inline-flex shrink-0 pt-[3px]">
+                        <AgentIcon
+                          agent={agentTypeToIconAgent(selectedThread.agentType)}
+                          size={16}
+                        />
+                      </span>
                     </span>
-                    {/* Why: clamp to 2 lines (matches ThreadRow) so longer
-                        prompts don't get cut to one ellipsis. Badge moves to
-                        the secondary line so it stays at a fixed position
-                        regardless of title height. */}
-                    <h2 className="line-clamp-2 break-words text-sm font-semibold leading-snug">
+                    <h2 className="line-clamp-3 break-words text-sm font-semibold leading-snug">
                       {selectedThread.paneTitle}
                     </h2>
                   </div>
@@ -1016,18 +1203,6 @@ export default function ActivityPrototypePage(): React.JSX.Element {
                     </span>
                   </div>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  className="shrink-0 self-center"
-                  onClick={() => {
-                    markThreadRead(selectedThread)
-                    activateAndRevealWorktree(selectedThread.worktree.id)
-                  }}
-                >
-                  Jump to workspace
-                </Button>
               </div>
               {/* Why: Terminal stays mounted in the hidden workspace tree while
                   Activity is open. This target lets that existing TerminalPane
@@ -1093,7 +1268,7 @@ export default function ActivityPrototypePage(): React.JSX.Element {
               ) : (
                 <>
                   <TerminalSquare className="size-7" />
-                  Select an agent to open its terminal.
+                  Select an agent to view its activity
                 </>
               )}
             </div>

@@ -274,7 +274,7 @@ function Settings(): React.JSX.Element {
   )
 
   useEffect(() => {
-    if (!settingsNavigationTarget) {
+    if (!settings || !settingsNavigationTarget) {
       return
     }
 
@@ -285,7 +285,7 @@ function Settings(): React.JSX.Element {
     pendingNavSectionRef.current = paneSectionId
     pendingScrollTargetRef.current = settingsNavigationTarget.sectionId ?? paneSectionId
     clearSettingsTarget()
-  }, [clearSettingsTarget, settingsNavigationTarget])
+  }, [clearSettingsTarget, settings, settingsNavigationTarget])
 
   useEffect(() => {
     if (terminalFontsLoadedRef.current) {
@@ -436,7 +436,7 @@ function Settings(): React.JSX.Element {
       {
         id: 'mobile',
         title: 'Mobile',
-        description: 'Pair and manage mobile devices.',
+        description: 'Control terminals and agents from your phone.',
         icon: Smartphone,
         searchEntries: MOBILE_SETTINGS_PANE_SEARCH_ENTRIES,
         badge: 'Beta'
@@ -795,7 +795,7 @@ function Settings(): React.JSX.Element {
                   id="mobile"
                   title="Mobile"
                   badge="Beta"
-                  description="Pair and manage mobile devices."
+                  description="Control terminals and agents from your phone."
                   searchEntries={MOBILE_SETTINGS_PANE_SEARCH_ENTRIES}
                 >
                   <MobileSettingsPane settings={settings} updateSettings={updateSettings} />

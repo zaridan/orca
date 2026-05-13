@@ -222,7 +222,9 @@ export async function createRemoteWorktree(
       ? { displayName: requestedDisplayName }
       : shouldSetDisplayName(requestedName, branchName, sanitizedName)
         ? { displayName: requestedName }
-        : {})
+        : {}),
+    ...(args.linkedIssue !== undefined ? { linkedIssue: args.linkedIssue } : {}),
+    ...(args.linkedPR !== undefined ? { linkedPR: args.linkedPR } : {})
   }
   const meta = store.setWorktreeMeta(worktreeId, metaUpdates)
   const worktree = mergeWorktree(repo.id, created, meta)
@@ -488,7 +490,9 @@ export async function createLocalWorktree(
           sparseBaseRef: baseBranch,
           sparsePresetId
         }
-      : {})
+      : {}),
+    ...(args.linkedIssue !== undefined ? { linkedIssue: args.linkedIssue } : {}),
+    ...(args.linkedPR !== undefined ? { linkedPR: args.linkedPR } : {})
   }
   const meta = store.setWorktreeMeta(worktreeId, metaUpdates)
   const worktree = mergeWorktree(repo.id, created, meta)

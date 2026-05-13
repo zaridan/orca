@@ -39,6 +39,7 @@ import {
   FilledBellIcon
 } from './WorktreeCardHelpers'
 import { IssueSection, PrSection, CommentSection } from './WorktreeCardMeta'
+import { getWorktreeCardPrDisplay } from './worktree-card-pr-display'
 import {
   selectLivePtyIdsForWorktree,
   selectRuntimePaneTitlesForWorktree
@@ -178,6 +179,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
           title: issue === null ? 'Issue details unavailable' : 'Loading issue...'
         }
       : null)
+  const prDisplay = getWorktreeCardPrDisplay(pr, worktree.linkedPR)
 
   const isDeleting = deleteState?.isDeleting ?? false
 
@@ -608,13 +610,15 @@ const WorktreeCard = React.memo(function WorktreeCard({
              Layout coupling: spacing here is used to derive size estimates in
              WorktreeList's estimateSize. Update that function if changing spacing. */}
         {((cardProps.includes('issue') && issueDisplay) ||
-          (cardProps.includes('pr') && pr) ||
+          (cardProps.includes('pr') && prDisplay) ||
           (cardProps.includes('comment') && worktree.comment)) && (
           <div className="flex flex-col gap-[3px] mt-0.5">
             {cardProps.includes('issue') && issueDisplay && (
               <IssueSection issue={issueDisplay} onClick={handleEditIssue} />
             )}
-            {cardProps.includes('pr') && pr && <PrSection pr={pr} onClick={handleEditIssue} />}
+            {cardProps.includes('pr') && prDisplay && (
+              <PrSection pr={prDisplay} onClick={handleEditIssue} />
+            )}
             {cardProps.includes('comment') && worktree.comment && (
               <CommentSection comment={worktree.comment} onDoubleClick={handleEditComment} />
             )}

@@ -142,6 +142,7 @@ describe('Store', () => {
     expect(settings.terminalFontWeight).toBe(500)
     expect(settings.rightSidebarOpenByDefault).toBe(true)
     expect(settings.showTasksButton).toBe(true)
+    expect(settings.experimentalActivity).toBe(true)
     expect(settings.notifications.customSoundPath).toBeNull()
   })
 
@@ -211,6 +212,7 @@ describe('Store', () => {
     expect(store.getSettings().refreshLocalBaseRefOnWorktreeCreate).toBe(false)
     expect(store.getSettings().rightSidebarOpenByDefault).toBe(true)
     expect(store.getSettings().showTasksButton).toBe(true)
+    expect(store.getSettings().experimentalActivity).toBe(true)
     expect(store.getSettings().notifications.customSoundPath).toBeNull()
     // repos should be loaded
     expect(store.getRepos()).toHaveLength(1)
@@ -716,6 +718,22 @@ describe('Store', () => {
     const store = await createStore()
 
     expect(store.getSettings().experimentalPet).toBe(true)
+  })
+
+  it('promotes legacy experimentalActivity profiles to default-on', async () => {
+    writeDataFile({
+      schemaVersion: 1,
+      repos: [],
+      worktreeMeta: {},
+      settings: { experimentalActivity: false },
+      ui: {},
+      githubCache: { pr: {}, issue: {} },
+      workspaceSession: {}
+    })
+
+    const store = await createStore()
+
+    expect(store.getSettings().experimentalActivity).toBe(true)
   })
 
   // ── inline-agents card-property migration ──────────────────────────

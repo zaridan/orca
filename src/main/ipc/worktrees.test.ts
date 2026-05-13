@@ -21,7 +21,9 @@ const {
   loadHooksMock,
   computeWorktreePathMock,
   ensurePathWithinWorkspaceMock,
-  gitExecFileAsyncMock
+  gitExecFileAsyncMock,
+  getSshGitProviderMock,
+  getActiveMultiplexerMock
 } = vi.hoisted(() => ({
   handleMock: vi.fn(),
   removeHandlerMock: vi.fn(),
@@ -42,7 +44,9 @@ const {
   loadHooksMock: vi.fn(),
   computeWorktreePathMock: vi.fn(),
   ensurePathWithinWorkspaceMock: vi.fn(),
-  gitExecFileAsyncMock: vi.fn()
+  gitExecFileAsyncMock: vi.fn(),
+  getSshGitProviderMock: vi.fn(),
+  getActiveMultiplexerMock: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -72,6 +76,14 @@ vi.mock('../git/repo', () => ({
 
 vi.mock('../github/client', () => ({
   getPRForBranch: getPRForBranchMock
+}))
+
+vi.mock('../providers/ssh-git-dispatch', () => ({
+  getSshGitProvider: getSshGitProviderMock
+}))
+
+vi.mock('./ssh', () => ({
+  getActiveMultiplexer: getActiveMultiplexerMock
 }))
 
 vi.mock('../hooks', () => ({
@@ -169,6 +181,8 @@ describe('registerWorktreeHandlers', () => {
       computeWorktreePathMock,
       ensurePathWithinWorkspaceMock,
       gitExecFileAsyncMock,
+      getSshGitProviderMock,
+      getActiveMultiplexerMock,
       mainWindow.webContents.send,
       store.getRepos,
       store.getRepo,
@@ -340,6 +354,95 @@ describe('registerWorktreeHandlers', () => {
     expect(result).toEqual({
       worktree: expect.objectContaining({
         displayName: 'Fix: dashboards for PRs'
+      })
+    })
+  })
+
+  it('persists linked issue and PR metadata during local create', async () => {
+    listWorktreesMock.mockResolvedValue([
+      {
+        path: '/workspace/improve-dashboard',
+        head: 'abc123',
+        branch: 'improve-dashboard',
+        isBare: false,
+        isMainWorktree: false
+      }
+    ])
+    store.setWorktreeMeta.mockImplementation((_worktreeId, meta) => meta)
+
+    const result = await handlers['worktrees:create'](null, {
+      repoId: 'repo-1',
+      name: 'improve-dashboard',
+      linkedIssue: 123,
+      linkedPR: 456
+    })
+
+    expect(store.setWorktreeMeta).toHaveBeenCalledWith(
+      'repo-1::/workspace/improve-dashboard',
+      expect.objectContaining({
+        linkedIssue: 123,
+        linkedPR: 456
+      })
+    )
+    expect(result).toEqual({
+      worktree: expect.objectContaining({
+        linkedIssue: 123,
+        linkedPR: 456
+      })
+    })
+  })
+
+  it('persists linked issue and PR metadata during remote create', async () => {
+    const repo = {
+      id: 'repo-ssh',
+      path: '/remote/repo',
+      displayName: 'ssh',
+      badgeColor: '#000',
+      addedAt: 0,
+      connectionId: 'conn-1',
+      worktreeBaseRef: 'origin/main'
+    }
+    const provider = {
+      exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '' }),
+      addWorktree: vi.fn().mockResolvedValue(undefined),
+      listWorktrees: vi.fn().mockResolvedValue([
+        {
+          path: '/remote/improve-dashboard',
+          head: 'abc123',
+          branch: 'refs/heads/improve-dashboard',
+          isBare: false,
+          isMainWorktree: false
+        }
+      ])
+    }
+    const mux = {
+      request: vi.fn().mockResolvedValue(undefined),
+      notify: vi.fn()
+    }
+    store.getRepos.mockReturnValue([repo])
+    store.getRepo.mockReturnValue(repo)
+    getSshGitProviderMock.mockReturnValue(provider)
+    getActiveMultiplexerMock.mockReturnValue(mux)
+    store.setWorktreeMeta.mockImplementation((_worktreeId, meta) => meta)
+
+    const result = await handlers['worktrees:create'](null, {
+      repoId: 'repo-ssh',
+      name: 'improve-dashboard',
+      linkedIssue: 123,
+      linkedPR: 456
+    })
+
+    expect(store.setWorktreeMeta).toHaveBeenCalledWith(
+      'repo-ssh::/remote/improve-dashboard',
+      expect.objectContaining({
+        linkedIssue: 123,
+        linkedPR: 456
+      })
+    )
+    expect(result).toEqual({
+      worktree: expect.objectContaining({
+        linkedIssue: 123,
+        linkedPR: 456
       })
     })
   })
