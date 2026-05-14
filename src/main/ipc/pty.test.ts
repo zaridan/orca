@@ -1221,7 +1221,7 @@ describe('registerPtyHandlers', () => {
           'remote-pty',
           'terminated'
         )
-        expect(runtime.onPtyExit).not.toHaveBeenCalled()
+        expect(runtime.onPtyExit).toHaveBeenCalledWith('remote-pty', -1)
       })
     })
   })
