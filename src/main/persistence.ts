@@ -57,7 +57,7 @@ import {
   ONBOARDING_FINAL_STEP
 } from '../shared/constants'
 import { parseWorkspaceSession } from '../shared/workspace-session-schema'
-import { isTerminalLeafId, makePaneKey } from '../shared/stable-pane-id'
+import { isTerminalLeafId, makePaneKey, parsePaneKey } from '../shared/stable-pane-id'
 import {
   setMigrationUnsupportedPty,
   setMigrationUnsupportedPtyPersistenceListener
@@ -702,11 +702,20 @@ function normalizePersistedPaneIdentityState(state: PersistedState): {
     ...(state.migrationUnsupportedPtyEntries ?? []),
     ...normalizedSession.migrationUnsupportedEntries
   ])
+  const remappedAcknowledgements = remapAcknowledgedAgentPaneKeys(
+    state.ui?.acknowledgedAgentsByPaneKey,
+    normalizedSession.leafIdByInputLeafIdByTabId
+  )
   const migrationUnsupportedChanged = !migrationUnsupportedEntriesEqual(
     state.migrationUnsupportedPtyEntries ?? [],
     mergedMigrationUnsupportedEntries
   )
-  if (!normalizedSession.changed && !remappedLeases.changed && !migrationUnsupportedChanged) {
+  if (
+    !normalizedSession.changed &&
+    !remappedLeases.changed &&
+    !migrationUnsupportedChanged &&
+    !remappedAcknowledgements.changed
+  ) {
     return {
       state,
       changed: false,
@@ -718,7 +727,15 @@ function normalizePersistedPaneIdentityState(state: PersistedState): {
       ...state,
       workspaceSession: normalizedSession.session,
       sshRemotePtyLeases: remappedLeases.leases,
-      migrationUnsupportedPtyEntries: mergedMigrationUnsupportedEntries
+      migrationUnsupportedPtyEntries: mergedMigrationUnsupportedEntries,
+      ...(remappedAcknowledgements.changed
+        ? {
+            ui: {
+              ...state.ui,
+              acknowledgedAgentsByPaneKey: remappedAcknowledgements.acknowledgements
+            }
+          }
+        : {})
     },
     changed: true,
     migrationUnsupportedEntries: mergedMigrationUnsupportedEntries
@@ -736,6 +753,55 @@ function mergeMigrationUnsupportedPtyEntries(
     }
   }
   return [...byPtyId.values()]
+}
+
+function remapAcknowledgedAgentPaneKeys(
+  acknowledgements: PersistedState['ui']['acknowledgedAgentsByPaneKey'],
+  leafIdByInputLeafIdByTabId: Map<string, Map<string, string>>
+): { acknowledgements: PersistedState['ui']['acknowledgedAgentsByPaneKey']; changed: boolean } {
+  if (!acknowledgements || Object.keys(acknowledgements).length === 0) {
+    return { acknowledgements, changed: false }
+  }
+
+  let changed = false
+  const next: NonNullable<PersistedState['ui']['acknowledgedAgentsByPaneKey']> = {}
+  const setAcknowledgement = (paneKey: string, acknowledgedAt: number): void => {
+    const existing = next[paneKey]
+    next[paneKey] = existing === undefined ? acknowledgedAt : Math.max(existing, acknowledgedAt)
+  }
+  for (const [paneKey, acknowledgedAt] of Object.entries(acknowledgements)) {
+    const parsed = parsePaneKey(paneKey)
+    if (parsed) {
+      setAcknowledgement(paneKey, acknowledgedAt)
+      continue
+    }
+
+    const delimiter = paneKey.indexOf(':')
+    if (delimiter <= 0 || delimiter === paneKey.length - 1) {
+      setAcknowledgement(paneKey, acknowledgedAt)
+      continue
+    }
+
+    const tabId = paneKey.slice(0, delimiter)
+    const legacyLeafId = paneKey.slice(delimiter + 1)
+    const remappedLeafId = leafIdByInputLeafIdByTabId.get(tabId)?.get(legacyLeafId)
+    if (!remappedLeafId || !isTerminalLeafId(remappedLeafId)) {
+      setAcknowledgement(paneKey, acknowledgedAt)
+      continue
+    }
+
+    try {
+      // Why: UI acks are keyed by paneKey just like hook rows. When a legacy
+      // numeric/pane:* leaf is promoted to a UUID, carry the read marker over
+      // so already-seen Activity/sidebar rows do not come back unread.
+      setAcknowledgement(makePaneKey(tabId, remappedLeafId), acknowledgedAt)
+      changed = true
+    } catch {
+      setAcknowledgement(paneKey, acknowledgedAt)
+    }
+  }
+
+  return { acknowledgements: next, changed }
 }
 
 function normalizeMigrationUnsupportedPtyEntries(value: unknown): MigrationUnsupportedPtyEntry[] {
@@ -1880,6 +1946,16 @@ export class Store {
     )
     for (const entry of normalized.migrationUnsupportedEntries) {
       setMigrationUnsupportedPty(entry)
+    }
+    const remappedAcknowledgements = remapAcknowledgedAgentPaneKeys(
+      this.state.ui?.acknowledgedAgentsByPaneKey,
+      normalized.leafIdByInputLeafIdByTabId
+    )
+    if (remappedAcknowledgements.changed) {
+      this.state.ui = {
+        ...this.state.ui,
+        acknowledgedAgentsByPaneKey: remappedAcknowledgements.acknowledgements
+      }
     }
     session = normalized.session
     const remappedLeases = remapSshRemotePtyLeaseLeafIds(
