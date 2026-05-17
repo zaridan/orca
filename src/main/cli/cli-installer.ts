@@ -2,15 +2,36 @@
 import { app } from 'electron'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { lstat, mkdir, readFile, readlink, symlink, unlink, writeFile } from 'node:fs/promises'
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readlink,
+  rename,
+  rm,
+  symlink,
+  unlink,
+  writeFile
+} from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type { CliInstallMethod, CliInstallStatus } from '../../shared/cli-install-types'
 
 const execFileAsync = promisify(execFile)
 const DEFAULT_MAC_COMMAND_PATH = '/usr/local/bin/orca'
 const DEV_LAUNCHER_DIR = ['cli', 'bin']
+
+export type CliReconcileResult =
+  | 'unsupported'
+  | 'refreshed_stable_launcher'
+  | 'already_installed'
+  | 'migrated_legacy_launcher'
+  | 'permission_denied'
+  | 'not_installed'
+  | 'conflict_preserved'
+  | 'stale_preserved'
+  | 'skipped_development'
 
 type CliInstallerOptions = {
   platform?: NodeJS.Platform
@@ -129,7 +150,7 @@ export class CliInstaller {
 
     // eslint-disable-next-line unicorn/prefer-ternary -- Why: the install path performs async side effects and is easier to audit as an explicit branch than as an awaited ternary.
     if (status.installMethod === 'symlink') {
-      await this.installSymlink(status)
+      await this.installSymlink(status, { allowPrivilege: true })
     } else {
       await this.installWindowsWrapper(status.commandPath, status.launcherPath)
     }
@@ -142,6 +163,47 @@ export class CliInstaller {
     }
 
     return this.getStatus()
+  }
+
+  async reconcileAfterAppUpdate(): Promise<CliReconcileResult> {
+    const status = await this.getStatus()
+    if (!this.isPackaged) {
+      return 'skipped_development'
+    }
+    if (!status.supported) {
+      return 'unsupported'
+    }
+    if (status.state === 'installed') {
+      return 'already_installed'
+    }
+    if (status.state === 'not_installed') {
+      return 'not_installed'
+    }
+    if (status.state === 'conflict') {
+      return 'conflict_preserved'
+    }
+    if (
+      status.state !== 'stale' ||
+      !status.commandPath ||
+      !status.launcherPath ||
+      !status.installMethod ||
+      !(await this.isLegacyBundledLauncher(status))
+    ) {
+      return 'stale_preserved'
+    }
+
+    try {
+      await (status.installMethod === 'symlink'
+        ? this.installSymlink(status, { allowPrivilege: false })
+        : this.installWindowsWrapper(status.commandPath, status.launcherPath))
+    } catch (error) {
+      if (isPermissionError(error)) {
+        return 'permission_denied'
+      }
+      throw error
+    }
+
+    return 'migrated_legacy_launcher'
   }
 
   async remove(): Promise<CliInstallStatus> {
@@ -226,7 +288,17 @@ export class CliInstaller {
 
     if (this.isPackaged) {
       const bundledPath = getBundledLauncherPath(this.platform, this.resourcesPath)
-      return bundledPath && existsSync(bundledPath) ? bundledPath : null
+      if (!bundledPath || !existsSync(bundledPath)) {
+        return null
+      }
+      if (this.platform === 'darwin') {
+        return bundledPath
+      }
+      return ensureStableLauncher({
+        platform: this.platform,
+        userDataPath: this.userDataPath,
+        bundledLauncherPath: bundledPath
+      })
     }
 
     return ensureDevLauncher({
@@ -237,7 +309,10 @@ export class CliInstaller {
     })
   }
 
-  private async installSymlink(status: CliInstallStatus): Promise<void> {
+  private async installSymlink(
+    status: CliInstallStatus,
+    options: { allowPrivilege: boolean }
+  ): Promise<void> {
     try {
       if (status.state === 'installed') {
         return
@@ -247,7 +322,7 @@ export class CliInstaller {
       }
       await symlink(status.launcherPath as string, status.commandPath as string)
     } catch (error) {
-      if (this.platform !== 'darwin' || !isPermissionError(error)) {
+      if (this.platform !== 'darwin' || !options.allowPrivilege || !isPermissionError(error)) {
         throw error
       }
 
@@ -348,13 +423,14 @@ export class CliInstaller {
 
       const currentContent = await readFile(commandPath, 'utf8')
       const expectedContent = buildWindowsForwarder(launcherPath)
+      const currentLauncher = readWindowsForwarderLauncherPath(currentContent)
       return this.buildStatus({
         commandPath,
         launcherPath,
         installMethod: 'wrapper',
         supported: true,
         state: currentContent === expectedContent ? 'installed' : 'stale',
-        currentTarget: launcherPath,
+        currentTarget: currentLauncher ?? launcherPath,
         detail:
           currentContent === expectedContent
             ? `Registered at ${commandPath}.`
@@ -461,6 +537,82 @@ export class CliInstaller {
     )
     await this.userPathWriter(nextEntries.join(';'))
   }
+
+  private async isLegacyBundledLauncher(status: CliInstallStatus): Promise<boolean> {
+    if (!status.currentTarget) {
+      return false
+    }
+    if (status.installMethod === 'symlink') {
+      return this.isOrcaBundledLauncher(status.currentTarget)
+    }
+    if (status.installMethod === 'wrapper' && status.commandPath) {
+      try {
+        const content = await readFile(status.commandPath, 'utf8')
+        const forwardedLauncher = readWindowsForwarderLauncherPath(content)
+        return forwardedLauncher &&
+          normalizeLineEndings(content) ===
+            normalizeLineEndings(buildWindowsForwarder(forwardedLauncher))
+          ? this.isOrcaBundledLauncher(forwardedLauncher)
+          : false
+      } catch (error) {
+        if (isMissingError(error)) {
+          return false
+        }
+        throw error
+      }
+    }
+    return false
+  }
+
+  private async isOrcaBundledLauncher(launcherPath: string): Promise<boolean> {
+    if (!isPotentialBundledLauncherPath(this.platform, launcherPath)) {
+      return false
+    }
+    try {
+      return isOrcaBundledLauncherContent(this.platform, await readFile(launcherPath, 'utf8'))
+    } catch (error) {
+      if (isMissingError(error)) {
+        return false
+      }
+      throw error
+    }
+  }
+}
+
+async function ensureStableLauncher(args: {
+  platform: NodeJS.Platform
+  userDataPath: string
+  bundledLauncherPath: string
+}): Promise<string | null> {
+  if (
+    !isAbsoluteForPlatform(args.platform, args.bundledLauncherPath) &&
+    !isAbsolute(args.bundledLauncherPath)
+  ) {
+    return null
+  }
+
+  const launcherPath = getStableLauncherPath(args.platform, args.userDataPath)
+  if (!launcherPath) {
+    return null
+  }
+
+  const content =
+    args.platform === 'win32'
+      ? buildWindowsStableLauncher(args.bundledLauncherPath)
+      : buildUnixStableLauncher(args.bundledLauncherPath)
+  await writeFileAtomicallyIfChanged(
+    launcherPath,
+    content,
+    args.platform === 'win32' ? null : 0o755
+  )
+  return launcherPath
+}
+
+function getStableLauncherPath(platform: NodeJS.Platform, userDataPath: string): string | null {
+  if (!['darwin', 'linux', 'win32'].includes(platform)) {
+    return null
+  }
+  return join(userDataPath, ...DEV_LAUNCHER_DIR, platform === 'win32' ? 'orca.cmd' : 'orca')
 }
 
 async function ensureDevLauncher(args: {
@@ -499,6 +651,23 @@ async function ensureDevLauncher(args: {
   return launcherPath
 }
 
+function buildUnixStableLauncher(bundledLauncherPath: string): string {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+ORCA_BUNDLED_LAUNCHER=${quoteShell(bundledLauncherPath)}
+exec "$ORCA_BUNDLED_LAUNCHER" "$@"
+`
+}
+
+function buildWindowsStableLauncher(bundledLauncherPath: string): string {
+  return `@echo off
+setlocal
+set "ORCA_BUNDLED_LAUNCHER=${escapeWindowsBatchValue(bundledLauncherPath)}"
+call "%ORCA_BUNDLED_LAUNCHER%" %*
+exit /b %ERRORLEVEL%
+`
+}
+
 function buildUnixDevLauncher(execPathValue: string, cliEntryPath: string): string {
   return `#!/usr/bin/env bash
 set -euo pipefail
@@ -534,6 +703,37 @@ set "ORCA_LAUNCHER=${escapeWindowsBatchValue(launcherPath)}"
 `
 }
 
+async function writeFileAtomicallyIfChanged(
+  targetPath: string,
+  content: string,
+  mode: number | null
+): Promise<void> {
+  try {
+    if ((await readFile(targetPath, 'utf8')) === content) {
+      return
+    }
+  } catch (error) {
+    if (!isMissingError(error)) {
+      throw error
+    }
+  }
+
+  await mkdir(dirname(targetPath), { recursive: true })
+  const tempPath = join(
+    dirname(targetPath),
+    `.${basename(targetPath)}.${process.pid}.${process.hrtime.bigint()}.tmp`
+  )
+  try {
+    await (mode === null
+      ? writeFile(tempPath, content, 'utf8')
+      : writeFile(tempPath, content, { encoding: 'utf8', mode }))
+    await rename(tempPath, targetPath)
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
 function splitPathEntries(platform: NodeJS.Platform, value: string | null): string[] {
   if (!value) {
     return []
@@ -555,7 +755,16 @@ function normalizeWindowsPath(value: string): string {
 }
 
 function escapeWindowsBatchValue(value: string): string {
-  return value.replaceAll('"', '""')
+  return value.replaceAll('%', '%%').replaceAll('"', '""')
+}
+
+function readWindowsForwarderLauncherPath(content: string): string | null {
+  const match = /^set "ORCA_LAUNCHER=(.*)"$/im.exec(content)
+  return match?.[1]?.replaceAll('%%', '%').replaceAll('""', '"') ?? null
+}
+
+function normalizeLineEndings(content: string): string {
+  return content.replaceAll('\r\n', '\n')
 }
 
 function isPermissionError(error: unknown): boolean {
@@ -630,4 +839,32 @@ export function getBundledLauncherPath(
     return join(resourcesPath, 'bin', 'orca.cmd')
   }
   return null
+}
+
+function isPotentialBundledLauncherPath(platform: NodeJS.Platform, launcherPath: string): boolean {
+  const normalized =
+    platform === 'win32' ? normalizeWindowsPath(launcherPath) : launcherPath.replaceAll('\\', '/')
+  if (platform === 'darwin') {
+    return normalized.endsWith('.app/Contents/Resources/bin/orca')
+  }
+  if (platform === 'linux') {
+    return normalized.endsWith('/resources/bin/orca')
+  }
+  if (platform === 'win32') {
+    return normalized.endsWith('\\resources\\bin\\orca.cmd')
+  }
+  return false
+}
+
+function isOrcaBundledLauncherContent(platform: NodeJS.Platform, content: string): boolean {
+  if (platform === 'win32') {
+    return (
+      content.includes('ELECTRON_RUN_AS_NODE=1') &&
+      content.includes('app.asar.unpacked\\out\\cli\\index.js')
+    )
+  }
+  return (
+    content.includes('ELECTRON_RUN_AS_NODE=1') &&
+    content.includes('app.asar.unpacked/out/cli/index.js')
+  )
 }
