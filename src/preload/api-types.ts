@@ -1624,6 +1624,14 @@ export type PreloadApi = {
     onOpenFileFromMobile: (
       callback: (data: { worktreeId: string; filePath: string; relativePath: string }) => void
     ) => () => void
+    onOpenDiffFromMobile: (
+      callback: (data: {
+        worktreeId: string
+        filePath: string
+        relativePath: string
+        staged: boolean
+      }) => void
+    ) => () => void
     onMobileMarkdownRequest: (
       callback: (request: RuntimeMobileMarkdownRequest) => void
     ) => () => void
