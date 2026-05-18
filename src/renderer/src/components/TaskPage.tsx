@@ -1972,6 +1972,7 @@ export default function TaskPage(): React.JSX.Element {
   const [selectedLinearIssueId, setSelectedLinearIssueId] = useState<string | null>(null)
   const [selectedLinearIssueFallback, setSelectedLinearIssueFallback] =
     useState<LinearIssue | null>(null)
+  const [selectedLinearIssueCanFloat, setSelectedLinearIssueCanFloat] = useState(false)
 
   // Why: the Linear list keeps its own fetched array, while cell edits patch
   // the shared caches. Subscribing to just the Linear caches lets the list and
@@ -1991,9 +1992,30 @@ export default function TaskPage(): React.JSX.Element {
     ? (cachedSelectedLinearIssue ?? selectedLinearIssueFallback)
     : null
 
-  const setSelectedLinearIssue = useCallback((issue: LinearIssue | null) => {
-    setSelectedLinearIssueId(issue?.id ?? null)
-    setSelectedLinearIssueFallback(issue)
+  const setSelectedLinearIssue = useCallback(
+    (issue: LinearIssue | null, options?: { allowOutsideList?: boolean }) => {
+      setSelectedLinearIssueCanFloat(Boolean(issue && options?.allowOutsideList))
+      setSelectedLinearIssueId(issue?.id ?? null)
+      setSelectedLinearIssueFallback(issue)
+    },
+    []
+  )
+
+  const openRelatedLinearIssue = useCallback(
+    (issue: LinearIssue) => {
+      setSelectedLinearIssue(issue, { allowOutsideList: true })
+    },
+    [setSelectedLinearIssue]
+  )
+
+  const closeSelectedLinearIssue = useCallback(() => {
+    setSelectedLinearIssue(null)
+  }, [setSelectedLinearIssue])
+
+  const clearSelectedLinearIssue = useCallback(() => {
+    setSelectedLinearIssueCanFloat(false)
+    setSelectedLinearIssueId(null)
+    setSelectedLinearIssueFallback(null)
   }, [])
 
   // Linear tab state
@@ -3096,34 +3118,34 @@ export default function TaskPage(): React.JSX.Element {
       return
     }
 
-    if (!linearStatus.connected || filteredLinearIssues.length === 0) {
-      if (selectedLinearIssueId !== null) {
-        setSelectedLinearIssueId(null)
-      }
-      if (selectedLinearIssueFallback !== null) {
-        setSelectedLinearIssueFallback(null)
+    if (!linearStatus.connected) {
+      clearSelectedLinearIssue()
+      return
+    }
+
+    if (filteredLinearIssues.length === 0) {
+      if (!selectedLinearIssueCanFloat) {
+        clearSelectedLinearIssue()
       }
       return
     }
 
     // Why: the corrected Linear surface is list-first. Keep an open inspector
     // only while its issue remains in the current filter instead of auto-opening
-    // the first row and turning the list back into navigation chrome.
+    // the first row and turning the list back into navigation chrome. Related
+    // sub-issue navigation is allowed to stay open because it is user-directed.
     if (
       selectedLinearIssueId &&
+      !selectedLinearIssueCanFloat &&
       !filteredLinearIssues.some((issue) => issue.id === selectedLinearIssueId)
     ) {
-      if (selectedLinearIssueId !== null) {
-        setSelectedLinearIssueId(null)
-      }
-      if (selectedLinearIssueFallback !== null) {
-        setSelectedLinearIssueFallback(null)
-      }
+      clearSelectedLinearIssue()
     }
   }, [
+    clearSelectedLinearIssue,
     filteredLinearIssues,
     linearStatus.connected,
-    selectedLinearIssueFallback,
+    selectedLinearIssueCanFloat,
     selectedLinearIssueId,
     taskResumeApplied,
     taskSource
@@ -3261,8 +3283,7 @@ export default function TaskPage(): React.JSX.Element {
                         <Select
                           value={selectedLinearWorkspaceId ?? undefined}
                           onValueChange={(value) => {
-                            setSelectedLinearIssueId(null)
-                            setSelectedLinearIssueFallback(null)
+                            clearSelectedLinearIssue()
                             setLinearIssues([])
                             setLinearError(null)
                             setLinearLoading(true)
@@ -4798,7 +4819,8 @@ export default function TaskPage(): React.JSX.Element {
               <LinearIssueWorkspace
                 issue={selectedLinearIssue}
                 onUse={handleUseLinearItem}
-                onClose={() => setSelectedLinearIssue(null)}
+                onOpenIssue={openRelatedLinearIssue}
+                onClose={closeSelectedLinearIssue}
               />
             </div>
           )}

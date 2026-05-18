@@ -74,6 +74,7 @@ describe('linear RPC methods', () => {
         updates: {
           stateId: 'state-1',
           assigneeId: null,
+          estimate: 5,
           priority: 2,
           labelIds: ['label-1'],
           projectId: 'project-1'
@@ -124,6 +125,7 @@ describe('linear RPC methods', () => {
       {
         stateId: 'state-1',
         assigneeId: null,
+        estimate: 5,
         priority: 2,
         labelIds: ['label-1'],
         projectId: 'project-1'

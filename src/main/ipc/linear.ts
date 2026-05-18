@@ -149,6 +149,13 @@ export function registerLinearHandlers(): void {
         return { ok: false, error: 'Priority must be an integer 0-4' }
       }
       if (
+        u.estimate !== undefined &&
+        u.estimate !== null &&
+        (!Number.isInteger(u.estimate) || u.estimate < 0)
+      ) {
+        return { ok: false, error: 'Estimate must be a non-negative integer' }
+      }
+      if (
         u.labelIds !== undefined &&
         (!Array.isArray(u.labelIds) || !u.labelIds.every((id: unknown) => typeof id === 'string'))
       ) {

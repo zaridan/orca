@@ -837,6 +837,7 @@ export type LinearIssue = {
     displayName: string
     avatarUrl?: string
   }
+  estimate?: number | null
   priority: number
   updatedAt: string
 }
@@ -889,6 +890,7 @@ export type LinearIssueUpdate = {
   stateId?: string
   title?: string
   assigneeId?: string | null
+  estimate?: number | null
   priority?: number
   labelIds?: string[]
   projectId?: string | null

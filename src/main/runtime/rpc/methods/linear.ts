@@ -72,6 +72,7 @@ const IssueUpdate = z.object({
     stateId: OptionalString,
     title: OptionalString,
     assigneeId: z.union([z.string(), z.null()]).optional(),
+    estimate: z.union([z.number().int().min(0), z.null()]).optional(),
     priority: z.number().int().min(0).max(4).optional(),
     labelIds: z.array(z.string()).optional(),
     projectId: z.union([z.string(), z.null()]).optional()

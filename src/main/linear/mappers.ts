@@ -93,6 +93,7 @@ export async function mapLinearIssue(
           avatarUrl: assignee.avatarUrl ?? undefined
         }
       : undefined,
+    estimate: issue.estimate ?? null,
     priority: issue.priority,
     updatedAt: issue.updatedAt.toISOString()
   }

@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Circle,
   ExternalLink,
+  Gauge,
   LoaderCircle,
   Send,
   Tag,
@@ -15,6 +16,7 @@ import {
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -68,6 +70,12 @@ const LINEAR_EDIT_MENU_ITEM_CLASS =
 const LINEAR_EDIT_MENU_ITEM_WITH_ICON_CLASS =
   'flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-[12px] hover:bg-accent'
 
+const LINEAR_ESTIMATE_PRESETS = [1, 2, 3, 5, 8] as const
+
+export function formatLinearEstimateLabel(estimate: number | null | undefined): string {
+  return estimate === null || estimate === undefined ? 'Set estimate' : `Estimate ${estimate}`
+}
+
 function LinearEditChipAdornment({
   loading,
   pending
@@ -110,6 +118,7 @@ type LinearItemDrawerProps = {
 export type LinearEditState = {
   state: LinearIssue['state']
   priority: number
+  estimate: number | null | undefined
   assignee: LinearIssue['assignee']
   labelIds: string[]
   labels: string[]
@@ -129,6 +138,8 @@ export function LinearIssueEditSection({
   layout = 'chips'
 }: EditSectionProps): React.JSX.Element {
   const [labelPopoverOpen, setLabelPopoverOpen] = useState(false)
+  const [estimatePopoverOpen, setEstimatePopoverOpen] = useState(false)
+  const [estimateInput, setEstimateInput] = useState('')
   const patchLinearIssue = useAppStore((s) => s.patchLinearIssue)
   const settings = useAppStore((s) => s.settings)
   const { isPending, run } = useImmediateMutation()
@@ -136,6 +147,7 @@ export function LinearIssueEditSection({
   const {
     state: localState,
     priority: localPriority,
+    estimate: localEstimate,
     assignee: localAssignee,
     labelIds: localLabelIds,
     labels: localLabels
@@ -145,6 +157,14 @@ export function LinearIssueEditSection({
   const states = useTeamStates(teamId, settings, issue.workspaceId)
   const labels = useTeamLabels(teamId, settings, issue.workspaceId)
   const members = useTeamMembers(teamId, settings, issue.workspaceId)
+
+  useEffect(() => {
+    if (!estimatePopoverOpen) {
+      setEstimateInput(
+        localEstimate === null || localEstimate === undefined ? '' : String(localEstimate)
+      )
+    }
+  }, [estimatePopoverOpen, localEstimate])
 
   const handleStateChange = useCallback(
     (stateId: string) => {
@@ -200,6 +220,42 @@ export function LinearIssueEditSection({
     },
     [issue.id, issue.workspaceId, localPriority, settings, patchLinearIssue, run, onEditStateChange]
   )
+
+  const handleEstimateChange = useCallback(
+    (estimate: number | null) => {
+      const prevEstimate = localEstimate
+      run('estimate', {
+        mutate: () => linearUpdateIssue(settings, issue.id, { estimate }, issue.workspaceId),
+        onOptimistic: () => {
+          onEditStateChange({ estimate })
+          patchLinearIssue(issue.id, { estimate })
+          setEstimatePopoverOpen(false)
+        },
+        onRevert: () => {
+          onEditStateChange({ estimate: prevEstimate })
+          patchLinearIssue(issue.id, { estimate: prevEstimate })
+        },
+        onError: (err) => toast.error(err)
+      })
+    },
+    [issue.id, issue.workspaceId, localEstimate, settings, patchLinearIssue, run, onEditStateChange]
+  )
+
+  const handleEstimateSubmit = useCallback(() => {
+    const trimmed = estimateInput.trim()
+    if (!trimmed) {
+      handleEstimateChange(null)
+      return
+    }
+
+    const estimate = Number(trimmed)
+    if (!Number.isInteger(estimate) || estimate < 0) {
+      toast.error('Estimate must be a non-negative integer')
+      return
+    }
+
+    handleEstimateChange(estimate)
+  }, [estimateInput, handleEstimateChange])
 
   const handleAssigneeChange = useCallback(
     (memberId: string) => {
@@ -278,6 +334,7 @@ export function LinearIssueEditSection({
   )?.id
   const statePending = isPending('state')
   const priorityPending = isPending('priority')
+  const estimatePending = isPending('estimate')
   const assigneePending = isPending('assignee')
   const labelsPending = isPending('labels')
   const labelSummary =
@@ -468,14 +525,73 @@ export function LinearIssueEditSection({
               </PopoverContent>
             </Popover>
 
-            <button
-              type="button"
-              className="flex min-h-9 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground"
-              disabled
-            >
-              <AlertTriangle className={propertyIconClass} />
-              <span className="min-w-0 flex-1 truncate">Set estimate</span>
-            </button>
+            <Popover open={estimatePopoverOpen} onOpenChange={setEstimatePopoverOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  disabled={estimatePending}
+                  className={propertyRowClass}
+                  aria-busy={estimatePending}
+                >
+                  <Gauge className={propertyIconClass} />
+                  <span className="min-w-0 flex-1 truncate">
+                    {formatLinearEstimateLabel(localEstimate)}
+                  </span>
+                  <LinearEditChipAdornment pending={estimatePending} />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-64 p-3" align="start">
+                <div className="space-y-3">
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {LINEAR_ESTIMATE_PRESETS.map((estimate) => (
+                      <button
+                        key={estimate}
+                        type="button"
+                        onClick={() => handleEstimateChange(estimate)}
+                        className={cn(
+                          'flex h-8 items-center justify-center rounded-md border border-border text-sm hover:bg-accent',
+                          localEstimate === estimate && 'border-primary bg-accent text-foreground'
+                        )}
+                      >
+                        {estimate}
+                      </button>
+                    ))}
+                  </div>
+                  <Input
+                    value={estimateInput}
+                    onChange={(event) => setEstimateInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        handleEstimateSubmit()
+                      }
+                    }}
+                    inputMode="numeric"
+                    placeholder="Custom estimate"
+                    className="h-8 text-sm"
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleEstimateChange(null)}
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleEstimateSubmit}
+                      disabled={estimatePending}
+                    >
+                      {estimatePending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </section>
 
@@ -638,6 +754,72 @@ export function LinearIssueEditSection({
               {PRIORITY_LABELS[p]}
             </button>
           ))}
+        </PopoverContent>
+      </Popover>
+
+      {/* Estimate */}
+      <Popover open={estimatePopoverOpen} onOpenChange={setEstimatePopoverOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            disabled={estimatePending}
+            className={LINEAR_EDIT_CHIP_CLASS}
+            aria-busy={estimatePending}
+          >
+            <span className="truncate">{formatLinearEstimateLabel(localEstimate)}</span>
+            <LinearEditChipAdornment pending={estimatePending} />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="w-64 p-3" align="start">
+          <div className="space-y-3">
+            <div className="grid grid-cols-5 gap-1.5">
+              {LINEAR_ESTIMATE_PRESETS.map((estimate) => (
+                <button
+                  key={estimate}
+                  type="button"
+                  onClick={() => handleEstimateChange(estimate)}
+                  className={cn(
+                    'flex h-8 items-center justify-center rounded-md border border-border text-sm hover:bg-accent',
+                    localEstimate === estimate && 'border-primary bg-accent text-foreground'
+                  )}
+                >
+                  {estimate}
+                </button>
+              ))}
+            </div>
+            <Input
+              value={estimateInput}
+              onChange={(event) => setEstimateInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  handleEstimateSubmit()
+                }
+              }}
+              inputMode="numeric"
+              placeholder="Custom estimate"
+              className="h-8 text-sm"
+            />
+            <div className="flex items-center justify-between gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => handleEstimateChange(null)}
+              >
+                Clear
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleEstimateSubmit}
+                disabled={estimatePending}
+              >
+                {estimatePending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
+                Save
+              </Button>
+            </div>
+          </div>
         </PopoverContent>
       </Popover>
 
@@ -888,6 +1070,7 @@ export function initLinearIssueEditState(issue: LinearIssue): LinearEditState {
   return {
     state: issue.state,
     priority: issue.priority,
+    estimate: issue.estimate,
     assignee: issue.assignee,
     labelIds: issue.labelIds,
     labels: issue.labels
@@ -910,6 +1093,7 @@ export default function LinearItemDrawer({
 
   const handleEditStateChange = useCallback((patch: Partial<LinearEditState>) => {
     hasEditedRef.current = true
+    setFullIssue((prev) => (prev ? { ...prev, ...patch } : prev))
     setEditState((prev) => (prev ? { ...prev, ...patch } : prev))
   }, [])
 

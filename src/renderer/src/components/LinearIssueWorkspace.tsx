@@ -56,6 +56,7 @@ import type {
 type LinearIssueWorkspaceProps = {
   issue: LinearIssue | null
   onUse: (issue: LinearIssue) => void
+  onOpenIssue: (issue: LinearIssue) => void
   onClose: () => void
 }
 
@@ -92,16 +93,43 @@ function LinearIssueAvatar({
   )
 }
 
-function LinearIssueSubIssueButton({ issue }: { issue: LinearIssue }): React.JSX.Element {
+function LinearIssueSubIssueButton({
+  issue,
+  onOpenIssue
+}: {
+  issue: LinearIssue
+  onOpenIssue: (issue: LinearIssue) => void
+}): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
+  const fetchLinearIssue = useAppStore((s) => s.fetchLinearIssue)
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [subIssues, setSubIssues] = useState<LinearIssueChildSummary[]>(issue.subIssues ?? [])
   const [submitting, setSubmitting] = useState(false)
+  const [openingSubIssueId, setOpeningSubIssueId] = useState<string | null>(null)
 
   useEffect(() => {
     setSubIssues(issue.subIssues ?? [])
   }, [issue.id, issue.subIssues])
+
+  const handleOpenSubIssue = useCallback(
+    async (subIssue: LinearIssueChildSummary) => {
+      setOpeningSubIssueId(subIssue.id)
+      try {
+        const fullIssue = await fetchLinearIssue(subIssue.id, issue.workspaceId)
+        if (fullIssue) {
+          onOpenIssue(fullIssue)
+        } else {
+          toast.error('Failed to load sub-issue')
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to load sub-issue')
+      } finally {
+        setOpeningSubIssueId(null)
+      }
+    },
+    [fetchLinearIssue, issue.workspaceId, onOpenIssue]
+  )
 
   const handleCreate = useCallback(async () => {
     const trimmed = title.trim()
@@ -148,12 +176,17 @@ function LinearIssueSubIssueButton({ issue }: { issue: LinearIssue }): React.JSX
             <button
               key={subIssue.id}
               type="button"
-              onClick={() => window.api.shell.openUrl(subIssue.url)}
+              onClick={() => void handleOpenSubIssue(subIssue)}
+              disabled={openingSubIssueId !== null}
               className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm text-muted-foreground transition hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <span className="shrink-0 font-mono text-xs">{subIssue.identifier}</span>
               <span className="min-w-0 flex-1 truncate">{subIssue.title}</span>
-              <ArrowRight className="size-3.5 shrink-0" />
+              {openingSubIssueId === subIssue.id ? (
+                <LoaderCircle className="size-3.5 shrink-0 animate-spin" />
+              ) : (
+                <ArrowRight className="size-3.5 shrink-0" />
+              )}
             </button>
           ))}
         </div>
@@ -342,6 +375,7 @@ function LinearIssueSidebarProjectCard({
 export default function LinearIssueWorkspace({
   issue,
   onUse,
+  onOpenIssue,
   onClose
 }: LinearIssueWorkspaceProps): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
@@ -443,6 +477,7 @@ export default function LinearIssueWorkspace({
               state: prev.state,
               priority: prev.priority,
               assignee: prev.assignee,
+              estimate: prev.estimate,
               labelIds: prev.labelIds,
               labels: prev.labels
             }
@@ -631,7 +666,7 @@ export default function LinearIssueWorkspace({
                     )}
                   </section>
 
-                  <LinearIssueSubIssueButton issue={displayed} />
+                  <LinearIssueSubIssueButton issue={displayed} onOpenIssue={onOpenIssue} />
 
                   <section className="mt-12 border-t border-border/60 pt-9">
                     <div className="mb-8 flex items-center justify-between gap-3">

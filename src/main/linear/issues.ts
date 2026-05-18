@@ -23,6 +23,7 @@ type LinearIssueNode = {
   title: string
   description?: string | null
   url: string
+  estimate?: number | null
   priority: number
   updatedAt: string
   labelIds?: string[] | null
@@ -64,6 +65,7 @@ const LINEAR_ISSUE_NODE_FIELDS = `
   description
   url
   priority
+  estimate
   updatedAt
   labelIds
   state {
@@ -192,6 +194,7 @@ function mapRawIssueForWorkspace(
           avatarUrl: issue.assignee.avatarUrl ?? undefined
         }
       : undefined,
+    estimate: issue.estimate ?? null,
     priority: issue.priority,
     updatedAt: issue.updatedAt,
     workspaceId: entry.workspace.id,
@@ -435,6 +438,9 @@ export async function updateIssue(
     }
     if (updates.assigneeId !== undefined) {
       payload.assigneeId = updates.assigneeId
+    }
+    if (updates.estimate !== undefined) {
+      payload.estimate = updates.estimate
     }
     if (updates.priority !== undefined) {
       payload.priority = updates.priority
