@@ -4,7 +4,7 @@
 
 The strongest evidence points at the remote runtime input batcher adding user-visible latency before the PTY sees each interactive key. The local xterm path forwards `terminal.onData` directly to the transport, but the remote runtime transport used an 8 ms timer before sending the first pending input frame. That delay sits before both the host PTY write and the eventual echoed output/redraw, so it is additive to network/runtime and xterm parsing time.
 
-Foreground output is less suspicious for the reported typing delay: visible panes call `terminal.write` immediately through `writeTerminalOutput`, while only hidden panes are throttled by the background output scheduler. Runtime graph sync, title updates, and agent-status updates are not on the input send path; they are driven by spawn/exit/title/OSC output events.
+Foreground renderer scheduling is less suspicious for the reported typing delay: visible panes call `terminal.write` immediately through `writeTerminalOutput`, while only hidden panes are throttled by the background output scheduler. The local PTY IPC layer and the remote runtime RPC layer both had fixed output batch windows before foreground output reached the renderer. Runtime graph sync, title updates, and agent-status updates are not on the input send path; they are driven by spawn/exit/title/OSC output events.
 
 ## Reference Checks
 
@@ -64,4 +64,35 @@ Combined local PTY echo plus runtime output batching, with realistic inter-key i
 
 The adaptive output change keeps the old batch behavior for sustained output: in a 100-chunk synthetic stream with chunks spaced 1 ms apart, old and adaptive batching both emitted 25 frames for 10,000 bytes. That keeps throughput protection while removing the first small-output timer from the interactive echo path.
 
-Takeaway: the client/server architecture added two fixed waits on the interactive key path: about 9 ms before input frame send and about 6 ms before the first echoed output frame. The patches remove those fixed waits while preserving same-turn input coalescing and sustained output batching. Remaining latency is likely from real transport/network delay, host PTY scheduling, and xterm parse/paint during Codex alternate-screen redraws.
+## Local PTY #2283 Comparison
+
+PR #2283 is a related but separate local-PTY IPC optimization. It changes `src/main/ipc/pty.ts`, not the remote runtime transport. The policy sends small PTY output immediately when it follows recent desktop input, while keeping the 8 ms batch window for background output and large chunks.
+
+| Local PTY IPC case | Avg | P50 | P95 | P99 | Notes |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `origin/main`, small echo after input | 8.932 ms | 9.058 ms | 9.259 ms | 9.371 ms | All local output waits for the 8 ms IPC batch |
+| #2283 policy, small echo after input | 0.005 ms | 0.003 ms | 0.009 ms | 0.035 ms | Keystroke-sized redraw bypasses the timer |
+| `origin/main`, background output | 8.965 ms | 9.092 ms | 9.377 ms | 9.593 ms | Throughput batching |
+| #2283 policy, background output | 8.981 ms | 9.085 ms | 9.353 ms | 9.714 ms | Still batched |
+| #2283 policy, large output after input | 9.056 ms | 9.094 ms | 9.405 ms | 9.648 ms | Large output still batched |
+
+This complements the remote-runtime patch. #2283 removes the local PTY output wait for interactive redraws; the remote patch removes the remote input wait and the remote runtime output wait.
+
+## Xterm / VS Code Comparison
+
+The renderer comparison used the same Chromium page and payloads with Orca's bundled xterm.js 6.1 beta and the installed VS Code app's bundled xterm.js 5.6 beta. Headed Chromium was used for the primary numbers so WebGL used real GPU compositing instead of headless SwiftShader.
+
+| Target | Renderer | Payload | Write callback P50 | Write callback P95 | Write + next rAF P50 | Notes |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| Orca xterm 6.1 | DOM | 1 B echo | 0.50 ms | 1.40 ms | 16.70 ms | Same frame-bound visible latency as VS Code |
+| VS Code xterm 5.6 | DOM | 1 B echo | 0.70 ms | 1.40 ms | 16.70 ms | Same class |
+| Orca xterm 6.1 | DOM | 2 KiB redraw | 1.90 ms | 2.30 ms | 16.50 ms | Slightly slower parser callback in this run |
+| VS Code xterm 5.6 | DOM | 2 KiB redraw | 1.00 ms | 1.40 ms | 16.70 ms | Same visible frame boundary |
+| Orca xterm 6.1 | WebGL | 2 KiB redraw | 1.00 ms | 1.30 ms | 16.60 ms | No Orca-specific WebGL penalty in headed Chromium |
+| VS Code xterm 5.6 | WebGL | 2 KiB redraw | 1.10 ms | 1.40 ms | 16.70 ms | Same class |
+| Orca xterm 6.1 | WebGL | 16 KiB logs | 1.00 ms | 1.20 ms | 16.70 ms | Same class |
+| VS Code xterm 5.6 | WebGL | 16 KiB logs | 0.60 ms | 1.30 ms | 16.60 ms | Same class |
+
+Headless Chromium showed WebGL write callbacks around 18-26 ms for larger payloads for both Orca and VS Code xterm packages, but the headed run did not reproduce that. Treat the headless WebGL result as a software-renderer artifact rather than evidence of an Orca-specific terminal renderer regression.
+
+Takeaway: the client/server architecture added two fixed waits on the interactive key path: about 9 ms before input frame send and about 6 ms before the first echoed output frame. The local PTY path also had an 8 ms output wait that #2283 addresses for recent-input redraws. The xterm renderer itself does not appear slower than VS Code in a controlled browser benchmark; both are mostly bounded by the next paint frame for visible output. Remaining latency is likely from real transport/network delay, host PTY scheduling, and xterm parse/paint during unusually large Codex alternate-screen redraws.
