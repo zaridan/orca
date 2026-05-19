@@ -1,5 +1,10 @@
 import type { GlobalSettings } from '../../../../shared/types'
 import { Label } from '../ui/label'
+import {
+  AGENT_AWAKE_TITLE,
+  getAgentAwakeDescription,
+  getAgentAwakeSearchKeywords
+} from './agent-awake-copy'
 import { SearchableSetting } from './SearchableSetting'
 
 type AgentAwakeSettingProps = {
@@ -11,23 +16,23 @@ export function AgentAwakeSetting({
   settings,
   updateSettings
 }: AgentAwakeSettingProps): React.JSX.Element {
+  const description = getAgentAwakeDescription()
+
   return (
     <section className="space-y-3">
       <SearchableSetting
-        title="Keep computer awake while agents are working"
-        description="Keeps this computer awake while agents are working. The display can still turn off."
-        keywords={['awake', 'sleep', 'power', 'agent', 'running', 'working']}
+        title={AGENT_AWAKE_TITLE}
+        description={description}
+        keywords={getAgentAwakeSearchKeywords()}
         className="flex items-start justify-between gap-4 px-1 py-2"
       >
         <div className="min-w-0 shrink space-y-0.5">
-          <Label>Keep computer awake while agents are working</Label>
-          <p className="text-xs text-muted-foreground">
-            Keeps this computer awake while agents are working. The display can still turn off.
-          </p>
+          <Label>{AGENT_AWAKE_TITLE}</Label>
+          <p className="text-xs text-muted-foreground">{description}</p>
         </div>
         <button
           role="switch"
-          aria-label="Keep computer awake while agents are working"
+          aria-label={AGENT_AWAKE_TITLE}
           aria-checked={settings.keepComputerAwakeWhileAgentsRun}
           onClick={() =>
             updateSettings({

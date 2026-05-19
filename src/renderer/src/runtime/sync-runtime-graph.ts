@@ -14,14 +14,24 @@ import type {
   RuntimeMobileSessionBrowserTab,
   RuntimeMobileSessionFileTab,
   RuntimeMobileSessionMarkdownTab,
+  RuntimeMobileSessionTabGroup,
   RuntimeMobileSessionSnapshotTab,
   RuntimeMobileSessionTabsSnapshot,
   RuntimeSyncWindowGraph
 } from '../../../shared/runtime-types'
 import { isTerminalLeafId, makePaneKey } from '../../../shared/stable-pane-id'
 import { isWebTerminalSurfaceTabId } from '../../../shared/terminal-surface-id'
-import type { TerminalLayoutSnapshot, TerminalPaneLayoutNode } from '../../../shared/types'
-import { getActiveTabNavOrder } from '../components/tab-bar/group-tab-order'
+import type {
+  TabGroup,
+  TabGroupLayoutNode,
+  TerminalLayoutSnapshot,
+  TerminalPaneLayoutNode
+} from '../../../shared/types'
+import {
+  getActiveTabNavOrder,
+  getGroupVisibleTabOrder,
+  type VisibleTabRef
+} from '../components/tab-bar/group-tab-order'
 import { parseRemoteRuntimePtyId } from './runtime-terminal-stream'
 
 type RegisteredTerminalTab = {
@@ -60,6 +70,7 @@ const EMPTY_ACTIVE_BROWSER_TAB_ID_BY_WORKTREE: AppState['activeBrowserTabIdByWor
 const EMPTY_BROWSER_TABS_BY_WORKTREE: AppState['browserTabsByWorktree'] = {}
 const EMPTY_BROWSER_PAGES_BY_WORKSPACE: AppState['browserPagesByWorkspace'] = {}
 const EMPTY_AGENT_STATUS_BY_PANE_KEY: AppState['agentStatusByPaneKey'] = {}
+const EMPTY_LAYOUT_BY_WORKTREE: AppState['layoutByWorktree'] = {}
 let syncScheduled = false
 let syncInFlight = false
 let syncPendingAfterFlight = false
@@ -161,6 +172,7 @@ export type RuntimeMobileSessionSyncKey = {
   runtimePaneTitlesByTabId: AppState['runtimePaneTitlesByTabId']
   groupsByWorktree: AppState['groupsByWorktree']
   activeGroupIdByWorktree: AppState['activeGroupIdByWorktree']
+  layoutByWorktree: AppState['layoutByWorktree']
   unifiedTabsByWorktree: AppState['unifiedTabsByWorktree']
   tabBarOrderByWorktree: AppState['tabBarOrderByWorktree']
   activeFileId: AppState['activeFileId']
@@ -198,6 +210,7 @@ export function getRuntimeMobileSessionSyncKey(
     runtimePaneTitlesByTabId: state.runtimePaneTitlesByTabId,
     groupsByWorktree: state.groupsByWorktree,
     activeGroupIdByWorktree: state.activeGroupIdByWorktree,
+    layoutByWorktree: state.layoutByWorktree ?? EMPTY_LAYOUT_BY_WORKTREE,
     unifiedTabsByWorktree: state.unifiedTabsByWorktree,
     tabBarOrderByWorktree: state.tabBarOrderByWorktree,
     activeFileId: state.activeFileId,
@@ -347,6 +360,7 @@ export function runtimeMobileSessionSyncKeysEqual(
     a.runtimePaneTitlesByTabId === b.runtimePaneTitlesByTabId &&
     a.groupsByWorktree === b.groupsByWorktree &&
     a.activeGroupIdByWorktree === b.activeGroupIdByWorktree &&
+    a.layoutByWorktree === b.layoutByWorktree &&
     a.unifiedTabsByWorktree === b.unifiedTabsByWorktree &&
     a.tabBarOrderByWorktree === b.tabBarOrderByWorktree &&
     a.activeFileId === b.activeFileId &&
@@ -461,9 +475,6 @@ export function buildMobileSessionTabSnapshots(
   const snapshots: RuntimeMobileSessionTabsSnapshot[] = []
   for (const worktreeId of worktreeIds) {
     const activeGroupId = state.activeGroupIdByWorktree[worktreeId] ?? null
-    const order = getActiveTabNavOrder(state, worktreeId, {
-      editorIds: openFileIndexes.idsByWorktree.get(worktreeId) ?? []
-    })
     const terminalTabByIdForWorktree = new Map(
       (state.tabsByWorktree[worktreeId] ?? []).map((tab) => [tab.id, tab])
     )
@@ -473,9 +484,18 @@ export function buildMobileSessionTabSnapshots(
         workspace
       ])
     )
+    const editorIds = openFileIndexes.idsByWorktree.get(worktreeId) ?? []
+    const publishableTerminalIds = [...terminalTabByIdForWorktree.values()]
+      .filter((terminal) => !isWebOnlyMirroredTerminalTab(state, terminal))
+      .map((terminal) => terminal.id)
+    const groupProjection = buildMobileSessionGroupProjection(state, worktreeId, {
+      terminalIds: publishableTerminalIds,
+      editorIds,
+      browserIds: [...browserWorkspaceByIdForWorktree.keys()]
+    })
     const tabs: RuntimeMobileSessionSnapshotTab[] = []
 
-    for (const item of order) {
+    for (const item of groupProjection.order) {
       if (item.type === 'terminal') {
         const terminal = terminalTabByIdForWorktree.get(item.id)
         if (!terminal) {
@@ -519,6 +539,10 @@ export function buildMobileSessionTabSnapshots(
       activeGroupId,
       activeTabId: active?.id ?? null,
       activeTabType: active?.type ?? null,
+      ...(groupProjection.tabGroups && groupProjection.tabGroups.length > 0
+        ? { tabGroups: groupProjection.tabGroups }
+        : {}),
+      ...(groupProjection.tabGroupLayout ? { tabGroupLayout: groupProjection.tabGroupLayout } : {}),
       tabs
     })
   }
@@ -575,6 +599,125 @@ function getOpenFileIndexes(openFiles: AppState['openFiles']): OpenFileIndexes {
   cachedOpenFileIndexesSource = openFiles
   cachedOpenFileIndexes = { byWorktreeAndId, idsByWorktree }
   return cachedOpenFileIndexes
+}
+
+function collectTabGroupLayoutIds(layout: TabGroupLayoutNode | undefined): string[] {
+  const result: string[] = []
+  const visit = (node: TabGroupLayoutNode | undefined): void => {
+    if (!node) {
+      return
+    }
+    if (node.type === 'leaf') {
+      result.push(node.groupId)
+      return
+    }
+    visit(node.first)
+    visit(node.second)
+  }
+  visit(layout)
+  return result
+}
+
+function pruneTabGroupLayout(
+  layout: TabGroupLayoutNode | undefined,
+  validGroupIds: ReadonlySet<string>
+): TabGroupLayoutNode | null {
+  if (!layout) {
+    return null
+  }
+  if (layout.type === 'leaf') {
+    return validGroupIds.has(layout.groupId) ? layout : null
+  }
+  const first = pruneTabGroupLayout(layout.first, validGroupIds)
+  const second = pruneTabGroupLayout(layout.second, validGroupIds)
+  if (first && second) {
+    return { ...layout, first, second }
+  }
+  return first ?? second
+}
+
+function getOrderedTabGroups(
+  groups: readonly TabGroup[],
+  layout: TabGroupLayoutNode | undefined
+): TabGroup[] {
+  const byId = new Map(groups.map((group) => [group.id, group]))
+  const seen = new Set<string>()
+  const ordered: TabGroup[] = []
+  for (const groupId of collectTabGroupLayoutIds(layout)) {
+    const group = byId.get(groupId)
+    if (!group || seen.has(group.id)) {
+      continue
+    }
+    seen.add(group.id)
+    ordered.push(group)
+  }
+  for (const group of groups) {
+    if (!seen.has(group.id)) {
+      ordered.push(group)
+    }
+  }
+  return ordered
+}
+
+function buildMobileSessionGroupProjection(
+  state: AppState,
+  worktreeId: string,
+  ids: {
+    terminalIds: string[]
+    editorIds: string[]
+    browserIds: string[]
+  }
+): {
+  order: VisibleTabRef[]
+  tabGroups?: RuntimeMobileSessionTabGroup[]
+  tabGroupLayout?: TabGroupLayoutNode | null
+} {
+  const groups = state.groupsByWorktree[worktreeId] ?? []
+  if (groups.length === 0) {
+    return {
+      order: getActiveTabNavOrder(state, worktreeId, {
+        editorIds: ids.editorIds
+      })
+    }
+  }
+
+  const terminalIds = new Set(ids.terminalIds)
+  const editorIds = new Set(ids.editorIds)
+  const browserIds = new Set(ids.browserIds)
+  const tabs = state.unifiedTabsByWorktree[worktreeId] ?? []
+  const order: VisibleTabRef[] = []
+  const tabGroups: RuntimeMobileSessionTabGroup[] = []
+
+  const layoutByWorktree = state.layoutByWorktree ?? {}
+  for (const group of getOrderedTabGroups(groups, layoutByWorktree[worktreeId])) {
+    const groupTabs = tabs.filter((tab) => tab.groupId === group.id)
+    const visibleOrder = getGroupVisibleTabOrder(
+      group,
+      groupTabs,
+      terminalIds,
+      editorIds,
+      browserIds
+    )
+    if (visibleOrder.length === 0) {
+      continue
+    }
+    const tabOrder = visibleOrder.map((item) => item.tabId ?? item.id)
+    order.push(...visibleOrder)
+    tabGroups.push({
+      id: group.id,
+      activeTabId:
+        group.activeTabId && tabOrder.includes(group.activeTabId) ? group.activeTabId : null,
+      tabOrder,
+      recentTabIds: group.recentTabIds?.filter((tabId) => tabOrder.includes(tabId)) ?? []
+    })
+  }
+
+  const validGroupIds = new Set(tabGroups.map((group) => group.id))
+  return {
+    order,
+    tabGroups,
+    tabGroupLayout: pruneTabGroupLayout(layoutByWorktree[worktreeId], validGroupIds)
+  }
 }
 
 function getEditorDraftVersionByFileId(
@@ -735,9 +878,7 @@ function buildMobileMarkdownTab(
     mode: file.mode,
     isDirty: file.isDirty || sourceFile.isDirty,
     isActive: unifiedTabId
-      ? state.groupsByWorktree[file.worktreeId]?.some(
-          (group) => group.activeTabId === unifiedTabId
-        ) === true
+      ? isUnifiedTabActiveInActiveGroup(state, file.worktreeId, unifiedTabId)
       : state.activeFileId === file.id,
     sourceFileId: sourceFile.id,
     sourceFilePath: sourceFile.filePath,
@@ -765,9 +906,7 @@ function buildMobileFileTab(
     ...(diffSource ? { diffSource } : {}),
     isDirty: file.isDirty,
     isActive: unifiedTabId
-      ? state.groupsByWorktree[file.worktreeId]?.some(
-          (group) => group.activeTabId === unifiedTabId
-        ) === true
+      ? isUnifiedTabActiveInActiveGroup(state, file.worktreeId, unifiedTabId)
       : state.activeFileId === file.id
   }
 }
@@ -799,11 +938,22 @@ function buildMobileBrowserTab(
     canGoBack: activePage?.canGoBack ?? workspace.canGoBack,
     canGoForward: activePage?.canGoForward ?? workspace.canGoForward,
     isActive: unifiedTabId
-      ? state.groupsByWorktree[workspace.worktreeId]?.some(
-          (group) => group.activeTabId === unifiedTabId
-        ) === true
+      ? isUnifiedTabActiveInActiveGroup(state, workspace.worktreeId, unifiedTabId)
       : state.activeBrowserTabIdByWorktree[workspace.worktreeId] === workspace.id
   }
+}
+
+function isUnifiedTabActiveInActiveGroup(
+  state: AppState,
+  worktreeId: string,
+  unifiedTabId: string
+): boolean {
+  const activeGroupId = state.activeGroupIdByWorktree[worktreeId]
+  return (
+    state.groupsByWorktree[worktreeId]?.some(
+      (group) => group.id === activeGroupId && group.activeTabId === unifiedTabId
+    ) === true
+  )
 }
 
 function stableHashString(value: string): string {

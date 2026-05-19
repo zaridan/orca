@@ -15,6 +15,7 @@ import {
 import WorktreeCard from './WorktreeCard'
 import WorktreeCardAgents from './WorktreeCardAgents'
 import { SshDisconnectedDialog } from './SshDisconnectedDialog'
+import { WorktreeActivityStatusIndicator } from './WorktreeActivityStatusIndicator'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -31,7 +32,6 @@ import type {
   WorkspaceStatus,
   WorkspaceStatusDefinition
 } from '../../../../shared/types'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
 import { buildWorktreeComparator } from './smart-sort'
 import {
   buildAttentionByWorktree,
@@ -80,6 +80,7 @@ import {
 } from './worktree-multi-selection'
 import { branchDisplayName } from './WorktreeCardHelpers'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
+import { getRepoHeaderCreateState } from './repo-header-create-state'
 
 // How long to wait after a sortEpoch bump before actually re-sorting.
 // Prevents jarring position shifts when background events (AI starting work,
@@ -298,6 +299,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
 }: VirtualizedWorktreeViewportProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const suppressMeasurementAdjustmentUntilRef = useRef(0)
+  const directScrollInputUntilRef = useRef(0)
   const [dragOverStatus, setDragOverStatus] = useState<WorkspaceStatus | null>(null)
   const [pinDragOver, setPinDragOver] = useState(false)
   const [lineageReconnectWorktreeId, setLineageReconnectWorktreeId] = useState<string | null>(null)
@@ -340,6 +342,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   const activeLineageChildTargetLabel = useAppStore((s) =>
     activeLineageChildConnectionId ? s.sshTargetLabels.get(activeLineageChildConnectionId) : null
   )
+  const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
   const activeLineageChildSshDisconnected =
     activeLineageChildSshStatus !== null && activeLineageChildSshStatus !== 'connected'
   const renderRowsRef = useRef(renderRows)
@@ -392,12 +395,23 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
     },
     [isCurrentVirtualRowElement]
   )
-  const markDirectScrollInput = useCallback(() => {
+  const markScrollMovement = useCallback(() => {
     suppressMeasurementAdjustmentUntilRef.current =
       window.performance.now() + USER_SCROLL_MEASUREMENT_ADJUSTMENT_SUPPRESS_MS
   }, [])
+  const markDirectScrollInput = useCallback(() => {
+    const suppressUntil = window.performance.now() + USER_SCROLL_MEASUREMENT_ADJUSTMENT_SUPPRESS_MS
+    suppressMeasurementAdjustmentUntilRef.current = suppressUntil
+    directScrollInputUntilRef.current = suppressUntil
+  }, [])
+  const hasDirectScrollInput = useCallback(
+    () => window.performance.now() < directScrollInputUntilRef.current,
+    []
+  )
+  // Why: programmatic scrolls should keep measurement correction quiet, but
+  // only direct input should block anchor restoration retries.
   const shouldSkipScrollAnchorRestore = useCallback(
-    () => window.performance.now() < suppressMeasurementAdjustmentUntilRef.current,
+    () => window.performance.now() < directScrollInputUntilRef.current,
     []
   )
 
@@ -564,6 +578,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
     rows: renderRows,
     scrollElementRef: scrollRef,
     scrollOffsetRef,
+    hasDirectScrollInput,
     shouldSkipRestore: shouldSkipScrollAnchorRestore,
     totalSize,
     virtualizer
@@ -663,6 +678,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
       }
 
       if (mod && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        markDirectScrollInput()
         navigateWorktree(e.key === 'ArrowUp' ? 'up' : 'down')
         e.preventDefault()
       }
@@ -670,7 +686,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
 
     window.addEventListener('keydown', handleKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
-  }, [activeModal, navigateWorktree])
+  }, [activeModal, markDirectScrollInput, navigateWorktree])
 
   // Why: lightweight nested cards do not mount WorktreeCard, so the viewport
   // owns the SSH reconnect prompt for an active lineage child.
@@ -686,6 +702,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
         if (e.target !== e.currentTarget) {
           return
         }
+        markDirectScrollInput()
         navigateWorktree(e.key === 'ArrowUp' ? 'up' : 'down')
         e.preventDefault()
       } else if (e.key === 'Enter') {
@@ -696,9 +713,25 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
           helper.focus()
         }
         e.preventDefault()
+      } else if (['PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) {
+        markDirectScrollInput()
       }
     },
-    [navigateWorktree]
+    [markDirectScrollInput, navigateWorktree]
+  )
+
+  const handleScrollPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const scrollbarWidth = event.currentTarget.offsetWidth - event.currentTarget.clientWidth
+      if (scrollbarWidth <= 0) {
+        return
+      }
+      const rect = event.currentTarget.getBoundingClientRect()
+      if (event.clientX >= rect.right - scrollbarWidth) {
+        markDirectScrollInput()
+      }
+    },
+    [markDirectScrollInput]
   )
 
   const firstHeaderIndex = useMemo(
@@ -798,6 +831,11 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
       aria-multiselectable="true"
       aria-activedescendant={activeDescendantId}
       onKeyDown={handleContainerKeyDown}
+      // Why: trackpad momentum can continue as sparse scroll events after the
+      // original wheel/touch event stream quiets down. Keep measurement-based
+      // scroll correction suppressed until the viewport itself has stopped.
+      onScroll={markScrollMovement}
+      onPointerDown={handleScrollPointerDown}
       onTouchMove={markDirectScrollInput}
       onWheel={markDirectScrollInput}
       className="worktree-sidebar-scrollbar flex-1 overflow-y-scroll overflow-x-hidden pl-1 scrollbar-sleek outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset pt-px"
@@ -853,6 +891,15 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                 ? getWorkspaceStatusFromGroupKey(row.key, workspaceStatuses)
                 : null
             const isPinnedHeader = row.key === PINNED_GROUP_KEY
+            const createState = row.repo
+              ? getRepoHeaderCreateState({
+                  repo: row.repo,
+                  label: row.label,
+                  sshStatus: row.repo.connectionId
+                    ? (sshConnectionStates.get(row.repo.connectionId)?.status ?? null)
+                    : null
+                })
+              : null
             return (
               <div
                 key={vItem.key}
@@ -997,29 +1044,50 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                   {row.repo && groupBy === 'repo' ? (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          className="size-5 shrink-0 rounded-md text-muted-foreground hover:bg-accent/70 hover:text-foreground transition-opacity"
-                          aria-label={`Create worktree for ${row.label}`}
-                          onKeyDown={stopRepoHeaderKeyboardToggle}
-                          onClick={(event) => {
-                            event.preventDefault()
-                            event.stopPropagation()
-                            if (row.repo && isGitRepoKind(row.repo)) {
-                              handleCreateForRepo(row.repo.id)
+                        {createState?.disabled ? (
+                          <span
+                            className="inline-flex cursor-not-allowed"
+                            tabIndex={0}
+                            aria-label={createState.ariaLabel}
+                            onKeyDown={stopRepoHeaderKeyboardToggle}
+                            onClick={(event) => event.stopPropagation()}
+                            onPointerDown={(event) => event.stopPropagation()}
+                          >
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              className="pointer-events-none size-5 shrink-0 rounded-md text-muted-foreground transition-opacity opacity-60"
+                              aria-label={createState.ariaLabel}
+                              disabled
+                            >
+                              <Plus className="size-3" />
+                            </Button>
+                          </span>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="size-5 shrink-0 rounded-md text-muted-foreground hover:bg-accent/70 hover:text-foreground transition-opacity"
+                            aria-label={
+                              createState?.ariaLabel ?? `Create worktree for ${row.label}`
                             }
-                          }}
-                          disabled={row.repo ? !isGitRepoKind(row.repo) : false}
-                        >
-                          <Plus className="size-3" />
-                        </Button>
+                            onKeyDown={stopRepoHeaderKeyboardToggle}
+                            onClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              if (row.repo) {
+                                handleCreateForRepo(row.repo.id)
+                              }
+                            }}
+                          >
+                            <Plus className="size-3" />
+                          </Button>
+                        )}
                       </TooltipTrigger>
                       <TooltipContent side="bottom" sideOffset={6}>
-                        {row.repo && !isGitRepoKind(row.repo)
-                          ? `${row.label} is opened as a folder`
-                          : `Create worktree for ${row.label}`}
+                        {createState?.tooltip ?? `Create worktree for ${row.label}`}
                       </TooltipContent>
                     </Tooltip>
                   ) : null}
@@ -1135,7 +1203,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     onDoubleClick={(event) => event.stopPropagation()}
                   >
                     <span className="mt-[2px] flex w-4 shrink-0 justify-center pt-[2px]">
-                      <span className="size-2 rounded-full bg-emerald-500" />
+                      <WorktreeActivityStatusIndicator worktreeId={child.worktree.id} />
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[12px] leading-tight text-foreground">

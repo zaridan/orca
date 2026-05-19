@@ -231,6 +231,7 @@ describe('useIpcEvents updater integration', () => {
           onFocusTerminal: () => () => {},
           onFocusEditorTab: () => () => {},
           onCloseSessionTab: () => () => {},
+          onMoveSessionTab: () => () => {},
           onOpenFileFromMobile: () => () => {},
           onOpenDiffFromMobile: () => () => {},
           onCloseTerminal: () => () => {},
@@ -446,6 +447,7 @@ describe('useIpcEvents updater integration', () => {
           onFocusTerminal: () => () => {},
           onFocusEditorTab: () => () => {},
           onCloseSessionTab: () => () => {},
+          onMoveSessionTab: () => () => {},
           onOpenFileFromMobile: () => () => {},
           onOpenDiffFromMobile: () => () => {},
           onCloseTerminal: () => () => {},
@@ -611,6 +613,7 @@ describe('useIpcEvents updater integration', () => {
             requestId: string
             worktreeId?: string
             afterTabId?: string
+            targetGroupId?: string
             command?: string
             title?: string
             activate?: boolean
@@ -705,6 +708,7 @@ describe('useIpcEvents updater integration', () => {
               requestId: string
               worktreeId?: string
               afterTabId?: string
+              targetGroupId?: string
               command?: string
               title?: string
               activate?: boolean
@@ -719,6 +723,7 @@ describe('useIpcEvents updater integration', () => {
           onFocusTerminal: () => () => {},
           onFocusEditorTab: () => () => {},
           onCloseSessionTab: () => () => {},
+          onMoveSessionTab: () => () => {},
           onOpenFileFromMobile: () => () => {},
           onOpenDiffFromMobile: () => () => {},
           onCloseTerminal: () => () => {},
@@ -821,12 +826,13 @@ describe('useIpcEvents updater integration', () => {
     requestTerminalCreateListenerRef.current({
       requestId: 'req-renderer-backed',
       worktreeId: 'wt-2',
+      targetGroupId: 'group-left',
       title: 'Codex',
       command: 'codex',
       activate: false
     })
 
-    expect(createTab).toHaveBeenCalledWith('wt-2', undefined, undefined, { activate: false })
+    expect(createTab).toHaveBeenCalledWith('wt-2', 'group-left', undefined, { activate: false })
     expect(setActiveView).not.toHaveBeenCalled()
     expect(setActiveWorktree).not.toHaveBeenCalled()
     expect(setActiveTabType).not.toHaveBeenCalled()
@@ -1130,6 +1136,7 @@ describe('useIpcEvents browser tab close routing', () => {
           onFocusTerminal: () => () => {},
           onFocusEditorTab: () => () => {},
           onCloseSessionTab: () => () => {},
+          onMoveSessionTab: () => () => {},
           onOpenFileFromMobile: () => () => {},
           onOpenDiffFromMobile: () => () => {},
           onCloseTerminal: () => () => {},
@@ -1340,6 +1347,7 @@ describe('useIpcEvents browser tab close routing', () => {
           onFocusTerminal: () => () => {},
           onFocusEditorTab: () => () => {},
           onCloseSessionTab: () => () => {},
+          onMoveSessionTab: () => () => {},
           onOpenFileFromMobile: () => () => {},
           onOpenDiffFromMobile: () => () => {},
           onCloseTerminal: () => () => {},
@@ -1545,6 +1553,7 @@ describe('useIpcEvents browser tab close routing', () => {
           onFocusTerminal: () => () => {},
           onFocusEditorTab: () => () => {},
           onCloseSessionTab: () => () => {},
+          onMoveSessionTab: () => () => {},
           onOpenFileFromMobile: () => () => {},
           onOpenDiffFromMobile: () => () => {},
           onCloseTerminal: () => () => {},
@@ -1768,6 +1777,7 @@ describe('useIpcEvents CLI-created worktree activation', () => {
           onFocusTerminal: () => () => {},
           onFocusEditorTab: () => () => {},
           onCloseSessionTab: () => () => {},
+          onMoveSessionTab: () => () => {},
           onOpenFileFromMobile: () => () => {},
           onOpenDiffFromMobile: () => () => {},
           onCloseTerminal: () => () => {},
@@ -1968,6 +1978,7 @@ describe('useIpcEvents agent status snapshot integration', () => {
           onFocusTerminal: () => () => {},
           onFocusEditorTab: () => () => {},
           onCloseSessionTab: () => () => {},
+          onMoveSessionTab: () => () => {},
           onOpenFileFromMobile: () => () => {},
           onOpenDiffFromMobile: () => () => {},
           onCloseTerminal: () => () => {},

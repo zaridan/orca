@@ -12,6 +12,7 @@ import type { VoiceSettings } from './speech-types'
 import type { WorkspaceCleanupUIState } from './workspace-cleanup'
 import type { GitLabProjectSettings } from './gitlab-types'
 import type { TaskProvider } from './task-providers'
+import type { FeatureTipId } from './feature-tips'
 import type { GitBranchChangeStatus } from './git-status-types'
 
 // Re-exported for backward compat with renderer call sites that import
@@ -93,6 +94,7 @@ export type Repo = {
 
 export type SetupRunPolicy = 'ask' | 'run-by-default' | 'skip-by-default'
 export type SetupDecision = 'inherit' | 'run' | 'skip'
+export type HookCommandSourcePolicy = 'shared-only' | 'local-only' | 'run-both'
 
 /**
  * Envelope returned by the `repos:getBaseRefDefault` IPC handler.
@@ -1048,11 +1050,11 @@ export type OrcaHooks = {
 }
 
 export type RepoHookSettings = {
-  // Why: legacy persisted data may still include the old UI-hook fields. Orca no longer
-  // treats them as an active config surface, but we keep them in the stored shape so
-  // existing local state can still be read without migrations.
+  // Why: persisted data may still include the old mode field from the earlier
+  // hook UI. Keep it in the shape so existing local state reads without a migration.
   mode: 'auto' | 'override'
   setupRunPolicy?: SetupRunPolicy
+  commandSourcePolicy?: HookCommandSourcePolicy
   scripts: {
     setup: string
     archive: string
@@ -1331,11 +1333,21 @@ export type TerminalColorOverrides = {
   bold?: string
 }
 
+export type TerminalQuickCommandScope =
+  | {
+      type: 'global'
+    }
+  | {
+      type: 'repo'
+      repoId: string
+    }
+
 export type TerminalQuickCommand = {
   id: string
   label: string
   command: string
   appendEnter: boolean
+  scope?: TerminalQuickCommandScope
 }
 
 export type OpenInApplication = {
@@ -1540,7 +1552,7 @@ export type GlobalSettings = {
   geminiCliOAuthEnabled: boolean
   /** Per-agent CLI command overrides. A missing key means use the catalog default binary name. */
   agentCmdOverrides: Partial<Record<TuiAgent, string>>
-  /** When true, Orca prevents local app suspension while hook-reported agents are working. */
+  /** When true, Orca requests local awake assertions while hook-reported agents are working. */
   keepComputerAwakeWhileAgentsRun: boolean
   /** Why: macOS terminals must choose between letting Option compose layout
    *  characters (@ on German, € on French) or treating Option as Meta/Esc for
@@ -1924,6 +1936,9 @@ export type PersistedUIState = {
    *  and applied searches. */
   taskResumeState?: TaskResumeState
   workspaceCleanup?: WorkspaceCleanupUIState
+  /** Feature tips already surfaced to the user. Startup only opens the tips
+   *  modal when this list is missing one of the current tip ids. */
+  featureTipsSeenIds?: FeatureTipId[]
 }
 
 export const PET_SIZE_MIN = 60

@@ -23,15 +23,36 @@ function viewWorktreeDiff(worktreeId: string): void {
 }
 
 export async function runWorktreeDeletesInParallel(
-  targets: readonly Pick<Worktree, 'id' | 'displayName'>[]
+  targets: readonly Pick<Worktree, 'id' | 'displayName' | 'repoId'>[]
 ): Promise<string[]> {
-  const results = await Promise.all(
-    targets.map(async (target) => ({
-      worktreeId: target.id,
-      deleted: await runWorktreeDeleteWithToast(target.id, target.displayName)
-    }))
+  // Why: `git worktree remove`/`prune`/`branch -D` mutate repo-wide ref state
+  // and contend on `.git/packed-refs.lock` and per-worktree HEAD.lock. Running
+  // every target through Promise.all races those locks on the same repo and
+  // intermittently fails one or more deletes. Serialize per repoId while
+  // still letting deletes across different repos run concurrently.
+  const groups = new Map<string, (typeof targets)[number][]>()
+  for (const target of targets) {
+    const group = groups.get(target.repoId)
+    if (group) {
+      group.push(target)
+    } else {
+      groups.set(target.repoId, [target])
+    }
+  }
+  const groupResults = await Promise.all(
+    Array.from(groups.values()).map(async (group) => {
+      const deletedInGroup: string[] = []
+      for (const target of group) {
+        const deleted = await runWorktreeDeleteWithToast(target.id, target.displayName)
+        if (deleted) {
+          deletedInGroup.push(target.id)
+        }
+      }
+      return deletedInGroup
+    })
   )
-  return results.filter((result) => result.deleted).map((result) => result.worktreeId)
+  const deletedSet = new Set(groupResults.flat())
+  return targets.filter((target) => deletedSet.has(target.id)).map((target) => target.id)
 }
 
 /**

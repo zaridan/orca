@@ -3,6 +3,8 @@ import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
 import type {
   BrowserTabCreateResult,
   RuntimeMobileSessionCreateTerminalResult,
+  RuntimeMobileSessionTabMove,
+  RuntimeMobileSessionTabMoveResult,
   RuntimeMobileSessionTabsResult,
   RuntimeTerminalSplit
 } from '../../../shared/runtime-types'
@@ -10,7 +12,7 @@ import type { AppState } from '../store/types'
 import { useAppStore } from '../store'
 import { unwrapRuntimeRpcResult } from './runtime-rpc-client'
 import { parseRemoteRuntimePtyId } from './runtime-terminal-stream'
-import { toHostSessionTabId } from './web-terminal-surface-id'
+import { isWebTerminalSurfaceTabId, toHostSessionTabId } from './web-terminal-surface-id'
 
 export {
   HOST_TERMINAL_SURFACE_SEPARATOR,
@@ -33,6 +35,7 @@ export async function createWebRuntimeSessionTerminal(args: {
   worktreeId: string
   environmentId?: string | null
   afterTabId?: string
+  targetGroupId?: string
   command?: string
   activate?: boolean
 }): Promise<boolean> {
@@ -52,6 +55,7 @@ export async function createWebRuntimeSessionTerminal(args: {
       params: {
         worktree: `id:${args.worktreeId}`,
         afterTabId: args.afterTabId ? toHostSessionTabId(args.afterTabId) : undefined,
+        targetGroupId: args.targetGroupId,
         command: args.command,
         activate: args.activate !== false
       },
@@ -276,6 +280,99 @@ export async function closeWebRuntimeSessionTab(args: {
   return callWebRuntimeSessionTabMethod('session.tabs.close', args)
 }
 
+export async function moveWebRuntimeSessionTab(
+  args: RuntimeMobileSessionTabMove & {
+    worktreeId: string
+    environmentId?: string | null
+  }
+): Promise<boolean> {
+  const environmentId =
+    args.environmentId?.trim() ??
+    useAppStore.getState().settings?.activeRuntimeEnvironmentId?.trim() ??
+    null
+  if (!environmentId || !isWebRuntimeSessionActive(environmentId)) {
+    return false
+  }
+
+  try {
+    const { resolveHostSessionTabIdForWebSessionTab } = await import('./web-session-tabs-sync')
+    const state = useAppStore.getState()
+    const resolveHostBackedTabId = (tabId: string): string | null =>
+      resolveHostSessionTabIdForWebSessionTab(state, {
+        environmentId,
+        worktreeId: args.worktreeId,
+        tabId
+      }) ?? (isWebTerminalSurfaceTabId(tabId) ? toHostSessionTabId(tabId) : null)
+    const toHostTabId = (tabId: string): string => resolveHostBackedTabId(tabId) ?? tabId
+    const movedHostTabId =
+      args.kind === 'reorder' ? resolveHostBackedTabId(args.tabId) : toHostTabId(args.tabId)
+    if (!movedHostTabId) {
+      return false
+    }
+    const reorderedHostTabOrder =
+      args.kind === 'reorder'
+        ? args.tabOrder
+            .map(resolveHostBackedTabId)
+            .filter((tabId): tabId is string => Boolean(tabId))
+        : null
+    if (reorderedHostTabOrder && !reorderedHostTabOrder.includes(movedHostTabId)) {
+      return false
+    }
+    const targetHostIndex =
+      args.kind === 'move-to-group' && typeof args.index === 'number'
+        ? (state.groupsByWorktree?.[args.worktreeId]
+            ?.find((group) => group.id === args.targetGroupId)
+            ?.tabOrder.slice(0, args.index)
+            .map(resolveHostBackedTabId)
+            .filter((tabId): tabId is string => Boolean(tabId)).length ?? args.index)
+        : args.kind === 'move-to-group'
+          ? args.index
+          : undefined
+    const base = {
+      worktree: `id:${args.worktreeId}`,
+      tabId: movedHostTabId,
+      targetGroupId: args.targetGroupId
+    }
+    const move =
+      args.kind === 'reorder'
+        ? {
+            ...base,
+            kind: 'reorder' as const,
+            // Why: paired web groups can contain local-only tabs alongside
+            // host-mirrored tabs. The host reorder API only accepts host tab
+            // ids, so local ids must be omitted from the mirrored order.
+            tabOrder: reorderedHostTabOrder
+          }
+        : args.kind === 'split'
+          ? {
+              ...base,
+              kind: 'split' as const,
+              splitDirection: args.splitDirection
+            }
+          : {
+              ...base,
+              kind: 'move-to-group' as const,
+              // Why: web groups can contain local-only tabs. Host insertion
+              // indexes must be counted in the filtered host-backed order.
+              index: targetHostIndex
+            }
+    const response = await window.api.runtimeEnvironments.call({
+      selector: environmentId,
+      method: 'session.tabs.move',
+      params: move,
+      timeoutMs: 15_000
+    })
+    unwrapRuntimeRpcResult(response as RuntimeRpcResponse<RuntimeMobileSessionTabMoveResult>)
+    return true
+  } catch (error) {
+    console.warn(
+      '[web-runtime-session] failed to move tab:',
+      error instanceof Error ? error.message : String(error)
+    )
+    return false
+  }
+}
+
 async function callWebRuntimeSessionTabMethod(
   method: 'session.tabs.activate' | 'session.tabs.close',
   args: {
@@ -293,12 +390,20 @@ async function callWebRuntimeSessionTabMethod(
   }
 
   try {
+    const { resolveHostSessionTabIdForWebSessionTab } = await import('./web-session-tabs-sync')
+    const state = useAppStore.getState()
+    const hostTabId =
+      resolveHostSessionTabIdForWebSessionTab(state, {
+        environmentId,
+        worktreeId: args.worktreeId,
+        tabId: args.tabId
+      }) ?? toHostSessionTabId(args.tabId)
     const response = await window.api.runtimeEnvironments.call({
       selector: environmentId,
       method,
       params: {
         worktree: `id:${args.worktreeId}`,
-        tabId: toHostSessionTabId(args.tabId)
+        tabId: hostTabId
       },
       timeoutMs: 15_000
     })

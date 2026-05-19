@@ -178,8 +178,8 @@ describe('runWorktreeDeletesInParallel', () => {
       .mockReturnValueOnce(second.promise)
 
     const deleted = runWorktreeDeletesInParallel([
-      { id: 'wt-1', displayName: 'one' },
-      { id: 'wt-2', displayName: 'two' }
+      { id: 'wt-1', displayName: 'one', repoId: 'repo-a' },
+      { id: 'wt-2', displayName: 'two', repoId: 'repo-b' }
     ])
 
     expect(mocks.state.removeWorktree).toHaveBeenCalledTimes(2)

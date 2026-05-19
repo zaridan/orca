@@ -167,6 +167,7 @@ const MOBILE_RPC_METHOD_ALLOWLIST = new Set([
   'session.tabs.createTerminal',
   'session.tabs.list',
   'session.tabs.listAll',
+  'session.tabs.move',
   'session.tabs.subscribe',
   'session.tabs.subscribeAll',
   'session.tabs.unsubscribe',
@@ -292,6 +293,15 @@ export class OrcaRuntimeRpcServer {
   revokeMobileDevice(deviceId: string): boolean {
     const device = this.deviceRegistry?.getDevice(deviceId)
     if (device?.scope !== 'mobile' || !this.deviceRegistry?.removeDevice(deviceId)) {
+      return false
+    }
+    this.wsTransport?.terminateClientConnections(device.token)
+    return true
+  }
+
+  revokeRuntimeAccess(deviceId: string): boolean {
+    const device = this.deviceRegistry?.getDevice(deviceId)
+    if (device?.scope !== 'runtime' || !this.deviceRegistry?.removeDevice(deviceId)) {
       return false
     }
     this.wsTransport?.terminateClientConnections(device.token)

@@ -2,8 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeMobileSessionTabsResult } from '../../../shared/runtime-types'
 import {
+  activateWebRuntimeSessionTab,
+  closeWebRuntimeSessionTab,
   createWebRuntimeSessionBrowserTab,
-  createWebRuntimeSessionTerminal
+  createWebRuntimeSessionTerminal,
+  moveWebRuntimeSessionTab
 } from './web-runtime-session'
 
 const mocks = vi.hoisted(() => ({
@@ -12,7 +15,8 @@ const mocks = vi.hoisted(() => ({
   createBrowserTab: vi.fn(),
   setRemoteBrowserPageHandle: vi.fn(),
   focusBrowserTabInWorktree: vi.fn(),
-  applyFreshWebSessionTabsSnapshot: vi.fn()
+  applyFreshWebSessionTabsSnapshot: vi.fn(),
+  resolveHostSessionTabIdForWebSessionTab: vi.fn()
 }))
 
 vi.mock('../store', () => ({
@@ -23,7 +27,8 @@ vi.mock('../store', () => ({
 }))
 
 vi.mock('./web-session-tabs-sync', () => ({
-  applyFreshWebSessionTabsSnapshot: mocks.applyFreshWebSessionTabsSnapshot
+  applyFreshWebSessionTabsSnapshot: mocks.applyFreshWebSessionTabsSnapshot,
+  resolveHostSessionTabIdForWebSessionTab: mocks.resolveHostSessionTabIdForWebSessionTab
 }))
 
 const ENVIRONMENT_ID = 'web-env-1'
@@ -67,6 +72,7 @@ describe('createWebRuntimeSessionBrowserTab', () => {
       pageIds: ['local-page-1']
     })
     mocks.applyFreshWebSessionTabsSnapshot.mockReturnValue({ state: 'after' })
+    mocks.resolveHostSessionTabIdForWebSessionTab.mockReturnValue(null)
   })
 
   afterEach(() => {
@@ -300,6 +306,7 @@ describe('createWebRuntimeSessionTerminal', () => {
       })
     })
     mocks.applyFreshWebSessionTabsSnapshot.mockReturnValue({ state: 'after' })
+    mocks.resolveHostSessionTabIdForWebSessionTab.mockReturnValue(null)
   })
 
   afterEach(() => {
@@ -355,6 +362,7 @@ describe('createWebRuntimeSessionTerminal', () => {
       createWebRuntimeSessionTerminal({
         worktreeId: WORKTREE_ID,
         afterTabId: 'web-terminal-host-tab-1%3A%3Aleaf-1',
+        targetGroupId: 'group-left',
         command: 'zsh',
         activate: true
       })
@@ -366,6 +374,7 @@ describe('createWebRuntimeSessionTerminal', () => {
       params: {
         worktree: `id:${WORKTREE_ID}`,
         afterTabId: 'host-tab-1::leaf-1',
+        targetGroupId: 'group-left',
         command: 'zsh',
         activate: true
       },
@@ -384,5 +393,277 @@ describe('createWebRuntimeSessionTerminal', () => {
       snapshot,
       ENVIRONMENT_ID
     )
+  })
+})
+
+describe('moveWebRuntimeSessionTab', () => {
+  beforeEach(() => {
+    vi.stubGlobal('__ORCA_WEB_CLIENT__', true)
+    mocks.getState.mockReturnValue({
+      settings: {
+        activeRuntimeEnvironmentId: ENVIRONMENT_ID
+      }
+    })
+    mocks.setState.mockImplementation((updater: (state: unknown) => unknown) => {
+      updater({
+        state: 'before',
+        activeWorktreeId: WORKTREE_ID
+      })
+    })
+    mocks.applyFreshWebSessionTabsSnapshot.mockReturnValue({ state: 'after' })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it('moves paired web tabs through the host session API without an eager stale refresh', async () => {
+    const runtimeCall = vi.fn().mockResolvedValueOnce({
+      id: 'move',
+      ok: true,
+      result: { moved: true }
+    })
+
+    vi.stubGlobal('window', {
+      api: {
+        runtimeEnvironments: {
+          call: runtimeCall
+        }
+      }
+    })
+
+    await expect(
+      moveWebRuntimeSessionTab({
+        worktreeId: WORKTREE_ID,
+        tabId: 'web-terminal-host-tab-1%3A%3Aleaf-1',
+        targetGroupId: 'group-right',
+        kind: 'split',
+        splitDirection: 'right'
+      })
+    ).resolves.toBe(true)
+
+    expect(runtimeCall).toHaveBeenNthCalledWith(1, {
+      selector: ENVIRONMENT_ID,
+      method: 'session.tabs.move',
+      params: {
+        worktree: `id:${WORKTREE_ID}`,
+        tabId: 'host-tab-1::leaf-1',
+        targetGroupId: 'group-right',
+        kind: 'split',
+        splitDirection: 'right'
+      },
+      timeoutMs: 15_000
+    })
+    expect(runtimeCall).toHaveBeenCalledTimes(1)
+    expect(mocks.applyFreshWebSessionTabsSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('maps mirrored local browser unified ids back to host session tab ids', async () => {
+    mocks.resolveHostSessionTabIdForWebSessionTab.mockImplementation(
+      (_state, args: { tabId: string }) =>
+        args.tabId === 'local-browser-unified'
+          ? 'host-browser-unified'
+          : args.tabId === 'local-terminal-unified'
+            ? 'host-terminal'
+            : null
+    )
+    const runtimeCall = vi.fn().mockResolvedValueOnce({
+      id: 'move',
+      ok: true,
+      result: { moved: true }
+    })
+
+    vi.stubGlobal('window', {
+      api: {
+        runtimeEnvironments: {
+          call: runtimeCall
+        }
+      }
+    })
+
+    await expect(
+      moveWebRuntimeSessionTab({
+        worktreeId: WORKTREE_ID,
+        tabId: 'local-browser-unified',
+        targetGroupId: 'group-right',
+        kind: 'reorder',
+        tabOrder: ['local-terminal-unified', 'local-only-unified', 'local-browser-unified']
+      })
+    ).resolves.toBe(true)
+
+    expect(runtimeCall).toHaveBeenCalledWith({
+      selector: ENVIRONMENT_ID,
+      method: 'session.tabs.move',
+      params: {
+        worktree: `id:${WORKTREE_ID}`,
+        tabId: 'host-browser-unified',
+        targetGroupId: 'group-right',
+        kind: 'reorder',
+        tabOrder: ['host-terminal', 'host-browser-unified']
+      },
+      timeoutMs: 15_000
+    })
+  })
+
+  it('counts only host-backed tabs for mirrored move-to-group indexes', async () => {
+    mocks.getState.mockReturnValue({
+      settings: {
+        activeRuntimeEnvironmentId: ENVIRONMENT_ID
+      },
+      groupsByWorktree: {
+        [WORKTREE_ID]: [
+          {
+            id: 'group-right',
+            activeTabId: 'local-only-unified',
+            tabOrder: ['local-only-unified', 'local-terminal-unified']
+          }
+        ]
+      }
+    })
+    mocks.resolveHostSessionTabIdForWebSessionTab.mockImplementation(
+      (_state, args: { tabId: string }) =>
+        args.tabId === 'local-browser-unified'
+          ? 'host-browser-unified'
+          : args.tabId === 'local-terminal-unified'
+            ? 'host-terminal'
+            : null
+    )
+    const runtimeCall = vi.fn().mockResolvedValueOnce({
+      id: 'move',
+      ok: true,
+      result: { moved: true }
+    })
+
+    vi.stubGlobal('window', {
+      api: {
+        runtimeEnvironments: {
+          call: runtimeCall
+        }
+      }
+    })
+
+    await expect(
+      moveWebRuntimeSessionTab({
+        worktreeId: WORKTREE_ID,
+        tabId: 'local-browser-unified',
+        targetGroupId: 'group-right',
+        kind: 'move-to-group',
+        index: 1
+      })
+    ).resolves.toBe(true)
+
+    expect(runtimeCall).toHaveBeenCalledWith({
+      selector: ENVIRONMENT_ID,
+      method: 'session.tabs.move',
+      params: {
+        worktree: `id:${WORKTREE_ID}`,
+        tabId: 'host-browser-unified',
+        targetGroupId: 'group-right',
+        kind: 'move-to-group',
+        index: 0
+      },
+      timeoutMs: 15_000
+    })
+  })
+
+  it('does not mirror a reorder when the dragged tab is local-only', async () => {
+    mocks.resolveHostSessionTabIdForWebSessionTab.mockImplementation(
+      (_state, args: { tabId: string }) =>
+        args.tabId === 'local-terminal-unified' ? 'host-terminal' : null
+    )
+    const runtimeCall = vi.fn().mockResolvedValueOnce({
+      id: 'move',
+      ok: true,
+      result: { moved: true }
+    })
+
+    vi.stubGlobal('window', {
+      api: {
+        runtimeEnvironments: {
+          call: runtimeCall
+        }
+      }
+    })
+
+    await expect(
+      moveWebRuntimeSessionTab({
+        worktreeId: WORKTREE_ID,
+        tabId: 'local-only-unified',
+        targetGroupId: 'group-right',
+        kind: 'reorder',
+        tabOrder: ['local-only-unified', 'local-terminal-unified']
+      })
+    ).resolves.toBe(false)
+
+    expect(runtimeCall).not.toHaveBeenCalled()
+  })
+})
+
+describe('web runtime session tab actions', () => {
+  beforeEach(() => {
+    vi.stubGlobal('__ORCA_WEB_CLIENT__', true)
+    mocks.getState.mockReturnValue({
+      settings: {
+        activeRuntimeEnvironmentId: ENVIRONMENT_ID
+      }
+    })
+    mocks.resolveHostSessionTabIdForWebSessionTab.mockImplementation(
+      (_state, args: { tabId: string }) =>
+        args.tabId === 'local-browser-unified' ? 'host-browser-unified' : null
+    )
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it('maps mirrored local browser unified ids for activate and close', async () => {
+    const runtimeCall = vi.fn().mockResolvedValue({
+      id: 'action',
+      ok: true,
+      result: {}
+    })
+
+    vi.stubGlobal('window', {
+      api: {
+        runtimeEnvironments: {
+          call: runtimeCall
+        }
+      }
+    })
+
+    await expect(
+      activateWebRuntimeSessionTab({
+        worktreeId: WORKTREE_ID,
+        tabId: 'local-browser-unified'
+      })
+    ).resolves.toBe(true)
+    await expect(
+      closeWebRuntimeSessionTab({
+        worktreeId: WORKTREE_ID,
+        tabId: 'local-browser-unified'
+      })
+    ).resolves.toBe(true)
+
+    expect(runtimeCall).toHaveBeenNthCalledWith(1, {
+      selector: ENVIRONMENT_ID,
+      method: 'session.tabs.activate',
+      params: {
+        worktree: `id:${WORKTREE_ID}`,
+        tabId: 'host-browser-unified'
+      },
+      timeoutMs: 15_000
+    })
+    expect(runtimeCall).toHaveBeenNthCalledWith(2, {
+      selector: ENVIRONMENT_ID,
+      method: 'session.tabs.close',
+      params: {
+        worktree: `id:${WORKTREE_ID}`,
+        tabId: 'host-browser-unified'
+      },
+      timeoutMs: 15_000
+    })
   })
 })

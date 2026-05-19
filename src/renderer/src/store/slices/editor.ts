@@ -232,6 +232,7 @@ export type EditorSlice = {
   rightSidebarOpen: boolean
   rightSidebarWidth: number
   rightSidebarTab: RightSidebarTab
+  rightSidebarTabByWorktree: Record<string, RightSidebarTab>
   activityBarPosition: ActivityBarPosition
   toggleRightSidebar: () => void
   setRightSidebarOpen: (open: boolean) => void
@@ -707,11 +708,18 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
   rightSidebarOpen: false,
   rightSidebarWidth: 280,
   rightSidebarTab: 'explorer',
+  rightSidebarTabByWorktree: {},
   activityBarPosition: 'top',
   toggleRightSidebar: () => set((s) => ({ rightSidebarOpen: !s.rightSidebarOpen })),
   setRightSidebarOpen: (open) => set({ rightSidebarOpen: open }),
   setRightSidebarWidth: (width) => set({ rightSidebarWidth: width }),
-  setRightSidebarTab: (tab) => set({ rightSidebarTab: tab }),
+  setRightSidebarTab: (tab) =>
+    set((s) => ({
+      rightSidebarTab: tab,
+      rightSidebarTabByWorktree: s.activeWorktreeId
+        ? { ...s.rightSidebarTabByWorktree, [s.activeWorktreeId]: tab }
+        : s.rightSidebarTabByWorktree
+    })),
   setActivityBarPosition: (position) => set({ activityBarPosition: position }),
 
   // File explorer
@@ -756,11 +764,15 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     }),
   pendingExplorerReveal: null,
   revealInExplorer: (worktreeId, filePath) =>
-    set({
+    set((s) => ({
       rightSidebarOpen: true,
       rightSidebarTab: 'explorer',
+      rightSidebarTabByWorktree: {
+        ...s.rightSidebarTabByWorktree,
+        [worktreeId]: 'explorer'
+      },
       pendingExplorerReveal: { worktreeId, filePath, requestId: Date.now() }
-    }),
+    })),
   clearPendingExplorerReveal: () => set({ pendingExplorerReveal: null }),
 
   // Open files

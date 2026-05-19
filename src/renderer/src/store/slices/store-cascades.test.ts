@@ -412,6 +412,63 @@ describe('setActiveWorktree', () => {
     expect(worktrees.map((worktree) => worktree.id)).toEqual([backgroundId, focusedId])
   })
 
+  it('restores the remembered right sidebar tab per worktree', () => {
+    const store = createTestStore()
+    const wt1 = 'repo1::/path/wt1'
+    const wt2 = 'repo1::/path/wt2'
+
+    seedStore(store, {
+      worktreesByRepo: {
+        repo1: [
+          makeWorktree({ id: wt1, repoId: 'repo1', path: '/path/wt1' }),
+          makeWorktree({ id: wt2, repoId: 'repo1', path: '/path/wt2' })
+        ]
+      },
+      rightSidebarTabByWorktree: { [wt1]: 'search', [wt2]: 'checks' }
+    })
+
+    store.getState().setActiveWorktree(wt1)
+    expect(store.getState().rightSidebarTab).toBe('search')
+
+    store.getState().setActiveWorktree(wt2)
+    expect(store.getState().rightSidebarTab).toBe('checks')
+
+    store.getState().setActiveWorktree(wt1)
+    expect(store.getState().rightSidebarTab).toBe('search')
+  })
+
+  it('defaults new worktrees without remembered right sidebar state to explorer', () => {
+    const store = createTestStore()
+    const wt = 'repo1::/path/wt1'
+
+    seedStore(store, {
+      worktreesByRepo: {
+        repo1: [makeWorktree({ id: wt, repoId: 'repo1', path: '/path/wt1' })]
+      },
+      rightSidebarTab: 'checks'
+    })
+
+    store.getState().setActiveWorktree(wt)
+
+    expect(store.getState().rightSidebarTab).toBe('explorer')
+  })
+
+  it('does not clobber the current right sidebar tab when clearing the active worktree', () => {
+    const store = createTestStore()
+
+    seedStore(store, {
+      activeWorktreeId: 'repo1::/path/wt1',
+      rightSidebarTab: 'checks',
+      rightSidebarTabByWorktree: { 'repo1::/path/wt1': 'search' }
+    })
+
+    store.getState().setActiveWorktree(null)
+
+    expect(store.getState().activeWorktreeId).toBeNull()
+    expect(store.getState().rightSidebarTab).toBe('checks')
+    expect(store.getState().rightSidebarTabByWorktree).toEqual({ 'repo1::/path/wt1': 'search' })
+  })
+
   it('falls back to the worktree browser tab when the restored editor id belongs to a different worktree', () => {
     const store = createTestStore()
     const wt1 = 'repo1::/path/wt1'

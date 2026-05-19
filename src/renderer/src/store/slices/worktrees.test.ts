@@ -87,6 +87,8 @@ function createTestStore() {
         browserTabsByWorktree: {},
         recentlyClosedBrowserTabsByWorktree: {},
         activeTabTypeByWorktree: {},
+        rightSidebarTab: 'explorer' as const,
+        rightSidebarTabByWorktree: {},
         activeWorktreeId: null,
         activeTabId: null,
         activeFileId: null,
@@ -216,6 +218,54 @@ describe('fetchWorktrees', () => {
     await store.getState().fetchWorktrees('repo1')
 
     expect(store.getState().worktreesByRepo.repo1).toEqual([existing])
+    expect(store.getState().sortEpoch).toBe(7)
+  })
+
+  it('purges remembered right sidebar tabs for worktrees removed by a committed refresh', async () => {
+    const store = createTestStore()
+    const removed = makeWorktree({
+      id: 'repo1::/path/removed',
+      repoId: 'repo1',
+      path: '/path/removed'
+    })
+    const surviving = makeWorktree({
+      id: 'repo1::/path/surviving',
+      repoId: 'repo1',
+      path: '/path/surviving'
+    })
+
+    mockApi.worktrees.list.mockResolvedValue([surviving])
+    store.setState({
+      worktreesByRepo: { repo1: [removed, surviving] },
+      sortEpoch: 7,
+      rightSidebarTabByWorktree: {
+        [removed.id]: 'search',
+        [surviving.id]: 'checks'
+      }
+    } as Partial<AppState>)
+
+    await store.getState().fetchWorktrees('repo1')
+
+    expect(store.getState().worktreesByRepo.repo1).toEqual([surviving])
+    expect(store.getState().rightSidebarTabByWorktree).toEqual({ [surviving.id]: 'checks' })
+    expect(store.getState().sortEpoch).toBe(8)
+  })
+
+  it('does not purge remembered right sidebar tabs on a transient empty refresh', async () => {
+    const store = createTestStore()
+    const existing = makeWorktree({ id: 'repo1::/path/wt1', repoId: 'repo1', path: '/path/wt1' })
+
+    mockApi.worktrees.list.mockResolvedValue([])
+    store.setState({
+      worktreesByRepo: { repo1: [existing] },
+      sortEpoch: 7,
+      rightSidebarTabByWorktree: { [existing.id]: 'search' }
+    } as Partial<AppState>)
+
+    await store.getState().fetchWorktrees('repo1')
+
+    expect(store.getState().worktreesByRepo.repo1).toEqual([existing])
+    expect(store.getState().rightSidebarTabByWorktree).toEqual({ [existing.id]: 'search' })
     expect(store.getState().sortEpoch).toBe(7)
   })
 
@@ -1676,6 +1726,10 @@ describe('purgeWorktreeTerminalState direct (design §4.4)', () => {
         'repoA::/a/wt1': ['dist/'],
         'repoA::/a/wt2': ['coverage/']
       },
+      rightSidebarTabByWorktree: {
+        'repoA::/a/wt1': 'search',
+        'repoA::/a/wt2': 'checks'
+      },
       activeWorktreeId: 'repoA::/a/wt1',
       worktreeLineageById: {
         'repoA::/a/wt1': makeLineage({ worktreeId: 'repoA::/a/wt1' }),
@@ -1701,6 +1755,7 @@ describe('purgeWorktreeTerminalState direct (design §4.4)', () => {
     expect(s.openFiles).toEqual([])
     expect(s.editorDrafts).toEqual({ 'file-99': 'other' })
     expect(s.gitIgnoredPathsByWorktree).toEqual({ 'repoA::/a/wt2': ['coverage/'] })
+    expect(s.rightSidebarTabByWorktree).toEqual({ 'repoA::/a/wt2': 'checks' })
     expect(s.activeWorktreeId).toBeNull()
     expect(s.activeFileId).toBeNull()
     expect(s.activeTabId).toBeNull()

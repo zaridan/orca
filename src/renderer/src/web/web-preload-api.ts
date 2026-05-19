@@ -202,6 +202,8 @@ function createWebPreloadApi(): Partial<PreloadApi> {
       getRuntimePairingUrl: () => Promise.resolve({ available: false }),
       listDevices: () => Promise.resolve({ devices: [] }),
       revokeDevice: () => Promise.resolve({ revoked: false }),
+      listRuntimeAccessGrants: () => Promise.resolve({ grants: [] }),
+      revokeRuntimeAccess: () => Promise.resolve({ revoked: false }),
       isWebSocketReady: () => Promise.resolve({ ready: Boolean(activeEnvironment), endpoint: null })
     },
     telemetryTrack: () => Promise.resolve(),
@@ -833,6 +835,7 @@ function createWebUiApi(): NonNullable<Partial<PreloadApi>['ui']> {
     onFocusTerminal: () => noopUnsubscribe,
     onFocusEditorTab: () => noopUnsubscribe,
     onCloseSessionTab: () => noopUnsubscribe,
+    onMoveSessionTab: () => noopUnsubscribe,
     onOpenFileFromMobile: () => noopUnsubscribe,
     onOpenDiffFromMobile: () => noopUnsubscribe,
     onMobileMarkdownRequest: () => noopUnsubscribe,
@@ -1111,6 +1114,7 @@ function createSshApi(): NonNullable<Partial<PreloadApi>['ssh']> {
     connect: () => Promise.resolve(null),
     disconnect: () => Promise.resolve(),
     terminateSessions: () => Promise.resolve(),
+    resetRelay: () => Promise.resolve(),
     getState: () => Promise.resolve(null),
     needsPassphrasePrompt: () => Promise.resolve(false),
     testConnection: () =>

@@ -7,6 +7,7 @@ import type {
   BrowserSessionProfileSource,
   GitWorktreeInfo,
   Repo,
+  TabGroupLayoutNode,
   TerminalLayoutSnapshot,
   Worktree,
   WorktreeLineage,
@@ -172,6 +173,36 @@ export type RuntimeMobileSessionClientTab =
   | RuntimeMobileSessionFileTab
   | RuntimeMobileSessionBrowserTab
 
+export type RuntimeMobileSessionTabGroup = {
+  id: string
+  activeTabId: string | null
+  tabOrder: string[]
+  recentTabIds?: string[]
+}
+
+type RuntimeMobileSessionTabMoveBase = {
+  tabId: string
+  targetGroupId: string
+}
+
+export type RuntimeMobileSessionTabMove =
+  | (RuntimeMobileSessionTabMoveBase & {
+      kind: 'reorder'
+      tabOrder: string[]
+    })
+  | (RuntimeMobileSessionTabMoveBase & {
+      kind: 'move-to-group'
+      index?: number
+    })
+  | (RuntimeMobileSessionTabMoveBase & {
+      kind: 'split'
+      splitDirection: 'left' | 'right' | 'up' | 'down'
+    })
+
+export type RuntimeMobileSessionTabMoveResult = {
+  moved: true
+}
+
 export type RuntimeMobileSessionTabsSnapshot = {
   worktree: string
   publicationEpoch: string
@@ -179,6 +210,8 @@ export type RuntimeMobileSessionTabsSnapshot = {
   activeGroupId: string | null
   activeTabId: string | null
   activeTabType: 'terminal' | 'markdown' | 'file' | 'browser' | null
+  tabGroups?: RuntimeMobileSessionTabGroup[]
+  tabGroupLayout?: TabGroupLayoutNode | null
   tabs: RuntimeMobileSessionSnapshotTab[]
 }
 
@@ -189,6 +222,8 @@ export type RuntimeMobileSessionTabsResult = {
   activeGroupId: string | null
   activeTabId: string | null
   activeTabType: 'terminal' | 'markdown' | 'file' | 'browser' | null
+  tabGroups?: RuntimeMobileSessionTabGroup[]
+  tabGroupLayout?: TabGroupLayoutNode | null
   tabs: RuntimeMobileSessionClientTab[]
 }
 

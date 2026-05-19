@@ -159,9 +159,11 @@ const DeleteWorktreeDialog = React.memo(function DeleteWorktreeDialog() {
       if (force) {
         // Why: this branch preserves the legacy "Force Delete" button behavior
         // inside the dialog — it runs the destructive retry directly without
-        // the shared toast wrapper, since the user is already looking at an
-        // error state and a success silently closes the dialog.
-        removeWorktree(worktreeId, true)
+        // the shared toast wrapper. Close immediately because workspace cards
+        // already show the deleting state while the retry runs.
+        const deletePromise = removeWorktree(worktreeId, true)
+        closeModal()
+        deletePromise
           .then((result) => {
             if (!result.ok) {
               toast.error('Force delete failed', {
@@ -170,7 +172,6 @@ const DeleteWorktreeDialog = React.memo(function DeleteWorktreeDialog() {
               return
             }
             onDeleted?.([worktreeId])
-            closeModal()
           })
           .catch((err: unknown) => {
             toast.error('Failed to delete worktree', {
@@ -178,13 +179,13 @@ const DeleteWorktreeDialog = React.memo(function DeleteWorktreeDialog() {
             })
           })
       } else {
-        const targetCount = worktrees.length
-        void runWorktreeDeletesInParallel(worktrees).then((deletedIds) => {
+        const deletePromise = runWorktreeDeletesInParallel(worktrees)
+        // Why: the workspace card owns the in-progress feedback, so the
+        // confirmation should get out of the way as soon as deletion begins.
+        closeModal()
+        void deletePromise.then((deletedIds) => {
           if (deletedIds.length > 0) {
             onDeleted?.(deletedIds)
-          }
-          if (deletedIds.length === targetCount) {
-            closeModal()
           }
         })
       }

@@ -248,6 +248,136 @@ async function persistWorktreeMeta(
   )
 }
 
+function buildWorktreePurgeState(s: AppState, worktreeIds: string[]): Partial<AppState> {
+  const worktreeIdSet = new Set(worktreeIds)
+
+  // Collect every tab id (and removed file id) we are about to orphan.
+  const doomedTabIds = new Set<string>()
+  const removedFileIds = new Set<string>()
+  for (const id of worktreeIdSet) {
+    for (const tab of s.tabsByWorktree[id] ?? []) {
+      doomedTabIds.add(tab.id)
+    }
+  }
+  for (const file of s.openFiles) {
+    if (worktreeIdSet.has(file.worktreeId)) {
+      removedFileIds.add(file.id)
+    }
+  }
+
+  const omitByWorktree = <T>(obj: Record<string, T>): Record<string, T> => {
+    let changed = false
+    const out = { ...obj }
+    for (const id of worktreeIdSet) {
+      if (id in out) {
+        delete out[id]
+        changed = true
+      }
+    }
+    return changed ? out : obj
+  }
+  const omitByTabId = <T>(obj: Record<string, T>): Record<string, T> => {
+    let changed = false
+    const out = { ...obj }
+    for (const tabId of doomedTabIds) {
+      if (tabId in out) {
+        delete out[tabId]
+        changed = true
+      }
+    }
+    return changed ? out : obj
+  }
+  const omitByFileId = <T>(obj: Record<string, T>): Record<string, T> => {
+    let changed = false
+    const out = { ...obj }
+    for (const fileId of removedFileIds) {
+      if (fileId in out) {
+        delete out[fileId]
+        changed = true
+      }
+    }
+    return changed ? out : obj
+  }
+
+  const nextOpenFiles = s.openFiles.some((f) => worktreeIdSet.has(f.worktreeId))
+    ? s.openFiles.filter((f) => !worktreeIdSet.has(f.worktreeId))
+    : s.openFiles
+
+  const removedActive = s.activeWorktreeId != null && worktreeIdSet.has(s.activeWorktreeId)
+  const activeFileCleared = s.activeFileId != null && removedFileIds.has(s.activeFileId)
+  const activeTabCleared = s.activeTabId != null && doomedTabIds.has(s.activeTabId)
+
+  const nextEverActivatedWorktreeIds = (() => {
+    let hit = false
+    for (const id of worktreeIdSet) {
+      if (s.everActivatedWorktreeIds.has(id)) {
+        hit = true
+        break
+      }
+    }
+    if (!hit) {
+      return s.everActivatedWorktreeIds
+    }
+    const next = new Set(s.everActivatedWorktreeIds)
+    for (const id of worktreeIdSet) {
+      next.delete(id)
+    }
+    return next
+  })()
+
+  return {
+    // Worktree-scoped terminal/tab state
+    worktreeLineageById: omitByWorktree(s.worktreeLineageById),
+    tabsByWorktree: omitByWorktree(s.tabsByWorktree),
+    terminalLayoutsByTabId: omitByTabId(s.terminalLayoutsByTabId),
+    ptyIdsByTabId: omitByTabId(s.ptyIdsByTabId),
+    runtimePaneTitlesByTabId: omitByTabId(s.runtimePaneTitlesByTabId),
+    // Delete state
+    deleteStateByWorktreeId: omitByWorktree(s.deleteStateByWorktreeId),
+    baseStatusByWorktreeId: omitByWorktree(s.baseStatusByWorktreeId),
+    remoteBranchConflictByWorktreeId: omitByWorktree(s.remoteBranchConflictByWorktreeId),
+    // File search
+    fileSearchStateByWorktree: omitByWorktree(s.fileSearchStateByWorktree),
+    // Browser state
+    browserTabsByWorktree: omitByWorktree(s.browserTabsByWorktree),
+    recentlyClosedBrowserTabsByWorktree: omitByWorktree(s.recentlyClosedBrowserTabsByWorktree),
+    activeBrowserTabIdByWorktree: omitByWorktree(s.activeBrowserTabIdByWorktree),
+    // Editor state
+    activeFileIdByWorktree: omitByWorktree(s.activeFileIdByWorktree),
+    activeTabTypeByWorktree: omitByWorktree(s.activeTabTypeByWorktree),
+    activeTabIdByWorktree: omitByWorktree(s.activeTabIdByWorktree),
+    tabBarOrderByWorktree: omitByWorktree(s.tabBarOrderByWorktree),
+    pendingReconnectTabByWorktree: omitByWorktree(s.pendingReconnectTabByWorktree),
+    rightSidebarTabByWorktree: omitByWorktree(s.rightSidebarTabByWorktree),
+    // Split-tab / unified tab state
+    unifiedTabsByWorktree: omitByWorktree(s.unifiedTabsByWorktree),
+    groupsByWorktree: omitByWorktree(s.groupsByWorktree),
+    layoutByWorktree: omitByWorktree(s.layoutByWorktree),
+    activeGroupIdByWorktree: omitByWorktree(s.activeGroupIdByWorktree),
+    // Git status caches
+    gitStatusByWorktree: omitByWorktree(s.gitStatusByWorktree),
+    gitIgnoredPathsByWorktree: omitByWorktree(s.gitIgnoredPathsByWorktree),
+    gitConflictOperationByWorktree: omitByWorktree(s.gitConflictOperationByWorktree),
+    trackedConflictPathsByWorktree: omitByWorktree(s.trackedConflictPathsByWorktree),
+    gitBranchChangesByWorktree: omitByWorktree(s.gitBranchChangesByWorktree),
+    gitBranchCompareSummaryByWorktree: omitByWorktree(s.gitBranchCompareSummaryByWorktree),
+    gitBranchCompareRequestKeyByWorktree: omitByWorktree(s.gitBranchCompareRequestKeyByWorktree),
+    expandedDirs: omitByWorktree(s.expandedDirs),
+    // Per-file editor state for removed files
+    editorDrafts: omitByFileId(s.editorDrafts),
+    markdownViewMode: omitByFileId(s.markdownViewMode),
+    // Top-level actives
+    openFiles: nextOpenFiles,
+    everActivatedWorktreeIds: nextEverActivatedWorktreeIds,
+    lastVisitedAtByWorktreeId: omitByWorktree(s.lastVisitedAtByWorktreeId),
+    activeWorktreeId: removedActive ? null : s.activeWorktreeId,
+    activeFileId: activeFileCleared ? null : s.activeFileId,
+    activeBrowserTabId: removedActive ? null : s.activeBrowserTabId,
+    activeTabId: activeTabCleared ? null : s.activeTabId,
+    activeTabType: removedActive || activeFileCleared ? 'terminal' : s.activeTabType
+  }
+}
+
 export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> = (set, get) => ({
   worktreesByRepo: {},
   worktreeLineageById: {},
@@ -281,13 +411,21 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
         return
       }
 
-      set((s) => ({
-        // Why: active worktrees can change branches entirely from a terminal.
-        // We refresh that live git identity into renderer state, but only bump
-        // sortEpoch when git actually reports a different worktree payload.
-        worktreesByRepo: { ...s.worktreesByRepo, [repoId]: worktrees },
-        sortEpoch: s.sortEpoch + 1
-      }))
+      set((s) => {
+        const nextIds = new Set(worktrees.map((worktree) => worktree.id))
+        const removedIds = (s.worktreesByRepo[repoId] ?? [])
+          .map((worktree) => worktree.id)
+          .filter((id) => !nextIds.has(id))
+
+        return {
+          // Why: active worktrees can change branches entirely from a terminal.
+          // We refresh that live git identity into renderer state, but only bump
+          // sortEpoch when git actually reports a different worktree payload.
+          worktreesByRepo: { ...s.worktreesByRepo, [repoId]: worktrees },
+          sortEpoch: s.sortEpoch + 1,
+          ...(removedIds.length > 0 ? buildWorktreePurgeState(s, removedIds) : {})
+        }
+      })
       await refreshRemoteWorktreeLineageBestEffort(settings, set)
     } catch (err) {
       console.error(`Failed to fetch worktrees for repo ${repoId}:`, err)
@@ -1162,6 +1300,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
       const restoredFileId = s.activeFileIdByWorktree[worktreeId] ?? null
       const restoredBrowserTabId = s.activeBrowserTabIdByWorktree[worktreeId] ?? null
       const restoredTabType = s.activeTabTypeByWorktree[worktreeId] ?? 'terminal'
+      const restoredRightSidebarTab = s.rightSidebarTabByWorktree[worktreeId] ?? 'explorer'
       const activeGroupId =
         s.activeGroupIdByWorktree[worktreeId] ?? s.groupsByWorktree[worktreeId]?.[0]?.id ?? null
       const activeGroup = activeGroupId
@@ -1325,6 +1464,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
         activeFileId,
         activeBrowserTabId,
         activeTabType,
+        rightSidebarTab: restoredRightSidebarTab,
         activeTabTypeByWorktree: { ...s.activeTabTypeByWorktree, [worktreeId]: activeTabType },
         activeTabId,
         everActivatedWorktreeIds: nextEverActivated,
@@ -1368,135 +1508,6 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
     if (worktreeIds.length === 0) {
       return
     }
-    set((s) => {
-      const worktreeIdSet = new Set(worktreeIds)
-
-      // Collect every tab id (and removed file id) we are about to orphan.
-      const doomedTabIds = new Set<string>()
-      const removedFileIds = new Set<string>()
-      for (const id of worktreeIdSet) {
-        for (const tab of s.tabsByWorktree[id] ?? []) {
-          doomedTabIds.add(tab.id)
-        }
-      }
-      for (const file of s.openFiles) {
-        if (worktreeIdSet.has(file.worktreeId)) {
-          removedFileIds.add(file.id)
-        }
-      }
-
-      const omitByWorktree = <T>(obj: Record<string, T>): Record<string, T> => {
-        let changed = false
-        const out = { ...obj }
-        for (const id of worktreeIdSet) {
-          if (id in out) {
-            delete out[id]
-            changed = true
-          }
-        }
-        return changed ? out : obj
-      }
-      const omitByTabId = <T>(obj: Record<string, T>): Record<string, T> => {
-        let changed = false
-        const out = { ...obj }
-        for (const tabId of doomedTabIds) {
-          if (tabId in out) {
-            delete out[tabId]
-            changed = true
-          }
-        }
-        return changed ? out : obj
-      }
-      const omitByFileId = <T>(obj: Record<string, T>): Record<string, T> => {
-        let changed = false
-        const out = { ...obj }
-        for (const fileId of removedFileIds) {
-          if (fileId in out) {
-            delete out[fileId]
-            changed = true
-          }
-        }
-        return changed ? out : obj
-      }
-
-      const nextOpenFiles = s.openFiles.some((f) => worktreeIdSet.has(f.worktreeId))
-        ? s.openFiles.filter((f) => !worktreeIdSet.has(f.worktreeId))
-        : s.openFiles
-
-      const removedActive = s.activeWorktreeId != null && worktreeIdSet.has(s.activeWorktreeId)
-      const activeFileCleared = s.activeFileId != null && removedFileIds.has(s.activeFileId)
-      const activeTabCleared = s.activeTabId != null && doomedTabIds.has(s.activeTabId)
-
-      const nextEverActivatedWorktreeIds = (() => {
-        let hit = false
-        for (const id of worktreeIdSet) {
-          if (s.everActivatedWorktreeIds.has(id)) {
-            hit = true
-            break
-          }
-        }
-        if (!hit) {
-          return s.everActivatedWorktreeIds
-        }
-        const next = new Set(s.everActivatedWorktreeIds)
-        for (const id of worktreeIdSet) {
-          next.delete(id)
-        }
-        return next
-      })()
-
-      return {
-        // Worktree-scoped terminal/tab state
-        worktreeLineageById: omitByWorktree(s.worktreeLineageById),
-        tabsByWorktree: omitByWorktree(s.tabsByWorktree),
-        terminalLayoutsByTabId: omitByTabId(s.terminalLayoutsByTabId),
-        ptyIdsByTabId: omitByTabId(s.ptyIdsByTabId),
-        runtimePaneTitlesByTabId: omitByTabId(s.runtimePaneTitlesByTabId),
-        // Delete state
-        deleteStateByWorktreeId: omitByWorktree(s.deleteStateByWorktreeId),
-        baseStatusByWorktreeId: omitByWorktree(s.baseStatusByWorktreeId),
-        remoteBranchConflictByWorktreeId: omitByWorktree(s.remoteBranchConflictByWorktreeId),
-        // File search
-        fileSearchStateByWorktree: omitByWorktree(s.fileSearchStateByWorktree),
-        // Browser state
-        browserTabsByWorktree: omitByWorktree(s.browserTabsByWorktree),
-        recentlyClosedBrowserTabsByWorktree: omitByWorktree(s.recentlyClosedBrowserTabsByWorktree),
-        activeBrowserTabIdByWorktree: omitByWorktree(s.activeBrowserTabIdByWorktree),
-        // Editor state
-        activeFileIdByWorktree: omitByWorktree(s.activeFileIdByWorktree),
-        activeTabTypeByWorktree: omitByWorktree(s.activeTabTypeByWorktree),
-        activeTabIdByWorktree: omitByWorktree(s.activeTabIdByWorktree),
-        tabBarOrderByWorktree: omitByWorktree(s.tabBarOrderByWorktree),
-        pendingReconnectTabByWorktree: omitByWorktree(s.pendingReconnectTabByWorktree),
-        // Split-tab / unified tab state
-        unifiedTabsByWorktree: omitByWorktree(s.unifiedTabsByWorktree),
-        groupsByWorktree: omitByWorktree(s.groupsByWorktree),
-        layoutByWorktree: omitByWorktree(s.layoutByWorktree),
-        activeGroupIdByWorktree: omitByWorktree(s.activeGroupIdByWorktree),
-        // Git status caches
-        gitStatusByWorktree: omitByWorktree(s.gitStatusByWorktree),
-        gitIgnoredPathsByWorktree: omitByWorktree(s.gitIgnoredPathsByWorktree),
-        gitConflictOperationByWorktree: omitByWorktree(s.gitConflictOperationByWorktree),
-        trackedConflictPathsByWorktree: omitByWorktree(s.trackedConflictPathsByWorktree),
-        gitBranchChangesByWorktree: omitByWorktree(s.gitBranchChangesByWorktree),
-        gitBranchCompareSummaryByWorktree: omitByWorktree(s.gitBranchCompareSummaryByWorktree),
-        gitBranchCompareRequestKeyByWorktree: omitByWorktree(
-          s.gitBranchCompareRequestKeyByWorktree
-        ),
-        expandedDirs: omitByWorktree(s.expandedDirs),
-        // Per-file editor state for removed files
-        editorDrafts: omitByFileId(s.editorDrafts),
-        markdownViewMode: omitByFileId(s.markdownViewMode),
-        // Top-level actives
-        openFiles: nextOpenFiles,
-        everActivatedWorktreeIds: nextEverActivatedWorktreeIds,
-        lastVisitedAtByWorktreeId: omitByWorktree(s.lastVisitedAtByWorktreeId),
-        activeWorktreeId: removedActive ? null : s.activeWorktreeId,
-        activeFileId: activeFileCleared ? null : s.activeFileId,
-        activeBrowserTabId: removedActive ? null : s.activeBrowserTabId,
-        activeTabId: activeTabCleared ? null : s.activeTabId,
-        activeTabType: removedActive || activeFileCleared ? 'terminal' : s.activeTabType
-      }
-    })
+    set((s) => buildWorktreePurgeState(s, worktreeIds))
   }
 })

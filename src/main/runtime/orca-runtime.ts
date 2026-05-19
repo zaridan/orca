@@ -33,6 +33,7 @@ import type {
   WorktreeStartupLaunch,
   LinearIssueUpdate,
   LinearWorkspaceSelection,
+  TabGroupLayoutNode,
   TuiAgent
 } from '../../shared/types'
 import { splitWorktreeId } from '../../shared/worktree-id'
@@ -76,6 +77,9 @@ import type {
   RuntimeMobileSessionCreateTerminalResult,
   RuntimeMobileSessionClientTab,
   RuntimeMobileSessionMarkdownTab,
+  RuntimeMobileSessionTabMove,
+  RuntimeMobileSessionTabMoveResult,
+  RuntimeMobileSessionTabGroup,
   RuntimeMobileSessionTerminalTab,
   RuntimeMobileSessionTabsRemovedResult,
   RuntimeMobileSessionTabsResult,
@@ -96,7 +100,6 @@ import type { AgentBrowserBridge } from '../browser/agent-browser-bridge'
 import { BrowserError } from '../browser/cdp-bridge'
 import {
   getPRForBranch,
-  getPullRequestPushTarget,
   getRepoSlug,
   getWorkItem,
   listWorkItems,
@@ -120,6 +123,7 @@ import {
   listLabels,
   listAssignableUsers
 } from '../github/client'
+import { resolveGitHubPrStartPoint } from '../github/pr-start-point'
 import { getWorkItemDetails, getPRFileContents } from '../github/work-item-details'
 import { getRateLimit } from '../github/rate-limit'
 import type {
@@ -269,7 +273,7 @@ import { killAllProcessesForWorktree } from './worktree-teardown'
 import { MOBILE_SUBSCRIBE_SCROLLBACK_ROWS } from './scrollback-limits'
 import type { IFilesystemProvider, IPtyProvider } from '../providers/types'
 import { getSshFilesystemProvider } from '../providers/ssh-filesystem-dispatch'
-import { getSshGitProvider } from '../providers/ssh-git-dispatch'
+import { getSshGitProvider, requireSshGitProvider } from '../providers/ssh-git-dispatch'
 import type { ClaudeAccountService } from '../claude-accounts/service'
 import type { CodexAccountService } from '../codex-accounts/service'
 import type { RateLimitService } from '../rate-limits/service'
@@ -445,6 +449,7 @@ type RuntimeNotifier = {
   focusTerminal(tabId: string, worktreeId: string, leafId?: string | null): void
   focusEditorTab?(tabId: string, worktreeId: string): void
   closeSessionTab?(tabId: string, worktreeId: string): void
+  moveSessionTab?(worktreeId: string, move: RuntimeMobileSessionTabMove): void
   openFile?(worktreeId: string, filePath: string, relativePath: string): void
   openDiff?(worktreeId: string, filePath: string, relativePath: string, staged: boolean): void
   readMobileMarkdownTab?(worktreeId: string, tabId: string): Promise<RuntimeMarkdownReadTabResult>
@@ -1227,6 +1232,130 @@ export class OrcaRuntimeService {
       this.notifier?.closeSessionTab?.(tab.id, worktreeId)
     }
     return { closed: true }
+  }
+
+  async moveMobileSessionTab(
+    worktreeSelector: string,
+    move: RuntimeMobileSessionTabMove
+  ): Promise<RuntimeMobileSessionTabMoveResult> {
+    const explicitWorktreeId = getExplicitWorktreeIdSelector(worktreeSelector)
+    const worktreeId =
+      explicitWorktreeId ?? (await this.resolveWorktreeSelector(worktreeSelector)).id
+    const snapshot = this.mobileSessionTabsByWorktree.get(worktreeId)
+    if (!this.notifier?.moveSessionTab) {
+      throw new Error('renderer_unavailable')
+    }
+    if (!snapshot) {
+      throw new Error('tab_not_found')
+    }
+    const hostTabId = this.resolveMobileSessionHostTabId(snapshot, move.tabId)
+    if (!hostTabId) {
+      throw new Error('tab_not_found')
+    }
+    const publicSnapshot = this.toMobileSessionTabsResult(snapshot)
+    const targetGroup = publicSnapshot.tabGroups?.find((group) => group.id === move.targetGroupId)
+    if (!targetGroup) {
+      throw new Error('target_group_not_found')
+    }
+
+    // Why: web clients address terminal surfaces as tab::leaf, while desktop
+    // tab grouping is owned by the outer terminal tab id.
+    if (move.kind === 'reorder') {
+      const tabOrder = this.normalizeMobileSessionTabOrder(snapshot, targetGroup, move.tabOrder)
+      if (!tabOrder.includes(hostTabId)) {
+        throw new Error('invalid_tab_order')
+      }
+      this.notifier.moveSessionTab(worktreeId, {
+        ...move,
+        tabId: hostTabId,
+        tabOrder
+      })
+      return { moved: true }
+    }
+    this.notifier.moveSessionTab(worktreeId, {
+      ...move,
+      tabId: hostTabId
+    })
+    return { moved: true }
+  }
+
+  private normalizeMobileSessionTabOrder(
+    snapshot: RuntimeMobileSessionTabsSnapshot | undefined,
+    targetGroup: RuntimeMobileSessionTabGroup,
+    tabOrder: readonly string[]
+  ): string[] {
+    const normalized: string[] = []
+    const seen = new Set<string>()
+    for (const tabId of tabOrder) {
+      const hostTabId = this.resolveMobileSessionHostTabId(snapshot, tabId)
+      if (!hostTabId) {
+        throw new Error('invalid_tab_order')
+      }
+      if (seen.has(hostTabId)) {
+        throw new Error('duplicate_tab_order')
+      }
+      seen.add(hostTabId)
+      normalized.push(hostTabId)
+    }
+
+    const returnedIds = this.collectPublicMobileSessionTabIds(snapshot)
+    const expected = targetGroup.tabOrder
+      .map((tabId) => this.resolveMobileSessionHostTabId(snapshot, tabId) ?? tabId)
+      // Why: clients reorder the sanitized session.tabs.list model; raw groups
+      // can still contain stale browser ids hidden from paired web clients.
+      .filter((tabId) => returnedIds.has(tabId))
+    // Why: reorder is a pure permutation of one existing group. Missing or
+    // extra ids would let a paired web client silently move/lose host tabs.
+    if (normalized.length !== expected.length || expected.some((tabId) => !seen.has(tabId))) {
+      throw new Error('invalid_tab_order')
+    }
+    return normalized
+  }
+
+  private collectPublicMobileSessionTabIds(
+    snapshot: RuntimeMobileSessionTabsSnapshot | undefined
+  ): Set<string> {
+    const ids = new Set<string>()
+    if (!snapshot) {
+      return ids
+    }
+    const liveBrowserTabsByPageId = this.getLiveBrowserTabsByPageId(snapshot.worktree)
+    for (const tab of snapshot.tabs) {
+      if (tab.type === 'browser') {
+        const liveTab = tab.browserPageId
+          ? liveBrowserTabsByPageId.get(tab.browserPageId)
+          : undefined
+        if (!liveTab) {
+          continue
+        }
+        ids.add(tab.id)
+        ids.add(tab.browserWorkspaceId)
+        continue
+      }
+      ids.add(tab.id)
+      if (tab.type === 'terminal') {
+        ids.add(tab.parentTabId)
+      }
+    }
+    return ids
+  }
+
+  private resolveMobileSessionHostTabId(
+    snapshot: RuntimeMobileSessionTabsSnapshot | undefined,
+    tabId: string
+  ): string | null {
+    const tab =
+      snapshot?.tabs.find((candidate) => candidate.id === tabId) ??
+      snapshot?.tabs.find(
+        (candidate) => candidate.type === 'terminal' && candidate.parentTabId === tabId
+      ) ??
+      snapshot?.tabs.find(
+        (candidate) => candidate.type === 'browser' && candidate.browserWorkspaceId === tabId
+      )
+    if (!tab) {
+      return null
+    }
+    return tab.type === 'terminal' ? tab.parentTabId : tab.id
   }
 
   async readMobileMarkdownTab(
@@ -6215,90 +6344,14 @@ export class OrcaRuntimeService {
       return { error: 'Folder mode does not support creating worktrees.' }
     }
 
-    let headRefName = args.headRefName?.trim() ?? ''
-    let isCrossRepository = args.isCrossRepository === true
-    let pushTarget: GitPushTarget | undefined
-
-    if (!headRefName) {
-      const item = await getWorkItem(repo.path, args.prNumber, 'pr')
-      if (!item || item.type !== 'pr') {
-        return { error: `PR #${args.prNumber} not found.` }
-      }
-      headRefName = (item.branchName ?? '').trim()
-      if (!headRefName) {
-        return { error: `PR #${args.prNumber} has no head branch.` }
-      }
-      if (item.isCrossRepository === true) {
-        isCrossRepository = true
-      }
-    }
-
-    if (isCrossRepository) {
-      try {
-        pushTarget = (await getPullRequestPushTarget(repo.path, args.prNumber)) ?? undefined
-      } catch (error) {
-        return {
-          error:
-            error instanceof Error
-              ? error.message
-              : `Could not resolve PR #${args.prNumber} head push target.`
-        }
-      }
-      if (!pushTarget) {
-        return { error: `Could not resolve PR #${args.prNumber} head push target.` }
-      }
-    }
-
-    let remote: string
-    try {
-      remote = await getDefaultRemote(repo.path)
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : 'Could not resolve git remote.' }
-    }
-
-    if (isCrossRepository) {
-      const pullRef = `refs/pull/${args.prNumber}/head`
-      try {
-        await gitExecFileAsync(['fetch', remote, pullRef], { cwd: repo.path })
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        return { error: `Failed to fetch ${pullRef}: ${message.split('\n')[0]}` }
-      }
-      try {
-        const { stdout } = await gitExecFileAsync(['rev-parse', '--verify', 'FETCH_HEAD'], {
-          cwd: repo.path
-        })
-        const sha = stdout.trim()
-        if (!sha) {
-          return { error: `Empty SHA resolving fork PR #${args.prNumber} head.` }
-        }
-        return { baseBranch: sha, ...(pushTarget ? { pushTarget } : {}) }
-      } catch {
-        return { error: `Could not resolve fork PR #${args.prNumber} head after fetch.` }
-      }
-    }
-
-    try {
-      await gitExecFileAsync(
-        ['fetch', remote, `+refs/heads/${headRefName}:refs/remotes/${remote}/${headRefName}`],
-        { cwd: repo.path }
-      )
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      return { error: `Failed to fetch ${remote}/${headRefName}: ${message.split('\n')[0]}` }
-    }
-
-    const remoteRef = `${remote}/${headRefName}`
-    try {
-      await gitExecFileAsync(['rev-parse', '--verify', remoteRef], { cwd: repo.path })
-    } catch {
-      return { error: `Remote ref ${remoteRef} does not exist after fetch.` }
-    }
-
-    return {
-      baseBranch: remoteRef,
-      pushTarget: pushTarget ?? { remoteName: remote, branchName: headRefName }
-    }
+    return resolveGitHubPrStartPoint({
+      repoPath: repo.path,
+      prNumber: args.prNumber,
+      headRefName: args.headRefName,
+      isCrossRepository: args.isCrossRepository,
+      gitExec: (gitArgs) => gitExecFileAsync(gitArgs, { cwd: repo.path }),
+      resolveRemote: () => getDefaultRemote(repo.path)
+    })
   }
 
   async removeManagedWorktree(
@@ -6318,10 +6371,7 @@ export class OrcaRuntimeService {
       throw new Error('Folder mode does not support deleting worktrees.')
     }
     if (repo.connectionId) {
-      const provider = getSshGitProvider(repo.connectionId)
-      if (!provider) {
-        throw new Error(`No git provider for connection "${repo.connectionId}"`)
-      }
+      const provider = requireSshGitProvider(repo.connectionId)
       await provider.removeWorktree(worktree.path, force)
       this.clearOptimisticReconcileToken(worktree.id)
       this.store.removeWorktreeMeta(worktree.id)
@@ -6577,7 +6627,7 @@ export class OrcaRuntimeService {
 
   async createMobileSessionTerminal(
     worktreeSelector: string,
-    opts: { afterTabId?: string; command?: string; activate?: boolean } = {}
+    opts: { afterTabId?: string; targetGroupId?: string; command?: string; activate?: boolean } = {}
   ): Promise<RuntimeMobileSessionCreateTerminalResult> {
     this.assertGraphReady()
     const worktreeId = (await this.resolveWorktreeSelector(worktreeSelector)).id
@@ -6627,6 +6677,7 @@ export class OrcaRuntimeService {
         requestId,
         worktreeId,
         afterTabId: afterDesktopTabId,
+        targetGroupId: opts.targetGroupId,
         command: opts.command
       })
     })
@@ -8012,6 +8063,69 @@ export class OrcaRuntimeService {
     return new Map(liveTabs.map((tab) => [tab.browserPageId, tab]))
   }
 
+  private collectReturnedSessionTabIds(
+    tabs: readonly RuntimeMobileSessionClientTab[]
+  ): Set<string> {
+    const ids = new Set<string>()
+    for (const tab of tabs) {
+      ids.add(tab.id)
+      if (tab.type === 'terminal') {
+        ids.add(tab.parentTabId)
+      } else if (tab.type === 'browser') {
+        ids.add(tab.browserWorkspaceId)
+      }
+    }
+    return ids
+  }
+
+  private sanitizeMobileSessionTabGroups(
+    groups: readonly RuntimeMobileSessionTabGroup[] | undefined,
+    returnedTabs: readonly RuntimeMobileSessionClientTab[]
+  ): RuntimeMobileSessionTabGroup[] | undefined {
+    if (!groups || groups.length === 0) {
+      return undefined
+    }
+    const returnedIds = this.collectReturnedSessionTabIds(returnedTabs)
+    const sanitized = groups
+      .map((group): RuntimeMobileSessionTabGroup | null => {
+        const tabOrder = group.tabOrder.filter((tabId) => returnedIds.has(tabId))
+        if (tabOrder.length === 0) {
+          return null
+        }
+        const activeTabId =
+          group.activeTabId && tabOrder.includes(group.activeTabId)
+            ? group.activeTabId
+            : (tabOrder[0] ?? null)
+        const recentTabIds = group.recentTabIds?.filter((tabId) => tabOrder.includes(tabId))
+        return {
+          id: group.id,
+          activeTabId,
+          tabOrder,
+          ...(recentTabIds && recentTabIds.length > 0 ? { recentTabIds } : {})
+        }
+      })
+      .filter((group): group is RuntimeMobileSessionTabGroup => group !== null)
+    return sanitized.length > 0 ? sanitized : undefined
+  }
+
+  private pruneMobileSessionTabGroupLayout(
+    layout: TabGroupLayoutNode | null | undefined,
+    validGroupIds: ReadonlySet<string>
+  ): TabGroupLayoutNode | null {
+    if (!layout) {
+      return null
+    }
+    if (layout.type === 'leaf') {
+      return validGroupIds.has(layout.groupId) ? layout : null
+    }
+    const first = this.pruneMobileSessionTabGroupLayout(layout.first, validGroupIds)
+    const second = this.pruneMobileSessionTabGroupLayout(layout.second, validGroupIds)
+    if (first && second) {
+      return { ...layout, first, second }
+    }
+    return first ?? second
+  }
+
   private toMobileSessionTabsResult(
     snapshot: RuntimeMobileSessionTabsSnapshot
   ): RuntimeMobileSessionTabsResult {
@@ -8088,13 +8202,33 @@ export class OrcaRuntimeService {
       active && !tabs.some((tab) => tab.isActive)
         ? tabs.map((tab) => (tab.id === active.id ? { ...tab, isActive: true } : tab))
         : tabs
+    const tabGroups = this.sanitizeMobileSessionTabGroups(snapshot.tabGroups, normalizedTabs)
+    const validGroupIds = new Set(tabGroups?.map((group) => group.id) ?? [])
+    const tabGroupLayout =
+      snapshot.tabGroupLayout === undefined
+        ? undefined
+        : this.pruneMobileSessionTabGroupLayout(snapshot.tabGroupLayout, validGroupIds)
+    const activeGroupId =
+      snapshot.activeGroupId && validGroupIds.has(snapshot.activeGroupId)
+        ? snapshot.activeGroupId
+        : (tabGroups?.find((group) =>
+            active
+              ? group.tabOrder.some((tabId) =>
+                  this.collectReturnedSessionTabIds([active]).has(tabId)
+                )
+              : false
+          )?.id ??
+          tabGroups?.[0]?.id ??
+          null)
     return {
       worktree: snapshot.worktree,
       publicationEpoch: snapshot.publicationEpoch,
       snapshotVersion: snapshot.snapshotVersion,
-      activeGroupId: snapshot.activeGroupId,
+      activeGroupId,
       activeTabId: active?.id ?? null,
       activeTabType: active?.type ?? null,
+      ...(tabGroups ? { tabGroups } : {}),
+      ...(snapshot.tabGroupLayout !== undefined ? { tabGroupLayout } : {}),
       tabs: normalizedTabs
     }
   }
