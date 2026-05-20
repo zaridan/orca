@@ -614,9 +614,16 @@ export class DaemonPtyAdapter implements IPtyProvider {
   private flushPendingNotifications(): void {
     const pending = this.pendingNotifications
     this.pendingNotifications = []
-    for (const notification of pending) {
+    for (let i = 0; i < pending.length; i++) {
+      const notification = pending[i]!
       if (!this.client.notify(notification.type, notification.payload)) {
-        this.queueNotification(notification.type, notification.payload)
+        this.pendingNotifications = pending.slice(i).concat(this.pendingNotifications)
+        if (this.pendingNotifications.length > MAX_PENDING_DAEMON_NOTIFICATIONS) {
+          this.pendingNotifications.splice(
+            0,
+            this.pendingNotifications.length - MAX_PENDING_DAEMON_NOTIFICATIONS
+          )
+        }
         void this.recoverActiveSessionsAfterDisconnect().catch((err) =>
           console.warn('[daemon] reconnect after pending notification failed:', err)
         )
