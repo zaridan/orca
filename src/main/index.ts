@@ -58,6 +58,7 @@ import { setMigrationUnsupportedPtyListener } from './agent-hooks/migration-unsu
 import { claudeHookService } from './claude/hook-service'
 import { codexHookService } from './codex/hook-service'
 import { geminiHookService } from './gemini/hook-service'
+import { antigravityHookService } from './antigravity/hook-service'
 import { cursorHookService } from './cursor/hook-service'
 import { droidHookService } from './droid/hook-service'
 import { grokHookService } from './grok/hook-service'
@@ -80,6 +81,11 @@ import {
   recordCrashBreadcrumb
 } from './crash-reporting/crash-breadcrumb-store'
 import { CrashReportStore } from './crash-reporting/crash-report-store'
+import {
+  shouldRecordProcessGoneCrash,
+  shouldRecoverRendererAfterProcessGone,
+  type ExpectedTeardownScope
+} from './crash-reporting/process-gone-classification'
 import { isCrashReportReason } from '../shared/crash-reporting'
 
 let mainWindow: BrowserWindow | null = null
@@ -107,6 +113,7 @@ let disposeFeatureWallFirstAgentTour: (() => void) | null = null
 let watcherShutdownPromise: Promise<void> | null = null
 let watcherShutdownDone = false
 let automations: AutomationService | null = null
+let expectedRendererReload: { webContentsId: number; until: number } | null = null
 const isServeMode = process.argv.includes('--serve')
 const devInstanceIdentity = getDevInstanceIdentity(is.dev)
 const devAgentHookEndpointNamespace = devInstanceIdentity.isDev
@@ -159,6 +166,32 @@ function focusExistingWindow(): void {
   }
   // Pre-window case: the primary is still booting and will call
   // openMainWindow() from whenReady(). No action needed here.
+}
+
+function markExpectedRendererReload(webContentsId: number, durationMs = 10_000): void {
+  expectedRendererReload = { webContentsId, until: Date.now() + durationMs }
+}
+
+function clearExpectedRendererReload(webContentsId?: number): void {
+  if (webContentsId === undefined || expectedRendererReload?.webContentsId === webContentsId) {
+    expectedRendererReload = null
+  }
+}
+
+function getExpectedTeardownScope(webContentsId?: number): ExpectedTeardownScope {
+  if (isQuitting || isQuittingForUpdate()) {
+    return 'app-shutdown'
+  }
+  if (!expectedRendererReload) {
+    return 'none'
+  }
+  if (Date.now() > expectedRendererReload.until) {
+    expectedRendererReload = null
+    return 'none'
+  }
+  return webContentsId !== undefined && expectedRendererReload.webContentsId === webContentsId
+    ? 'renderer-reload'
+    : 'none'
 }
 
 // Why: the lock must be acquired AFTER configureDevUserDataPath — Electron
@@ -292,13 +325,32 @@ function openMainWindow(): BrowserWindow {
     getIsQuitting: () => isQuitting,
     onQuitAborted: () => {
       isQuitting = false
+      clearExpectedRendererReload()
     },
-    onRendererProcessGone: (details) => {
-      recordProcessGoneCrash('renderer', 'renderer', details.reason, details.exitCode ?? null, {
-        processType: 'renderer'
-      })
+    onRendererProcessGone: (details, webContentsId) => {
+      recordProcessGoneCrash(
+        'renderer',
+        'renderer',
+        details.reason,
+        details.exitCode ?? null,
+        {
+          processType: 'renderer'
+        },
+        webContentsId
+      )
     },
-    shouldRecoverRenderer: () => !isQuitting && !isQuittingForUpdate(),
+    shouldRecordRendererCrash: (details, webContentsId) =>
+      shouldRecordProcessGoneCrash({
+        source: 'renderer',
+        reason: details.reason,
+        exitCode: details.exitCode ?? null,
+        expectedTeardown: getExpectedTeardownScope(webContentsId)
+      }),
+    shouldRecoverRenderer: (details, webContentsId) =>
+      shouldRecoverRendererAfterProcessGone({
+        reason: details.reason,
+        expectedTeardown: getExpectedTeardownScope(webContentsId)
+      }),
     deferLoad: true,
     title: devInstanceIdentity.name
   })
@@ -308,7 +360,9 @@ function openMainWindow(): BrowserWindow {
   // `app_opened` to the first main-window load. Existing users in the
   // pending-banner cohort resolve through telemetry/client.ts; this load
   // path only fires once consent is already enabled.
+  const rendererWebContentsId = window.webContents.id
   const onFirstWindowLoad = (): void => {
+    clearExpectedRendererReload(rendererWebContentsId)
     recordCrashBreadcrumb('main_window_loaded')
     if (!store) {
       return
@@ -331,7 +385,7 @@ function openMainWindow(): BrowserWindow {
     codexAccounts,
     claudeAccounts,
     rateLimits,
-    window.webContents.id,
+    rendererWebContentsId,
     automations,
     {
       prepareForCodexLaunch: prepareCodexRuntimeHomeForLaunch,
@@ -342,8 +396,20 @@ function openMainWindow(): BrowserWindow {
   )
   automations.setWebContents(window.webContents)
   automations.start()
-  attachMainWindowServices(window, store, runtime, prepareCodexRuntimeHomeForLaunch, () =>
-    claudeRuntimeAuth!.prepareForClaudeLaunch()
+  attachMainWindowServices(
+    window,
+    store,
+    runtime,
+    prepareCodexRuntimeHomeForLaunch,
+    () => claudeRuntimeAuth!.prepareForClaudeLaunch(),
+    {
+      onBeforeRendererReload: ({ ignoreCache, webContentsId }) => {
+        if (window.webContents.id === webContentsId) {
+          markExpectedRendererReload(webContentsId)
+        }
+        recordCrashBreadcrumb('renderer_reload_requested', { ignoreCache })
+      }
+    }
   )
   rateLimits.attach(window)
   rateLimits.start()
@@ -351,6 +417,7 @@ function openMainWindow(): BrowserWindow {
     if (mainWindow === window) {
       mainWindow = null
     }
+    clearExpectedRendererReload(rendererWebContentsId)
     automations?.setWebContents(null)
     // Why: detach the agent hook listener on window close so the server
     // never fires into a destroyed webContents during the gap before
@@ -436,9 +503,26 @@ function recordProcessGoneCrash(
   processType: string,
   reason: string,
   exitCode: number | null,
-  details: Record<string, unknown>
+  details: Record<string, unknown>,
+  webContentsId?: number
 ): void {
   if (!crashReports || !isCrashReportReason(reason)) {
+    return
+  }
+  if (
+    !shouldRecordProcessGoneCrash({
+      source,
+      reason,
+      exitCode,
+      expectedTeardown: getExpectedTeardownScope(webContentsId)
+    })
+  ) {
+    recordCrashBreadcrumb('process_gone_suppressed', {
+      source,
+      processType,
+      reason,
+      exitCode
+    })
     return
   }
   const key = `${processType}:${reason}:${exitCode ?? 'null'}`
@@ -829,6 +913,7 @@ app.whenReady().then(async () => {
     ['claude', () => claudeHookService.install()],
     ['codex', () => codexHookService.install()],
     ['gemini', () => geminiHookService.install()],
+    ['antigravity', () => antigravityHookService.install()],
     ['cursor', () => cursorHookService.install()],
     ['droid', () => droidHookService.install()],
     ['grok', () => grokHookService.install()],
@@ -849,6 +934,12 @@ app.whenReady().then(async () => {
 
   registerAppMenu({
     onCheckForUpdates: (options) => checkForUpdatesFromMenu(options),
+    onBeforeReload: ({ ignoreCache, webContentsId }) => {
+      if (mainWindow?.webContents.id === webContentsId) {
+        markExpectedRendererReload(webContentsId)
+      }
+      recordCrashBreadcrumb('manual_reload_requested', { ignoreCache })
+    },
     onOpenSettings: () => {
       recordCrashBreadcrumb('settings_opened')
       mainWindow?.webContents.send('ui:openSettings')

@@ -46,9 +46,6 @@ const SORT_OPTIONS = [
 
 const isMac = navigator.userAgent.includes('Mac')
 const newWorktreeShortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
-// Why: the sidebar resize handle intentionally has a wide hit target at the
-// right edge, but header actions overlapping it should remain clickable.
-const HEADER_ACTION_HIT_TARGET_CLASS = 'relative z-20'
 
 const SidebarHeader = React.memo(function SidebarHeader() {
   const [workspaceBoardOpen, setWorkspaceBoardOpen] = useState(false)
@@ -117,24 +114,6 @@ const SidebarHeader = React.memo(function SidebarHeader() {
           <span className="pl-2 pr-0.5 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80 select-none">
             Workspaces
           </span>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant={workspaceBoardOpen ? 'secondary' : 'ghost'}
-                size="icon-xs"
-                className={`${HEADER_ACTION_HIT_TARGET_CLASS} text-muted-foreground`}
-                aria-label="Workspace board"
-                aria-pressed={workspaceBoardOpen}
-                data-workspace-board-trigger=""
-                onClick={handleWorkspaceBoardToggle}
-              >
-                <Kanban className="size-3.5" strokeWidth={2.25} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={6}>
-              {workspaceBoardOpen ? 'Close workspace board' : 'Workspace board'}
-            </TooltipContent>
-          </Tooltip>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <SidebarFilter preserveWorkspaceBoardOpen onMenuOpenChange={setWorkspaceBoardMenuOpen} />
@@ -145,7 +124,7 @@ const SidebarHeader = React.memo(function SidebarHeader() {
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    className={`${HEADER_ACTION_HIT_TARGET_CLASS} text-muted-foreground`}
+                    className="text-muted-foreground"
                     aria-label="View options"
                     data-workspace-board-preserve-open=""
                   >
@@ -240,9 +219,27 @@ const SidebarHeader = React.memo(function SidebarHeader() {
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
+                variant={workspaceBoardOpen ? 'secondary' : 'ghost'}
+                size="icon-xs"
+                className="text-muted-foreground"
+                aria-label="Workspace board"
+                aria-pressed={workspaceBoardOpen}
+                data-workspace-board-trigger=""
+                onClick={handleWorkspaceBoardToggle}
+              >
+                <Kanban className="size-3.5" strokeWidth={2.25} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={6}>
+              {workspaceBoardOpen ? 'Close workspace board' : 'Workspace board'}
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
                 variant="ghost"
                 size="icon-xs"
-                className={HEADER_ACTION_HIT_TARGET_CLASS}
                 onClick={() => {
                   if (!canCreateWorktree) {
                     return

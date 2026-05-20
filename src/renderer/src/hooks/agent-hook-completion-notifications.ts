@@ -5,6 +5,7 @@ import { createAgentCompletionCoordinator } from '@/components/terminal-pane/age
 import type { AgentCompletionCoordinator } from '@/components/terminal-pane/agent-completion-coordinator-types'
 import type { RuntimeTerminalProcessInspection } from '@/runtime/runtime-terminal-inspection'
 import { dispatchTerminalNotification } from '@/components/terminal-pane/use-notification-dispatch'
+import { collectLeafIdsInOrder } from '@/components/terminal-pane/layout-serialization'
 
 type CoordinatorEntry = {
   worktreeId: string
@@ -39,7 +40,31 @@ function getPtyIdForPaneKey(paneKey: string): string | null {
   if (!parsed) {
     return null
   }
-  return useAppStore.getState().ptyIdsByTabId?.[parsed.tabId]?.[0] ?? null
+  const state = useAppStore.getState()
+  const tabPtyIds = state.ptyIdsByTabId?.[parsed.tabId]
+  if (!tabPtyIds || tabPtyIds.length === 0) {
+    return null
+  }
+  // Why: split-pane leaves share one tab-level pty list, so a tab-level lookup
+  // would return a sibling's pty for an already-closed leaf and let a late
+  // 'done' hook event fire a spurious notification. Resolve liveness through
+  // the leaf-keyed binding maintained by syncPanePtyLayoutBinding, which
+  // deletes the entry when the leaf closes.
+  const layout = state.terminalLayoutsByTabId?.[parsed.tabId]
+  const ptyIdsByLeafId = layout?.ptyIdsByLeafId
+  if (ptyIdsByLeafId) {
+    const leafPtyId = ptyIdsByLeafId[parsed.leafId]
+    if (leafPtyId && tabPtyIds.includes(leafPtyId)) {
+      return leafPtyId
+    }
+    // Why: switching worktrees can unmount the terminal pane and clear the
+    // leaf binding before the hook completion arrives, while the tab PTY is
+    // still live. Keep closed leaves suppressed by requiring the leaf in layout.
+    return collectLeafIdsInOrder(layout.root).includes(parsed.leafId)
+      ? (tabPtyIds[0] ?? null)
+      : null
+  }
+  return tabPtyIds[0] ?? null
 }
 
 function paneHasLivePty(paneKey: string): boolean {

@@ -100,6 +100,36 @@ export function unregisterPersistentWebview(browserTabId: string): void {
   }
 }
 
+function moveFocusToRendererIfWebviewOwnsFocus(webview: Electron.WebviewTag): boolean {
+  if (typeof document === 'undefined' || typeof window === 'undefined') {
+    return false
+  }
+  const activeElement = document.activeElement as HTMLElement | null
+  if (!activeElement) {
+    return false
+  }
+  // Why: hiding/removing a focused webview can let macOS reactivate the
+  // previously-frontmost app. Give focus back to Orca's renderer first.
+  if (webview === activeElement || webview.contains(activeElement)) {
+    activeElement.blur?.()
+    window.focus()
+    return true
+  }
+  return false
+}
+
+export function moveFocusToRendererBeforeFocusedWebviewHidden(): void {
+  for (const webview of webviewRegistry.values()) {
+    if (moveFocusToRendererIfWebviewOwnsFocus(webview)) {
+      return
+    }
+  }
+}
+
+export function moveFocusToRendererBeforeWebviewDetach(webview: Electron.WebviewTag): void {
+  moveFocusToRendererIfWebviewOwnsFocus(webview)
+}
+
 export function destroyPersistentWebview(browserTabId: string): void {
   const webview = webviewRegistry.get(browserTabId)
   if (!webview) {
@@ -109,14 +139,7 @@ export function destroyPersistentWebview(browserTabId: string): void {
     return
   }
   void window.api.browser.unregisterGuest({ browserPageId: browserTabId })
-  // Why: if this webview currently owns focus, removing it lets macOS hand
-  // activation back to the previously-active app (Slack, etc.) because the
-  // focused webContents is gone with no replacement. Move focus back into the
-  // main renderer first so Electron keeps focus inside the Orca window.
-  if (webview === document.activeElement || webview.contains(document.activeElement)) {
-    ;(document.activeElement as HTMLElement | null)?.blur?.()
-    window.focus()
-  }
+  moveFocusToRendererBeforeWebviewDetach(webview)
   webview.remove()
   unregisterPersistentWebview(browserTabId)
   registeredWebContentsIds.delete(browserTabId)

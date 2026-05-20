@@ -17,6 +17,7 @@ import { ensureHooksConfirmed } from '@/lib/ensure-hooks-confirmed'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '../../runtime/runtime-rpc-client'
 import { getHostedReviewCacheKey } from './hosted-review'
+import { moveFocusToRendererBeforeFocusedWebviewHidden } from './browser-webview-cleanup'
 export type { WorktreeSlice, WorktreeDeleteState } from './worktree-helpers'
 
 // Why: the runtime RPC default is intentionally bounded for CLI calls, but the
@@ -1282,6 +1283,9 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
   },
 
   setActiveWorktree: (worktreeId) => {
+    if (get().activeWorktreeId !== worktreeId) {
+      moveFocusToRendererBeforeFocusedWebviewHidden()
+    }
     const reconciledActiveTabId = worktreeId
       ? get().reconcileWorktreeTabModel(worktreeId).activeRenderableTabId
       : null
@@ -1475,9 +1479,8 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
       }
     })
 
-    // Why: force-refreshing GitHub data on every switch burned API rate limit
-    // quota and added 200-800ms latency. Only refresh when cache is actually
-    // stale (>5 min old). Users can still force-refresh via the sidebar button.
+    // Why: activation is explicit enough to revalidate PR state immediately;
+    // the GitHub coordinator still coalesces requests and applies rate guards.
     if (worktreeId) {
       get().refreshGitHubForWorktreeIfStale(worktreeId)
     }

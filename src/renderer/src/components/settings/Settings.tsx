@@ -76,7 +76,7 @@ import {
 import { PrivacyPane } from './PrivacyPane'
 import { PRIVACY_PANE_SEARCH_ENTRIES } from './privacy-search'
 import { SettingsSidebar } from './SettingsSidebar'
-import { SettingsSection } from './SettingsSection'
+import { ActiveSettingsSectionProvider, SettingsSection } from './SettingsSection'
 import { matchesSettingsSearch, type SettingsSearchEntry } from './settings-search'
 import { checkRuntimeHooks } from '@/runtime/runtime-hooks-client'
 import {
@@ -158,13 +158,6 @@ function computerUsePlatformLabel(args: { isWindows: boolean; isMac: boolean }):
   return 'This platform'
 }
 
-// Why: after a sidebar jump the target section is now in the viewport center
-// rather than the top, which can make it less obvious which section just
-// scrolled into view. Pulsing the border for a moment reassures the user that
-// their click landed on the right section.
-const SECTION_FLASH_CLASS = 'settings-section-flash'
-const SECTION_FLASH_DURATION_MS = 900
-
 function getSettingsScrollTarget(
   sectionId: string,
   container?: HTMLElement | null
@@ -175,8 +168,12 @@ function getSettingsScrollTarget(
   )
 }
 
-function scrollSectionIntoView(sectionId: string, container?: HTMLElement | null): void {
-  const target = getSettingsScrollTarget(sectionId, container)
+function scrollSubsectionIntoView(targetId: string, container?: HTMLElement | null): void {
+  // Why: deep links into Settings can target a specific subsection inside a
+  // pane (e.g. a particular row). The pane itself is now swapped in
+  // wholesale, so this only needs to nudge the inner scroll if the pane has
+  // grown taller than the viewport.
+  const target = getSettingsScrollTarget(targetId, container)
   if (!target) {
     return
   }
@@ -187,27 +184,8 @@ function scrollSectionIntoView(sectionId: string, container?: HTMLElement | null
   const containerRect = container.getBoundingClientRect()
   const targetRect = target.getBoundingClientRect()
   const targetTop = targetRect.top - containerRect.top + container.scrollTop
-
-  // Why: the scroll spy samples 40% down the viewport. Put sidebar jump
-  // targets just above that probe so short sections like Voice do not
-  // immediately hand active selection to the next section.
-  const desiredTop = targetTop - container.clientHeight * 0.3
   const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-  container.scrollTo({ top: Math.min(Math.max(0, desiredTop), maxScrollTop) })
-}
-
-function flashSectionHighlight(sectionId: string): void {
-  const target = getSettingsScrollTarget(sectionId)
-  if (!target) {
-    return
-  }
-  target.classList.remove(SECTION_FLASH_CLASS)
-  // Force a reflow so re-adding the class restarts the animation.
-  void target.offsetWidth
-  target.classList.add(SECTION_FLASH_CLASS)
-  window.setTimeout(() => {
-    target.classList.remove(SECTION_FLASH_CLASS)
-  }, SECTION_FLASH_DURATION_MS)
+  container.scrollTo({ top: Math.min(Math.max(0, targetTop - 16), maxScrollTop) })
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -868,29 +846,40 @@ function Settings(): React.JSX.Element {
     const scrollTargetId = pendingScrollTargetRef.current
     const pendingNavSectionId = pendingNavSectionRef.current
 
-    if (scrollTargetId && pendingNavSectionId && visibleSectionIds.has(pendingNavSectionId)) {
-      // Why: target navigation can arrive before the lazy section has mounted;
-      // keep the pending refs alive until the mounted-section update commits.
-      if (!getSettingsScrollTarget(scrollTargetId, contentScrollRef.current)) {
-        return
-      }
-      const scrollToPendingTarget = (): void => {
-        scrollSectionIntoView(scrollTargetId, contentScrollRef.current)
-        flashSectionHighlight(scrollTargetId)
-      }
-      scrollToPendingTarget()
-      // Why: mounting the target section can change settings-page height as
-      // panes hydrate, so repeat once after layout settles.
-      requestAnimationFrame(scrollToPendingTarget)
-      window.setTimeout(scrollToPendingTarget, 150)
-      setActiveSectionId(pendingNavSectionId)
-      pendingNavSectionRef.current = null
-      pendingScrollTargetRef.current = null
+    if (scrollTargetId && pendingNavSectionId && settingsSearchQuery.trim() !== '') {
+      setSettingsSearchQuery('')
       return
     }
 
-    if (scrollTargetId && pendingNavSectionId && settingsSearchQuery.trim() !== '') {
-      setSettingsSearchQuery('')
+    if (scrollTargetId && pendingNavSectionId && visibleSectionIds.has(pendingNavSectionId)) {
+      // Why: inactive Settings panes no longer render in the empty-search view.
+      // Activate the pane first, then wait for the next render before looking
+      // for any subsection target inside it.
+      if (activeSectionId !== pendingNavSectionId) {
+        setActiveSectionId(pendingNavSectionId)
+        return
+      }
+      const container = contentScrollRef.current
+      if (container) {
+        container.scrollTo({ top: 0 })
+      }
+      // Why: deep links can target a row inside the pane; the pane itself is
+      // already in view because the sidebar swap rendered just it.
+      if (scrollTargetId !== pendingNavSectionId) {
+        // Why: target navigation can arrive before the lazy section has mounted;
+        // keep the pending refs alive until the mounted-section update commits.
+        if (!getSettingsScrollTarget(scrollTargetId, container)) {
+          return
+        }
+        const scrollToSubsection = (): void => {
+          scrollSubsectionIntoView(scrollTargetId, contentScrollRef.current)
+        }
+        scrollToSubsection()
+        requestAnimationFrame(scrollToSubsection)
+      }
+      setActiveSectionId(pendingNavSectionId)
+      pendingNavSectionRef.current = null
+      pendingScrollTargetRef.current = null
       return
     }
 
@@ -905,76 +894,6 @@ function Settings(): React.JSX.Element {
     visibleSectionIds,
     visibleNavSections
   ])
-
-  useEffect(() => {
-    const container = contentScrollRef.current
-    if (!container) {
-      return
-    }
-
-    const updateActiveSection = (): void => {
-      const sections = Array.from(
-        container.querySelectorAll<HTMLElement>('[data-settings-section]')
-      )
-      if (sections.length === 0) {
-        return
-      }
-
-      // Why: highlight the section that the user is actually reading.
-      // We pick the section whose body crosses a probe line ~40% down the
-      // viewport (roughly the middle, biased slightly up toward where the
-      // eye naturally focuses). Earlier logic used the first section with
-      // its top near the container top, which lagged badly — a section
-      // could still fill most of the viewport while the sidebar had already
-      // advanced to the next one.
-      const containerRect = container.getBoundingClientRect()
-      const probeY = containerRect.top + containerRect.height * 0.4
-
-      // If we've scrolled to the very bottom, force-highlight the last
-      // section even when it's too short to reach the probe line.
-      const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 2
-
-      let candidate: HTMLElement | undefined
-      for (const section of sections) {
-        const rect = section.getBoundingClientRect()
-        if (rect.top <= probeY && rect.bottom > probeY) {
-          candidate = section
-          break
-        }
-        if (rect.top <= probeY) {
-          // Last section whose heading is above the probe line — used
-          // when no section straddles the probe (e.g. between sections,
-          // or when the probe sits in the gutter above the first one).
-          candidate = section
-        }
-      }
-      candidate ??= atBottom ? sections.at(-1) : sections.at(0)
-      if (!candidate) {
-        return
-      }
-      setActiveSectionId(candidate.dataset.settingsSection ?? candidate.id)
-    }
-
-    let rafId: number | null = null
-    const throttledUpdateActiveSection = (): void => {
-      if (rafId !== null) {
-        return
-      }
-      rafId = requestAnimationFrame(() => {
-        rafId = null
-        updateActiveSection()
-      })
-    }
-
-    updateActiveSection()
-    container.addEventListener('scroll', throttledUpdateActiveSection, { passive: true })
-    return () => {
-      container.removeEventListener('scroll', throttledUpdateActiveSection)
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId)
-      }
-    }
-  }, [visibleNavSections])
 
   const scrollToSection = useCallback(
     async (
@@ -992,8 +911,10 @@ function Settings(): React.JSX.Element {
       if (sectionId === 'experimental' && modifiers?.shiftKey) {
         setHiddenExperimentalUnlocked((previous) => !previous)
       }
-      scrollSectionIntoView(sectionId, contentScrollRef.current)
-      flashSectionHighlight(sectionId)
+      const container = contentScrollRef.current
+      if (container) {
+        container.scrollTo({ top: 0 })
+      }
       setActiveSectionId(sectionId)
     },
     [activeSectionId, confirmDiscardCommitPromptChanges]
@@ -1057,7 +978,7 @@ function Settings(): React.JSX.Element {
                 No settings found for &quot;{settingsSearchQuery.trim()}&quot;
               </div>
             ) : (
-              <>
+              <ActiveSettingsSectionProvider value={activeSectionId}>
                 <SettingsSection
                   id="general"
                   title="General"
@@ -1412,7 +1333,7 @@ function Settings(): React.JSX.Element {
                     </SettingsSection>
                   )
                 })}
-              </>
+              </ActiveSettingsSectionProvider>
             )}
           </div>
         </div>
