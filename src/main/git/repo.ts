@@ -118,6 +118,18 @@ function normalizeUsername(value: string): string {
 
 let cachedGhLogin: string | undefined
 
+function isGhProbeTimeout(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+
+  const err = error as { code?: unknown; message?: unknown }
+  return (
+    err.code === 'ETIMEDOUT' ||
+    (typeof err.message === 'string' && /\bETIMEDOUT\b|timed out/i.test(err.message))
+  )
+}
+
 function getGhLogin(): string {
   if (cachedGhLogin !== undefined) {
     return cachedGhLogin
@@ -133,7 +145,13 @@ function getGhLogin(): string {
       cachedGhLogin = normalizeUsername(apiLogin)
       return cachedGhLogin
     }
-  } catch {
+  } catch (err) {
+    if (isGhProbeTimeout(err)) {
+      // Why: if `gh api user` timed out, `gh auth status` is likely to hit the
+      // same stuck keychain/network path. Keep repo creation bounded to one probe.
+      cachedGhLogin = ''
+      return ''
+    }
     // Fall through to auth status parsing
   }
 

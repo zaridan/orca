@@ -59,4 +59,30 @@ describe('getGitUsername', () => {
       expect(options).toMatchObject({ timeout: 1500 })
     }
   })
+
+  it('skips auth status fallback when GitHub CLI API lookup times out', () => {
+    execSyncMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error('spawnSync /bin/sh ETIMEDOUT'), { code: 'ETIMEDOUT' })
+    })
+
+    expect(getGitUsername('/repo')).toBe('')
+    expect(getGitUsername('/repo')).toBe('')
+
+    expect(execSyncMock).toHaveBeenCalledTimes(1)
+    expect(execSyncMock.mock.calls[0][1]).toMatchObject({ timeout: 1500 })
+  })
+
+  it('uses auth status fallback after fast GitHub CLI API failure', () => {
+    execSyncMock
+      .mockImplementationOnce(() => {
+        throw new Error('gh api unavailable')
+      })
+      .mockImplementationOnce(
+        () =>
+          'github.com\n  ✓ Logged in to github.com account demo-user\n  - Active account: true\n'
+      )
+
+    expect(getGitUsername('/repo')).toBe('demo-user')
+    expect(execSyncMock).toHaveBeenCalledTimes(2)
+  })
 })
