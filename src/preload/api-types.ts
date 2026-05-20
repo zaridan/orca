@@ -99,6 +99,7 @@ import type {
   WorktreeStartupLaunch,
   WorkspaceSessionState
 } from '../shared/types'
+import type { SetupScriptImportCandidate } from '../shared/setup-script-imports'
 import type { GitHistoryOptions, GitHistoryResult } from '../shared/git-history'
 import type { PublicKnownRuntimeEnvironment } from '../shared/runtime-environments'
 import type { RuntimeAccessGrant } from '../shared/runtime-access-grants'
@@ -1248,6 +1249,7 @@ export type PreloadApi = {
     check: (args: {
       repoId: string
     }) => Promise<{ hasHooks: boolean; hooks: OrcaHooks | null; mayNeedUpdate: boolean }>
+    inspectSetupScriptImports: (args: { repoId: string }) => Promise<SetupScriptImportCandidate[]>
     createIssueCommandRunner: (args: {
       repoId: string
       worktreePath: string

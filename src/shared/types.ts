@@ -1922,6 +1922,7 @@ export type PersistedUIState = {
    *  suppress the nag — no further thresholds, no notifications. */
   starNagCompleted?: boolean
   trustedOrcaHooks?: PersistedTrustedOrcaHooks
+  setupScriptPromptDismissedRepoIds?: string[]
   /** Whether the experimental pet overlay is currently visible. Separate
    *  from the experimentalPet settings flag so "Hide pet" from the
    *  status-bar menu is a reversible dismiss (re-show without re-enabling the

@@ -69,6 +69,14 @@ describe('repo RPC methods', () => {
         hooks: { scripts: { setup: 'pnpm install' } },
         mayNeedUpdate: false
       }),
+      inspectRepoSetupScriptImports: vi.fn().mockResolvedValue([
+        {
+          provider: 'conductor',
+          label: 'Conductor',
+          files: ['conductor.json'],
+          setup: 'pnpm install'
+        }
+      ]),
       readRepoIssueCommand: vi.fn().mockResolvedValue({
         localContent: null,
         sharedContent: 'Fix {{artifact_url}}',
@@ -81,6 +89,7 @@ describe('repo RPC methods', () => {
     const dispatcher = new RpcDispatcher({ runtime, methods: REPO_METHODS })
 
     await dispatcher.dispatch(makeRequest('repo.hooksCheck', { repo: 'repo-1' }))
+    await dispatcher.dispatch(makeRequest('repo.setupScriptImports', { repo: 'repo-1' }))
     await dispatcher.dispatch(makeRequest('repo.issueCommandRead', { repo: 'repo-1' }))
     await dispatcher.dispatch(
       makeRequest('repo.issueCommandWrite', {
@@ -90,6 +99,7 @@ describe('repo RPC methods', () => {
     )
 
     expect(runtime.checkRepoHooks).toHaveBeenCalledWith('repo-1')
+    expect(runtime.inspectRepoSetupScriptImports).toHaveBeenCalledWith('repo-1')
     expect(runtime.readRepoIssueCommand).toHaveBeenCalledWith('repo-1')
     expect(runtime.writeRepoIssueCommand).toHaveBeenCalledWith('repo-1', 'Fix it')
   })

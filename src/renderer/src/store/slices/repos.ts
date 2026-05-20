@@ -76,7 +76,10 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
         return {
           repos,
           activeRepoId: s.activeRepoId && validRepoIds.has(s.activeRepoId) ? s.activeRepoId : null,
-          filterRepoIds: s.filterRepoIds.filter((repoId) => validRepoIds.has(repoId))
+          filterRepoIds: s.filterRepoIds.filter((repoId) => validRepoIds.has(repoId)),
+          setupScriptPromptDismissedRepoIds: s.setupScriptPromptDismissedRepoIds.filter((repoId) =>
+            validRepoIds.has(repoId)
+          )
         }
       })
     } catch (err) {

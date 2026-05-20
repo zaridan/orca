@@ -136,6 +136,11 @@ export const REPO_METHODS: RpcMethod[] = [
     handler: async (params, { runtime }) => runtime.checkRepoHooks(params.repo)
   }),
   defineMethod({
+    name: 'repo.setupScriptImports',
+    params: RepoSelector,
+    handler: async (params, { runtime }) => runtime.inspectRepoSetupScriptImports(params.repo)
+  }),
+  defineMethod({
     name: 'repo.issueCommandRead',
     params: RepoSelector,
     handler: async (params, { runtime }) => runtime.readRepoIssueCommand(params.repo)

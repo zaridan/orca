@@ -132,6 +132,19 @@ function filterTrustedOrcaHooksToValidRepos(
   return next
 }
 
+function filterRepoIdListToValidRepos(value: unknown, validRepoIds: Set<string>): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  const next: string[] = []
+  for (const repoId of value) {
+    if (typeof repoId === 'string' && validRepoIds.has(repoId) && !next.includes(repoId)) {
+      next.push(repoId)
+    }
+  }
+  return next
+}
+
 function sanitizePersistedSidebarWidth(width: unknown, fallback: number, maxWidth: number): number {
   if (typeof width !== 'number' || !Number.isFinite(width)) {
     return fallback
@@ -360,6 +373,8 @@ export type UISlice = {
   ) => void
   markOrcaHookRepoAlwaysTrusted: (repoId: string) => void
   clearOrcaHookTrustForRepo: (repoId: string) => void
+  setupScriptPromptDismissedRepoIds: string[]
+  dismissSetupScriptPrompt: (repoId: string) => void
   groupBy: 'none' | 'workspace-status' | 'repo' | 'pr-status'
   setGroupBy: (g: UISlice['groupBy']) => void
   sortBy: 'name' | 'smart' | 'recent' | 'repo'
@@ -764,6 +779,16 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       window.api.ui.set({ trustedOrcaHooks: next }).catch(console.error)
       return { trustedOrcaHooks: next }
     }),
+  setupScriptPromptDismissedRepoIds: [],
+  dismissSetupScriptPrompt: (repoId) =>
+    set((s) => {
+      if (!repoId || s.setupScriptPromptDismissedRepoIds.includes(repoId)) {
+        return s
+      }
+      const next = [...s.setupScriptPromptDismissedRepoIds, repoId]
+      window.api.ui.set({ setupScriptPromptDismissedRepoIds: next }).catch(console.error)
+      return { setupScriptPromptDismissedRepoIds: next }
+    }),
 
   groupBy: 'repo',
   // Why: group keys are mode-specific (e.g. repo id vs PR status), so
@@ -1015,6 +1040,10 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         featureTipsSeenIds: normalizeFeatureTipIds(ui.featureTipsSeenIds),
         trustedOrcaHooks: filterTrustedOrcaHooksToValidRepos(
           ui.trustedOrcaHooks ?? {},
+          validRepoIds
+        ),
+        setupScriptPromptDismissedRepoIds: filterRepoIdListToValidRepos(
+          ui.setupScriptPromptDismissedRepoIds,
           validRepoIds
         ),
         // Why: restore visited-row acks alongside the persisted hook entries

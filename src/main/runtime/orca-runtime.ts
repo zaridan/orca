@@ -11,7 +11,7 @@ import { gitExecFileAsync, wslAwareSpawn } from '../git/runner'
 import { isWslPath, parseWslPath, getWslHome } from '../wsl'
 import { randomUUID } from 'crypto'
 import { basename, isAbsolute, join } from 'path'
-import { mkdir, readdir, rm, stat } from 'fs/promises'
+import { mkdir, readFile, readdir, rm, stat } from 'fs/promises'
 import { OrchestrationDb } from './orchestration/db'
 import { formatMessagesForInjection } from './orchestration/formatter'
 import type {
@@ -151,6 +151,7 @@ import type {
   GitHubPRFile,
   GitHubPRReviewCommentInput
 } from '../../shared/types'
+import { inspectSetupScriptImportCandidates } from '../../shared/setup-script-imports'
 import type {
   CreateHostedReviewInput,
   CreateHostedReviewResult,
@@ -5457,7 +5458,7 @@ export class OrcaRuntimeService {
         }
       }
       try {
-        const result = await fsProvider.readFile(joinWorktreeRelativePath(repo.path, '.orca.yaml'))
+        const result = await fsProvider.readFile(joinWorktreeRelativePath(repo.path, 'orca.yaml'))
         const hooks = result.isBinary ? null : parseOrcaYaml(result.content)
         return {
           hasHooksFile: Boolean(hooks),
@@ -5497,7 +5498,7 @@ export class OrcaRuntimeService {
         return { hasHooks: false, hooks: null, mayNeedUpdate: false }
       }
       try {
-        const result = await fsProvider.readFile(joinWorktreeRelativePath(repo.path, '.orca.yaml'))
+        const result = await fsProvider.readFile(joinWorktreeRelativePath(repo.path, 'orca.yaml'))
         if (result.isBinary) {
           return { hasHooks: false, hooks: null, mayNeedUpdate: false }
         }
@@ -5516,6 +5517,38 @@ export class OrcaRuntimeService {
       hooks,
       mayNeedUpdate: has && !hooks && hasUnrecognizedOrcaYamlKeys(repo.path)
     }
+  }
+
+  async inspectRepoSetupScriptImports(repoSelector: string) {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    if (isFolderRepo(repo)) {
+      return []
+    }
+
+    return inspectSetupScriptImportCandidates(async (relativePath) => {
+      const filePath = joinWorktreeRelativePath(repo.path, relativePath)
+      if (repo.connectionId) {
+        const fsProvider = getSshFilesystemProvider(repo.connectionId)
+        if (!fsProvider) {
+          return null
+        }
+        try {
+          const result = await fsProvider.readFile(filePath)
+          return result.isBinary ? null : result.content
+        } catch {
+          return null
+        }
+      }
+
+      try {
+        return await readFile(filePath, 'utf-8')
+      } catch (error) {
+        if (!isENOENT(error)) {
+          console.warn('[runtime] Failed to inspect setup script import candidate:', error)
+        }
+        return null
+      }
+    })
   }
 
   async readRepoIssueCommand(repoSelector: string) {

@@ -4,6 +4,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { useSidebarResize } from '@/hooks/useSidebarResize'
 import SidebarHeader from './SidebarHeader'
 import SidebarNav from './SidebarNav'
+import SetupScriptPromptCard from './SetupScriptPromptCard'
 import WorktreeList from './WorktreeList'
 import SidebarToolbar from './SidebarToolbar'
 import WorktreeMetaDialog from './WorktreeMetaDialog'
@@ -71,6 +72,8 @@ function Sidebar({
           scrollOffsetRef={worktreeScrollOffsetRef}
           scrollAnchorRef={worktreeScrollAnchorRef}
         />
+
+        <SetupScriptPromptCard />
 
         {/* Fixed bottom toolbar */}
         <SidebarToolbar />
