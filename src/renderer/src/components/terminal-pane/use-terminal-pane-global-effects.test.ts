@@ -230,6 +230,7 @@ describe('useTerminalPaneGlobalEffects', () => {
       paneTransportsRef: { current: new Map() },
       isActiveRef: { current: false },
       isVisibleRef: { current: false },
+      paneCount: 1,
       toggleExpandPane: vi.fn()
     }
 
