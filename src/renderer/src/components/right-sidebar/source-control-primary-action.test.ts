@@ -408,4 +408,26 @@ describe('resolvePrimaryAction', () => {
       disabled: false
     })
   })
+
+  it('keeps the primary disabled when review creation has no committed branch work', () => {
+    const result = resolvePrimaryAction(
+      inputs({
+        upstreamStatus: upstreamInSync,
+        hostedReviewCreation: {
+          provider: 'github',
+          review: null,
+          canCreate: false,
+          blockedReason: 'no_committed_changes',
+          nextAction: 'commit',
+          hasCommittedChanges: false
+        }
+      })
+    )
+    expect(result).toEqual({
+      kind: 'commit',
+      label: 'Commit',
+      title: 'Nothing to commit. Branch is up to date.',
+      disabled: true
+    })
+  })
 })

@@ -78,6 +78,7 @@ export type HostedReviewCreationBlockedReason =
   | 'dirty'
   | 'detached_head'
   | 'default_branch'
+  | 'no_committed_changes'
   | 'no_upstream'
   | 'needs_push'
   | 'needs_sync'
@@ -106,6 +107,7 @@ export type HostedReviewCreationEligibility = {
   head?: string | null
   title?: string | null
   body?: string | null
+  hasCommittedChanges?: boolean
 }
 
 export type HostedReviewCreationEligibilityArgs = {

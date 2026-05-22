@@ -121,6 +121,9 @@ describe('createHostedReview', () => {
       if (args[0] === 'log') {
         return { stdout: '- Feature title\n', stderr: '' }
       }
+      if (args[0] === 'rev-list' && args.includes('--count')) {
+        return { stdout: '1\n', stderr: '' }
+      }
       return { stdout: '', stderr: '' }
     })
     createGitHubPullRequestMock.mockResolvedValue({
@@ -149,6 +152,41 @@ describe('createHostedReview', () => {
       ok: false,
       code: 'validation',
       error: 'Create PR failed: push this branch before creating a pull request.'
+    })
+    expect(createGitHubPullRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('revalidates committed branch work before creating a GitHub pull request', async () => {
+    gitExecFileAsyncMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'rev-parse') {
+        return { stdout: 'feature\n', stderr: '' }
+      }
+      if (args[0] === 'status') {
+        return { stdout: '', stderr: '' }
+      }
+      if (args[0] === 'log' && args.includes('--pretty=%s')) {
+        return { stdout: 'Feature title\n', stderr: '' }
+      }
+      if (args[0] === 'log') {
+        return { stdout: '\n', stderr: '' }
+      }
+      if (args[0] === 'rev-list' && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' }
+      }
+      return { stdout: '', stderr: '' }
+    })
+
+    await expect(
+      createHostedReview('/repo', {
+        provider: 'github',
+        base: 'main',
+        head: 'feature',
+        title: 'Feature'
+      })
+    ).resolves.toEqual({
+      ok: false,
+      code: 'validation',
+      error: 'Create PR failed: commit changes before creating a pull request.'
     })
     expect(createGitHubPullRequestMock).not.toHaveBeenCalled()
   })
@@ -204,8 +242,11 @@ describe('createHostedReview', () => {
         if (args[0] === 'rev-parse' && args[2] === 'HEAD@{u}') {
           return { stdout: 'origin/feature\n', stderr: '' }
         }
-        if (args[0] === 'rev-list') {
+        if (args[0] === 'rev-list' && args.includes('--left-right')) {
           return { stdout: '0 0\n', stderr: '' }
+        }
+        if (args[0] === 'rev-list' && args.includes('--count')) {
+          return { stdout: '1\n', stderr: '' }
         }
         if (args[0] === 'log' && args.includes('--pretty=%s')) {
           return { stdout: 'Feature title\n', stderr: '' }
@@ -296,7 +337,18 @@ describe('getHostedReviewCreationEligibility', () => {
     mockGitHubProvider()
     getHostedReviewForBranchMock.mockResolvedValue(null)
     ghExecFileAsyncMock.mockResolvedValue({ stdout: '', stderr: '' })
-    gitExecFileAsyncMock.mockResolvedValue({ stdout: 'Feature title\n', stderr: '' })
+    gitExecFileAsyncMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'log' && args.includes('--pretty=%s')) {
+        return { stdout: 'Feature title\n', stderr: '' }
+      }
+      if (args[0] === 'log') {
+        return { stdout: '- Feature title\n', stderr: '' }
+      }
+      if (args[0] === 'rev-list') {
+        return { stdout: '1\n', stderr: '' }
+      }
+      return { stdout: '', stderr: '' }
+    })
   })
 
   it('treats short remote base refs as the default branch name', async () => {
@@ -356,8 +408,46 @@ describe('getHostedReviewCreationEligibility', () => {
       defaultBaseRef: 'origin/main',
       head: 'feature/create-pr',
       title: 'Feature title',
-      body: 'Feature title'
+      body: '- Feature title',
+      hasCommittedChanges: true
     })
+  })
+
+  it('counts committed review work against the remote-tracking base when only a short base is provided', async () => {
+    gitExecFileAsyncMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'log' && args.includes('--pretty=%s')) {
+        return { stdout: 'Feature title\n', stderr: '' }
+      }
+      if (args[0] === 'log') {
+        return { stdout: '', stderr: '' }
+      }
+      if (args[0] === 'rev-list' && args.includes('origin/main..HEAD')) {
+        return { stdout: '1\n', stderr: '' }
+      }
+      if (args[0] === 'rev-list') {
+        throw new Error(`Unexpected rev-list candidate: ${args.join(' ')}`)
+      }
+      return { stdout: '', stderr: '' }
+    })
+
+    await expect(
+      getHostedReviewCreationEligibility({
+        repoPath: '/repo',
+        branch: 'feature/create-pr',
+        base: 'main',
+        hasUncommittedChanges: false,
+        hasUpstream: true,
+        ahead: 0,
+        behind: 0
+      })
+    ).resolves.toMatchObject({
+      canCreate: true,
+      hasCommittedChanges: true
+    })
+    expect(gitExecFileAsyncMock).toHaveBeenCalledWith(
+      ['rev-list', '--count', 'origin/main..HEAD'],
+      { cwd: '/repo' }
+    )
   })
 
   it('resolves remote eligibility through SSH repo metadata', async () => {
@@ -368,6 +458,9 @@ describe('getHostedReviewCreationEligibility', () => {
         }
         if (args[0] === 'log') {
           return { stdout: '- Remote title\n', stderr: '' }
+        }
+        if (args[0] === 'rev-list') {
+          return { stdout: '1\n', stderr: '' }
         }
         return { stdout: '', stderr: '' }
       })
@@ -389,7 +482,8 @@ describe('getHostedReviewCreationEligibility', () => {
       provider: 'github',
       canCreate: true,
       title: 'Remote title',
-      body: '- Remote title'
+      body: '- Remote title',
+      hasCommittedChanges: true
     })
 
     expect(getProjectSlugMock).toHaveBeenCalledWith('/remote/repo', 'ssh-1')
@@ -415,6 +509,39 @@ describe('getHostedReviewCreationEligibility', () => {
       canCreate: false,
       blockedReason: 'needs_push',
       nextAction: 'push'
+    })
+  })
+
+  it('reports no committed review changes when the branch matches the base', async () => {
+    gitExecFileAsyncMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'log' && args.includes('--pretty=%s')) {
+        return { stdout: 'Feature title\n', stderr: '' }
+      }
+      if (args[0] === 'log') {
+        return { stdout: '\n', stderr: '' }
+      }
+      if (args[0] === 'rev-list') {
+        return { stdout: '0\n', stderr: '' }
+      }
+      return { stdout: '', stderr: '' }
+    })
+
+    await expect(
+      getHostedReviewCreationEligibility({
+        repoPath: '/repo',
+        branch: 'feature/no-delta',
+        base: 'origin/main',
+        hasUncommittedChanges: false,
+        hasUpstream: true,
+        ahead: 0,
+        behind: 0
+      })
+    ).resolves.toMatchObject({
+      canCreate: false,
+      blockedReason: 'no_committed_changes',
+      nextAction: 'commit',
+      body: null,
+      hasCommittedChanges: false
     })
   })
 

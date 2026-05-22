@@ -138,6 +138,44 @@ async function getCommitSummaryBody(
   }
 }
 
+async function hasCommittedChangesForReview(
+  repoPath: string,
+  base: string | null,
+  connectionId?: string | null
+): Promise<boolean> {
+  if (!base) {
+    return false
+  }
+
+  const normalizedBase = normalizeHostedReviewBaseRef(base)
+  const candidates = new Set<string>()
+  if (!base.startsWith('refs/') && !base.includes('/')) {
+    // Why: submit preflight receives provider base names like "main", but a
+    // local checkout may only have the remote-tracking ref available.
+    candidates.add(`origin/${base}`)
+    candidates.add(`upstream/${base}`)
+  }
+  candidates.add(base)
+  candidates.add(normalizedBase)
+
+  for (const candidate of candidates) {
+    try {
+      const { stdout } = await runGitForHostedReview(
+        repoPath,
+        ['rev-list', '--count', `${candidate}..HEAD`],
+        connectionId
+      )
+      const count = Number.parseInt(stdout.trim(), 10)
+      if (Number.isFinite(count)) {
+        return count > 0
+      }
+    } catch {
+      // Try the next plausible local spelling of the provider base branch.
+    }
+  }
+  return false
+}
+
 async function getDefaultBaseRef(
   repoPath: string,
   connectionId?: string | null
@@ -242,6 +280,11 @@ const blockedCreateResultByReason = {
     ok: false,
     code: 'validation',
     error: 'Create PR failed: choose a feature branch before creating a pull request.'
+  },
+  no_committed_changes: {
+    ok: false,
+    code: 'validation',
+    error: 'Create PR failed: commit changes before creating a pull request.'
   },
   no_upstream: {
     ok: false,
@@ -355,16 +398,20 @@ export async function getHostedReviewCreationEligibility(
     connectionId: args.connectionId ?? null
   })
 
-  const title =
-    (await getLatestCommitSubject(args.repoPath, args.connectionId)) ?? branchToTitle(branch)
-  const body = await getCommitSummaryBody(args.repoPath, defaultBaseRef ?? null, args.connectionId)
+  const [latestCommitSubject, body, hasCommittedChanges] = await Promise.all([
+    getLatestCommitSubject(args.repoPath, args.connectionId),
+    getCommitSummaryBody(args.repoPath, defaultBaseRef ?? null, args.connectionId),
+    hasCommittedChangesForReview(args.repoPath, defaultBaseRef ?? null, args.connectionId)
+  ])
+  const title = latestCommitSubject ?? branchToTitle(branch)
   const baseResult = {
     provider,
     review: review ? { number: review.number, url: review.url } : null,
     defaultBaseRef,
     head: branch || null,
     title,
-    body
+    body,
+    hasCommittedChanges
   }
 
   if (!branch || branch === 'HEAD') {
@@ -391,6 +438,16 @@ export async function getHostedReviewCreationEligibility(
   }
   if (args.hasUncommittedChanges) {
     return { ...baseResult, canCreate: false, blockedReason: 'dirty', nextAction: 'commit' }
+  }
+  // Why: every PR creation entry point consumes canCreate; keeping the
+  // no-delta rule here prevents renderer and main-process preflight drift.
+  if (baseBranch && !hasCommittedChanges) {
+    return {
+      ...baseResult,
+      canCreate: false,
+      blockedReason: 'no_committed_changes',
+      nextAction: 'commit'
+    }
   }
   if (args.hasUpstream === false) {
     return { ...baseResult, canCreate: false, blockedReason: 'no_upstream', nextAction: 'publish' }

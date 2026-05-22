@@ -373,4 +373,26 @@ describe('resolveDropdownItems', () => {
     expect(byKind.push_create_pr.label).toBe('Push before PR')
     expect(byKind.push_create_pr.disabled).toBe(false)
   })
+
+  it('keeps PR creation disabled when there is no committed branch work', () => {
+    const items = resolveDropdownItems(
+      inputs({
+        upstreamStatus: { hasUpstream: true, ahead: 0, behind: 0 },
+        hostedReviewCreation: {
+          provider: 'github',
+          review: null,
+          canCreate: false,
+          blockedReason: 'no_committed_changes',
+          nextAction: 'commit',
+          hasCommittedChanges: false
+        }
+      })
+    )
+    const byKind = Object.fromEntries(
+      items.filter((e) => e.kind !== 'separator').map((e) => [e.kind, e])
+    )
+    expect(byKind.create_pr.disabled).toBe(true)
+    expect(byKind.create_pr.hint).toBe('Commit changes first')
+    expect(byKind.push_create_pr.disabled).toBe(true)
+  })
 })

@@ -320,6 +320,8 @@ export function resolveDropdownItems(inputs: DropdownActionInputs): DropdownEntr
         return 'Check out a branch first'
       case 'default_branch':
         return 'Switch to a feature branch'
+      case 'no_committed_changes':
+        return 'Commit changes first'
       case 'no_upstream':
         return 'Publish Branch'
       case 'needs_push':

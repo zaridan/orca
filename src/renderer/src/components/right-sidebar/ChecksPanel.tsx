@@ -1150,7 +1150,7 @@ export default function ChecksPanel(): React.JSX.Element {
     const isPausedPRRefresh = prRefreshState?.status === 'paused'
     const isErroredPRRefresh = prRefreshState?.status === 'error'
 
-    const canCreate = hostedReviewCreation?.canCreate
+    const canCreate = hostedReviewCreation?.canCreate === true
     const canPushCreate = hostedReviewCreation?.blockedReason === 'needs_push'
     return (
       <>
@@ -1191,9 +1191,11 @@ export default function ChecksPanel(): React.JSX.Element {
                     ? 'Refreshing GitHub status for this branch'
                     : isPausedPRRefresh
                       ? 'GitHub refresh is paused by the current rate-limit budget'
-                      : canPushCreate
-                        ? 'Push your branch before creating a pull request.'
-                        : 'Create a pull request to start checks and review.'}
+                      : hostedReviewCreation?.blockedReason === 'no_committed_changes'
+                        ? 'Commit changes before creating a pull request.'
+                        : canPushCreate
+                          ? 'Push your branch before creating a pull request.'
+                          : 'Create a pull request to start checks and review.'}
           </div>
           {!operationInProgress && (
             <div className="mt-3 flex flex-wrap gap-2">
