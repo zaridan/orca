@@ -11,6 +11,7 @@ import {
   DEFAULT_TERMINAL_DIVIDER_DARK,
   isTerminalBackgroundLight,
   normalizeColor,
+  resolveOpaqueTerminalBackground,
   resolveEffectiveTerminalAppearance
 } from '@/lib/terminal-theme'
 import type { ManagedPane, PaneManager } from '@/lib/pane-manager/pane-manager'
@@ -1651,15 +1652,19 @@ export default function TerminalPane({
   const effectiveAppearance = settings
     ? resolveEffectiveTerminalAppearance(settings, systemPrefersDark)
     : null
+  const terminalBackground =
+    settings?.terminalColorOverrides?.background ?? effectiveAppearance?.theme?.background
   // Why: app light/dark mode can diverge from the selected terminal theme, so
   // pane-title contrast follows the effective terminal surface instead.
-  const titleUsesLightSurface = isTerminalBackgroundLight(
-    settings?.terminalColorOverrides?.background ?? effectiveAppearance?.theme?.background,
-    {
+  const titleUsesLightSurface = isTerminalBackgroundLight(terminalBackground, {
+    appSurface: effectiveAppearance?.mode,
+    backgroundOpacity: settings?.terminalBackgroundOpacity
+  })
+  const paneTitleBackground =
+    resolveOpaqueTerminalBackground(terminalBackground, {
       appSurface: effectiveAppearance?.mode,
       backgroundOpacity: settings?.terminalBackgroundOpacity
-    }
-  )
+    }) ?? (titleUsesLightSurface ? '#ffffff' : '#000000')
 
   const terminalContentVisible = isVisible || shouldMeasureHiddenStartup
   const hiddenStartupStyle: CSSProperties = shouldMeasureHiddenStartup
@@ -1806,6 +1811,7 @@ export default function TerminalPane({
         data-pane-title-surface={titleUsesLightSurface ? 'light' : 'dark'}
         style={{
           display: terminalContentVisible ? undefined : 'none',
+          ['--orca-pane-title-bg' as string]: paneTitleBackground,
           ...hiddenStartupStyle
         }}
       >

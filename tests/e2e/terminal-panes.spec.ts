@@ -359,6 +359,14 @@ test.describe('Terminal Panes', () => {
     await expect(orcaPage.getByText('Set Title…', { exact: true })).toBeHidden()
     await expect(orcaPage.locator('.pane .pane-title-input')).toHaveCount(0)
     await expect(orcaPage.locator('.pane[data-has-title]')).toHaveCount(0)
+    await expect
+      .poll(() =>
+        orcaPage
+          .locator('.pane-title-bar')
+          .first()
+          .evaluate((titleBar) => getComputedStyle(titleBar).backgroundColor)
+      )
+      .not.toBe('rgba(0, 0, 0, 0)')
     expectBoxesToMatch(await readVisibleXtermContainerBox(orcaPage), terminalBoxBefore)
 
     await titleInput.fill(title)

@@ -4,6 +4,7 @@ import {
   DEFAULT_TERMINAL_THEME_LIGHT,
   getTerminalThemePreview,
   isTerminalBackgroundLight,
+  resolveOpaqueTerminalBackground,
   resolveEffectiveTerminalAppearance
 } from './terminal-theme'
 
@@ -121,5 +122,25 @@ describe('isTerminalBackgroundLight', () => {
   it('defaults unknown colors to dark-surface title styling', () => {
     expect(isTerminalBackgroundLight(undefined)).toBe(false)
     expect(isTerminalBackgroundLight('var(--background)')).toBe(false)
+  })
+})
+
+describe('resolveOpaqueTerminalBackground', () => {
+  it('returns an opaque terminal title background', () => {
+    expect(resolveOpaqueTerminalBackground('#18181b')).toBe('rgb(24 24 27)')
+    expect(
+      resolveOpaqueTerminalBackground('rgba(255, 255, 255, 0.1)', { appSurface: 'dark' })
+    ).toBe('rgb(35 35 35)')
+    expect(
+      resolveOpaqueTerminalBackground('#ffffff', {
+        backgroundOpacity: 0.1,
+        appSurface: 'dark'
+      })
+    ).toBe('rgb(35 35 35)')
+  })
+
+  it('returns null for unknown color values', () => {
+    expect(resolveOpaqueTerminalBackground(undefined)).toBe(null)
+    expect(resolveOpaqueTerminalBackground('var(--background)')).toBe(null)
   })
 })

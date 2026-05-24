@@ -208,6 +208,7 @@
   --orca-pane-title-button-fg: var(--terminal-pane-title-on-dark-button-fg);
   --orca-pane-title-button-hover-fg: var(--terminal-pane-title-on-dark-button-hover-fg);
   --orca-pane-title-input-bg: var(--terminal-pane-title-on-dark-input-bg);
+  --orca-pane-title-separator: var(--terminal-pane-title-on-dark-separator);
 }
 
 [data-pane-title-surface='light'] {
@@ -217,6 +218,7 @@
   --orca-pane-title-button-fg: var(--terminal-pane-title-on-light-button-fg);
   --orca-pane-title-button-hover-fg: var(--terminal-pane-title-on-light-button-hover-fg);
   --orca-pane-title-input-bg: var(--terminal-pane-title-on-light-input-bg);
+  --orca-pane-title-separator: var(--terminal-pane-title-on-light-separator);
 }
 
 /* Floating title overlay. The title owns the top strip of the pane while xterm
@@ -234,14 +236,15 @@
   left: 0;
   width: 100%;
   height: var(--orca-pane-title-height);
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   padding: 0 8px;
   font-size: 13px;
   font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
   color: var(--orca-pane-title-fg, rgb(255 255 255 / 0.52));
-  background: transparent;
-  border-bottom: none;
+  background: var(--orca-pane-title-bg, #000);
+  border-bottom: 1px solid var(--orca-pane-title-separator, rgb(255 255 255 / 0.06));
   pointer-events: auto;
   user-select: none;
 }
