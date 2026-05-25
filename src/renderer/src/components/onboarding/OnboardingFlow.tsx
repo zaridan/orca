@@ -138,10 +138,7 @@ export default function OnboardingFlow({
 
   return (
     <div
-      className={cn(
-        'fixed inset-0 z-[100] bg-background text-foreground',
-        isInlineTourRunning ? 'overflow-hidden' : 'scrollbar-sleek overflow-auto'
-      )}
+      className={cn('fixed inset-0 z-[100] bg-background text-foreground', 'overflow-hidden')}
       data-onboarding-overlay
     >
       <div
@@ -159,10 +156,8 @@ export default function OnboardingFlow({
 
       <div
         className={cn(
-          'relative mx-auto flex w-full flex-col px-8 pb-10 pt-16 transition-[max-width] duration-[760ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
-          isInlineTourRunning
-            ? 'h-screen min-h-0 max-w-[1180px] overflow-hidden'
-            : 'min-h-screen max-w-[820px]'
+          'relative mx-auto flex h-screen min-h-0 w-full flex-col px-8 pb-10 pt-16 transition-[max-width] duration-[760ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+          isInlineTourRunning ? 'max-w-[1180px] overflow-hidden' : 'max-w-[820px] overflow-hidden'
         )}
       >
         <div className="flex items-center gap-2.5 text-sm font-semibold tracking-tight">
@@ -242,8 +237,12 @@ export default function OnboardingFlow({
 
         <div
           className={cn(
-            'flex-1 transition-[margin-top] duration-[760ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
-            isInlineTourRunning ? 'mt-7 min-h-0' : 'mt-10'
+            'min-h-0 flex-1 transition-[margin-top] duration-[760ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+            // Why: long setup output should scroll inside the step so the footer
+            // actions stay anchored across every onboarding page.
+            isInlineTourRunning
+              ? 'mt-7 overflow-hidden'
+              : 'scrollbar-sleek mt-10 overflow-y-auto pr-1'
           )}
         >
           {currentStep.id === 'agent' && (
@@ -305,7 +304,7 @@ export default function OnboardingFlow({
         </div>
 
         {shouldShowFooter && (
-          <footer className="mt-10 flex items-center justify-between border-t border-border pt-5">
+          <footer className="mt-6 flex flex-none items-center justify-between border-t border-border pt-5">
             {shouldShowSkipToProjectSetup ? (
               <button
                 className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:text-muted-foreground"

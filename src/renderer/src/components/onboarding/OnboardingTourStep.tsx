@@ -83,7 +83,7 @@ export function OnboardingTourStep({
         compactRail
         detachedFooter
         onTourDepthSummaryChange={onTourDepthSummaryChange}
-        className="h-full max-h-[790px] min-h-0"
+        className="h-full min-h-0"
         panelClassName="rounded-xl border border-border bg-card"
         leadingFooterContent={
           <button
