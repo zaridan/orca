@@ -3,6 +3,10 @@ import { stat } from 'fs/promises'
 import { join, posix, win32 } from 'path'
 import { resolveWorktreeAddBaseRef } from '../../shared/worktree-base-ref'
 import type { GitWorktreeInfo } from '../../shared/types'
+import {
+  disposableWorktreeMetadataPathspecs,
+  hasOnlyDisposableWorktreeMetadata
+} from '../../shared/disposable-worktree-metadata'
 import { gitExecFileAsync, translateWslOutputPaths } from './runner'
 import { resolveGitDir } from './status'
 import { hasWorktreeBaseCommitRef } from './worktree-base-ref-probe'
@@ -10,18 +14,6 @@ import { hasWorktreeBaseCommitRef } from './worktree-base-ref-probe'
 type SparseWorktreeCreateError = Error & {
   cleanupFailed?: boolean
 }
-
-const disposableWorktreeMetadataPathspecs = [
-  '.DS_Store',
-  ':(glob)**/.DS_Store',
-  'Thumbs.db',
-  ':(glob)**/Thumbs.db',
-  'Desktop.ini',
-  ':(glob)**/Desktop.ini'
-]
-
-const disposableWorktreeMetadataStatusPattern =
-  /(?:^|\s|[\\/])(?:\.DS_Store|Thumbs\.db|Desktop\.ini)"?$/i
 
 function getErrorCode(error: unknown): string | undefined {
   return typeof error === 'object' && error !== null && 'code' in error
@@ -460,19 +452,6 @@ export async function assertWorktreeCleanForRemoval(
   const error = new Error('Worktree has uncommitted or untracked changes.')
   ;(error as Error & { stdout?: string }).stdout = stdout
   throw error
-}
-
-function hasOnlyDisposableWorktreeMetadata(statusOutput: string): boolean {
-  const statusLines = statusOutput.split(/\r?\n/).filter((line) => line.trim())
-  return (
-    statusLines.length > 0 &&
-    statusLines.every((line) => {
-      if (!line.startsWith('?? ')) {
-        return false
-      }
-      return disposableWorktreeMetadataStatusPattern.test(line.slice(3).trim())
-    })
-  )
 }
 
 function translateWorktreePath(worktreePath: string, repoPath: string): string {
