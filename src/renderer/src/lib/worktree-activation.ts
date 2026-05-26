@@ -96,9 +96,7 @@ function buildCreatedAgentReopenStartup(worktree: Worktree):
     prompt: '',
     cmdOverrides: useAppStore.getState().settings?.agentCmdOverrides ?? {},
     platform: CLIENT_PLATFORM,
-    allowEmptyPromptLaunch: true,
-    useOrcaClaudeAgentStatusSettings:
-      useAppStore.getState().settings?.agentStatusHooksEnabled !== false
+    allowEmptyPromptLaunch: true
   })
   if (!startupPlan) {
     return undefined

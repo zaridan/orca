@@ -10,8 +10,6 @@ export { getBashShellReadyRcfileContent } from '../providers/local-pty-shell-rea
 import type { OrcaRuntimeService } from '../runtime/orca-runtime'
 import type { Store } from '../persistence'
 import type { GlobalSettings } from '../../shared/types'
-import { ORCA_CLAUDE_AGENT_STATUS_SETTINGS_ENV } from '../../shared/claude-settings'
-import { claudeHookService } from '../claude/hook-service'
 import { openCodeHookService } from '../opencode/hook-service'
 import { agentHookServer } from '../agent-hooks/server'
 import { isAgentStatusHooksEnabled } from '../agent-hooks/managed-agent-hook-controls'
@@ -91,8 +89,7 @@ const AGENT_HOOK_RUNTIME_ENV_KEYS = [
   'ORCA_AGENT_HOOK_TOKEN',
   'ORCA_AGENT_HOOK_ENV',
   'ORCA_AGENT_HOOK_VERSION',
-  'ORCA_AGENT_HOOK_ENDPOINT',
-  ORCA_CLAUDE_AGENT_STATUS_SETTINGS_ENV
+  'ORCA_AGENT_HOOK_ENDPOINT'
 ] as const
 
 export function getPtyIdForPaneKey(paneKey: string): string | undefined {
@@ -392,7 +389,6 @@ export function buildPtyHostEnv(
   }
   if (opts.agentStatusHooksEnabled) {
     Object.assign(baseEnv, agentHookServer.buildPtyEnv())
-    Object.assign(baseEnv, claudeHookService.buildPtyEnv())
   }
 
   // Why: PI_CODING_AGENT_DIR owns Pi's full config/session root. Build a

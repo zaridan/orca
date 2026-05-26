@@ -1761,8 +1761,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         agent: tuiAgent,
         prompt: startupPrompt,
         cmdOverrides: settings?.agentCmdOverrides ?? {},
-        platform: CLIENT_PLATFORM,
-        useOrcaClaudeAgentStatusSettings: settings?.agentStatusHooksEnabled !== false
+        platform: CLIENT_PLATFORM
       })
 
       // Why: thread agent_started telemetry through the queued startup so
@@ -1979,8 +1978,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
                 agent,
                 draft: quickDraftPrompt,
                 cmdOverrides: settings?.agentCmdOverrides ?? {},
-                platform: CLIENT_PLATFORM,
-                useOrcaClaudeAgentStatusSettings: settings?.agentStatusHooksEnabled !== false
+                platform: CLIENT_PLATFORM
               })
 
         let startupPlan: ReturnType<typeof buildAgentStartupPlan> = null
@@ -1998,8 +1996,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
             prompt: quickPrompt,
             cmdOverrides: settings?.agentCmdOverrides ?? {},
             platform: CLIENT_PLATFORM,
-            allowEmptyPromptLaunch: true,
-            useOrcaClaudeAgentStatusSettings: settings?.agentStatusHooksEnabled !== false
+            allowEmptyPromptLaunch: true
           })
           if (startupPlan && quickDraftPrompt) {
             startupPlan.draftPrompt = quickDraftPrompt

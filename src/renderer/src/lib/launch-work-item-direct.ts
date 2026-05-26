@@ -298,8 +298,7 @@ export async function launchWorkItemDirect(args: LaunchWorkItemDirectArgs): Prom
             agent: effectiveAgent,
             draft: draftContent,
             cmdOverrides: settings?.agentCmdOverrides ?? {},
-            platform: CLIENT_PLATFORM,
-            useOrcaClaudeAgentStatusSettings: settings?.agentStatusHooksEnabled !== false
+            platform: CLIENT_PLATFORM
           })
     if (draftLaunchPlan) {
       startupPlan = {
@@ -316,8 +315,7 @@ export async function launchWorkItemDirect(args: LaunchWorkItemDirectArgs): Prom
         prompt: '',
         cmdOverrides: settings?.agentCmdOverrides ?? {},
         platform: CLIENT_PLATFORM,
-        allowEmptyPromptLaunch: true,
-        useOrcaClaudeAgentStatusSettings: settings?.agentStatusHooksEnabled !== false
+        allowEmptyPromptLaunch: true
       })
     }
 
