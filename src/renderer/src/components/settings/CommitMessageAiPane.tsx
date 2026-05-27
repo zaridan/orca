@@ -1049,6 +1049,11 @@ export function CommitMessageAiPane({
         operation: 'pullRequest',
         label: 'PR details model',
         description: 'Use a different model for pull request title and description generation.'
+      },
+      {
+        operation: 'branchName',
+        label: 'Branch name model',
+        description: 'Use a different model for branch name generation.'
       }
     ]
     sections.push(
