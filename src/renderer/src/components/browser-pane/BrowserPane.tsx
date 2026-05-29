@@ -1778,10 +1778,8 @@ function RemoteBrowserPagePane({
     [closeMissingRemotePage, isCurrentRemoteStreamToken]
   )
 
-  useEffect(() => {
-    startRemoteStreamRef.current = startRemoteStream
-    restartRemoteStreamForViewportRef.current = restartRemoteStreamForViewport
-  }, [restartRemoteStreamForViewport, startRemoteStream])
+  startRemoteStreamRef.current = startRemoteStream
+  restartRemoteStreamForViewportRef.current = restartRemoteStreamForViewport
 
   useEffect(() => {
     return () => {
@@ -2555,6 +2553,9 @@ function BrowserPagePane({
   const initialBrowserUrlRef = useRef(browserTab.url)
   const browserTabUrlRef = useRef(browserTab.url)
   const activeLoadFailureRef = useRef<BrowserLoadError | null>(browserTab.loadError)
+  initialBrowserUrlRef.current = browserTab.url
+  browserTabUrlRef.current = browserTab.url
+  activeLoadFailureRef.current = browserTab.loadError
   // Why: CDP viewport emulation does not survive all renderer process swaps
   // (cross-origin navigations, crashes). We reapply on every dom-ready from
   // this ref so the persisted preset survives reloads without re-running the
@@ -2572,11 +2573,16 @@ function BrowserPagePane({
   const onSetUrlRef = useRef(onSetUrl)
   const addBrowserHistoryEntry = useAppStore((s) => s.addBrowserHistoryEntry)
   const addBrowserHistoryEntryRef = useRef(addBrowserHistoryEntry)
+  onUpdatePageStateRef.current = onUpdatePageState
+  onSetUrlRef.current = onSetUrl
+  addBrowserHistoryEntryRef.current = addBrowserHistoryEntry
   const [addressBarValue, setAddressBarValue] = useState(browserTab.url)
   const addressBarValueRef = useRef(browserTab.url)
+  addressBarValueRef.current = addressBarValue
   const [resourceNotice, setResourceNotice] = useState<string | null>(null)
   const [downloadState, setDownloadState] = useState<BrowserDownloadState | null>(null)
   const downloadStateRef = useRef<BrowserDownloadState | null>(null)
+  downloadStateRef.current = downloadState
   const [contextMenu, setContextMenu] = useState<{
     x: number
     y: number
@@ -2798,10 +2804,6 @@ function BrowserPagePane({
   }, [browserAnnotations.length, isActive, pendingAnnotationPayload])
 
   useEffect(() => {
-    initialBrowserUrlRef.current = browserTab.url
-  }, [browserTab.id, browserTab.url])
-
-  useEffect(() => {
     // Why: if the user is actively typing in the address bar (focused), do not
     // clobber their in-progress query when an async URL update lands (e.g., the
     // configured default URL resolving after a new tab opens). Syncing will
@@ -2811,22 +2813,6 @@ function BrowserPagePane({
     }
     setAddressBarValue(toDisplayUrl(browserTab.url))
   }, [browserTab.url])
-
-  useEffect(() => {
-    browserTabUrlRef.current = browserTab.url
-  }, [browserTab.url])
-
-  useEffect(() => {
-    activeLoadFailureRef.current = browserTab.loadError
-  }, [browserTab.loadError])
-
-  useEffect(() => {
-    addressBarValueRef.current = addressBarValue
-  }, [addressBarValue])
-
-  useEffect(() => {
-    downloadStateRef.current = downloadState
-  }, [downloadState])
 
   useEffect(() => {
     setResourceNotice(
@@ -3227,12 +3213,6 @@ function BrowserPagePane({
       webviewRef.current?.reloadIgnoringCache()
     })
   }, [isActive])
-
-  useEffect(() => {
-    onUpdatePageStateRef.current = onUpdatePageState
-    onSetUrlRef.current = onSetUrl
-    addBrowserHistoryEntryRef.current = addBrowserHistoryEntry
-  }, [onSetUrl, onUpdatePageState, addBrowserHistoryEntry])
 
   const syncNavigationState = useCallback(
     (webview: Electron.WebviewTag): void => {
