@@ -6,12 +6,13 @@ import { GIT_PANE_SEARCH_ENTRIES } from './git-search'
 import { SearchableSetting } from './SearchableSetting'
 import { matchesSettingsSearch } from './settings-search'
 import { GitHubRateLimitPanel } from '../github/github-rate-limit-display'
+import { AutoRenameBranchFromWorkSetting } from './AutoRenameBranchFromWorkSetting'
 
 export { GIT_PANE_SEARCH_ENTRIES }
 
 type GitPaneProps = {
   settings: GlobalSettings
-  updateSettings: (updates: Partial<GlobalSettings>) => void
+  updateSettings: (updates: Partial<GlobalSettings>) => void | Promise<void>
   displayedGitUsername: string
 }
 
@@ -134,43 +135,24 @@ export function GitPane({
     matchesSettingsSearch(searchQuery, {
       title: 'Auto-Rename Branch From Work',
       description: 'Rename the auto-generated branch based on the work once an agent starts.',
-      keywords: ['branch', 'rename', 'auto', 'creature name', 'agent', 'prompt', 'worktree']
+      keywords: [
+        'branch',
+        'rename',
+        'auto',
+        'creature name',
+        'agent',
+        'prompt',
+        'worktree',
+        'model',
+        'prompt',
+        'slug'
+      ]
     }) ? (
-      <SearchableSetting
+      <AutoRenameBranchFromWorkSetting
         key="auto-rename-branch-from-work"
-        title="Auto-Rename Branch From Work"
-        description="Rename the auto-generated branch based on the work once an agent starts."
-        keywords={['branch', 'rename', 'auto', 'creature name', 'agent', 'prompt', 'worktree']}
-        className="flex items-center justify-between gap-4 py-2"
-      >
-        <div className="space-y-0.5">
-          <Label>Auto-Rename Branch From Work</Label>
-          <p className="text-xs text-muted-foreground">
-            When an agent starts working in a new workspace, Orca renames its auto-generated branch
-            (e.g. <code>Nautilus</code>) to a short name summarizing the task. Only branches Orca
-            named itself are renamed, and never after they have been pushed. Uses the agent
-            configured for AI commit messages.
-          </p>
-        </div>
-        <button
-          role="switch"
-          aria-checked={settings.autoRenameBranchFromWork}
-          onClick={() =>
-            updateSettings({
-              autoRenameBranchFromWork: !settings.autoRenameBranchFromWork
-            })
-          }
-          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors ${
-            settings.autoRenameBranchFromWork ? 'bg-foreground' : 'bg-muted-foreground/30'
-          }`}
-        >
-          <span
-            className={`pointer-events-none block size-3.5 rounded-full bg-background shadow-sm transition-transform ${
-              settings.autoRenameBranchFromWork ? 'translate-x-4' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
-      </SearchableSetting>
+        settings={settings}
+        updateSettings={updateSettings}
+      />
     ) : null,
     matchesSettingsSearch(searchQuery, {
       title: 'GitHub API Budget',

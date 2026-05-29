@@ -23,7 +23,18 @@ export const GIT_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'Auto-Rename Branch From Work',
     description: 'Rename the auto-generated branch based on the work once an agent starts.',
-    keywords: ['branch', 'rename', 'auto', 'creature name', 'agent', 'prompt', 'worktree']
+    keywords: [
+      'branch',
+      'rename',
+      'auto',
+      'creature name',
+      'agent',
+      'prompt',
+      'worktree',
+      'model',
+      'prompt',
+      'slug'
+    ]
   },
   {
     title: 'GitHub API Budget',

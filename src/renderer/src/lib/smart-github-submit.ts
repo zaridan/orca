@@ -25,6 +25,7 @@ export type SmartGitHubSubmitResolution = {
 }
 
 export type SmartGitHubSubmitLookup = {
+  cacheScope?: string
   repoId: string
   repoPath: string
   intent: SmartGitHubSubmitIntent
@@ -80,15 +81,17 @@ export function getSmartGitHubSubmitIntent(input: string): SmartGitHubSubmitInte
 }
 
 function getSmartGitHubSubmitLookupCacheKey({
+  cacheScope,
   repoId,
   repoPath,
   intent
 }: {
+  cacheScope?: string
   repoId: string
   repoPath: string
   intent: SmartGitHubSubmitIntent
 }): string {
-  const repoScope = `${repoId}:${repoPath}`
+  const repoScope = `${cacheScope ?? 'local'}:${repoId}:${repoPath}`
   if (intent.kind === 'hash-number') {
     return `${repoScope}:hash:${intent.number}`
   }
@@ -98,13 +101,14 @@ function getSmartGitHubSubmitLookupCacheKey({
 }
 
 export function lookupSmartGitHubSubmitItem({
+  cacheScope,
   repoId,
   repoPath,
   intent,
   workItem,
   workItemByOwnerRepo
 }: SmartGitHubSubmitLookup): Promise<GitHubWorkItem | null> {
-  const key = getSmartGitHubSubmitLookupCacheKey({ repoId, repoPath, intent })
+  const key = getSmartGitHubSubmitLookupCacheKey({ cacheScope, repoId, repoPath, intent })
   const now = Date.now()
   const cached = smartGitHubSubmitLookupCache.get(key)
   if (cached && cached.expiresAt > now) {

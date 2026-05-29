@@ -154,7 +154,7 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     nestWorkspaces: true,
     workspaceDirHistory: [],
     refreshLocalBaseRefOnWorktreeCreate: false,
-    autoRenameBranchFromWork: false,
+    autoRenameBranchFromWork: true,
     branchPrefix: 'git-username',
     branchPrefixCustom: '',
     enableGitHubAttribution: false,

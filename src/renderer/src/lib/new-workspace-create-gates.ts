@@ -4,6 +4,7 @@ export type ComposerCreateGateInput = {
   creating: boolean
   shouldWaitForSetupCheck: boolean
   shouldWaitForIssueAutomationCheck: boolean
+  shouldWaitForSourceResolution: boolean
   requiresExplicitSetupChoice: boolean
   hasSetupDecision: boolean
   selectedRepoRequiresConnection: boolean
@@ -15,6 +16,7 @@ function hasBlockingCreateState(input: ComposerCreateGateInput): boolean {
     !input.repoId ||
     !input.workspaceSeedName ||
     input.creating ||
+    input.shouldWaitForSourceResolution ||
     input.selectedRepoRequiresConnection ||
     (input.requiresExplicitSetupChoice && !input.hasSetupDecision) ||
     input.sparseError !== null

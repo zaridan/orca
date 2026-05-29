@@ -11,6 +11,7 @@ const readyInput: ComposerCreateGateInput = {
   creating: false,
   shouldWaitForSetupCheck: false,
   shouldWaitForIssueAutomationCheck: false,
+  shouldWaitForSourceResolution: false,
   requiresExplicitSetupChoice: false,
   hasSetupDecision: false,
   selectedRepoRequiresConnection: false,
@@ -50,6 +51,9 @@ describe('new workspace create gates', () => {
     expect(getQuickComposerCreateDisabled({ ...readyInput, creating: true })).toBe(true)
     expect(
       getQuickComposerCreateDisabled({ ...readyInput, selectedRepoRequiresConnection: true })
+    ).toBe(true)
+    expect(
+      getQuickComposerCreateDisabled({ ...readyInput, shouldWaitForSourceResolution: true })
     ).toBe(true)
     expect(
       getQuickComposerCreateDisabled({

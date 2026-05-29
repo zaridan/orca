@@ -51,9 +51,12 @@ type NewWorkspaceComposerCardProps = {
   primaryActionLabel: string
   name: string
   onNameValueChange: (value: string) => void
+  smartSourceQuery: string
+  onSmartSourceQueryChange: (value: string, options?: { preserveName?: boolean }) => void
   onSmartGitHubItemSelect: (item: GitHubWorkItem) => void
   onSmartGitLabItemSelect: (item: GitLabWorkItem) => void
   onSmartBranchSelect: (refName: string, localBranchName: string) => void
+  onSmartBranchSearchPendingChange: (pending: boolean) => void
   onSmartLinearIssueSelect: (issue: LinearIssue) => void
   smartNameSelection: SmartWorkspaceNameSelection | null
   onClearSmartNameSelection: () => void
@@ -215,9 +218,12 @@ export default function NewWorkspaceComposerCard({
   primaryActionLabel,
   name,
   onNameValueChange,
+  smartSourceQuery,
+  onSmartSourceQueryChange,
   onSmartGitHubItemSelect,
   onSmartGitLabItemSelect,
   onSmartBranchSelect,
+  onSmartBranchSearchPendingChange,
   onSmartLinearIssueSelect,
   smartNameSelection,
   onClearSmartNameSelection,
@@ -395,9 +401,12 @@ export default function NewWorkspaceComposerCard({
             onRepoChange={onRepoChange}
             value={name}
             onValueChange={onNameValueChange}
+            sourceValue={smartSourceQuery}
+            onSourceValueChange={onSmartSourceQueryChange}
             onGitHubItemSelect={onSmartGitHubItemSelect}
             onGitLabItemSelect={onSmartGitLabItemSelect}
             onBranchSelect={onSmartBranchSelect}
+            onBranchSearchPendingChange={onSmartBranchSearchPendingChange}
             onLinearIssueSelect={onSmartLinearIssueSelect}
             selectedSource={smartNameSelection}
             onClearSelectedSource={onClearSmartNameSelection}
