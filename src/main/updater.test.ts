@@ -786,6 +786,36 @@ describe('updater', () => {
     expect(autoUpdaterMock.downloadUpdate).toHaveBeenCalledTimes(1)
   })
 
+  it('does not start the same active background download again after progress arrives', async () => {
+    autoUpdaterMock.checkForUpdates.mockImplementation(() => {
+      autoUpdaterMock.emit('checking-for-update')
+      queueMicrotask(() => {
+        autoUpdaterMock.emit('update-available', { version: '1.0.61' })
+      })
+      return Promise.resolve(undefined)
+    })
+    autoUpdaterMock.downloadUpdate.mockImplementation(() => new Promise(() => {}))
+
+    const mainWindow = { webContents: { send: vi.fn() } }
+
+    const { setupAutoUpdater, checkForUpdatesFromMenu } = await import('./updater')
+
+    setupAutoUpdater(mainWindow as never, { getLastUpdateCheckAt: () => Date.now() })
+    autoUpdaterMock.emit('checking-for-update')
+    autoUpdaterMock.emit('update-available', { version: '1.0.61' })
+
+    await vi.waitFor(() => {
+      expect(autoUpdaterMock.downloadUpdate).toHaveBeenCalledTimes(1)
+    })
+
+    autoUpdaterMock.emit('download-progress', { percent: 42 })
+    checkForUpdatesFromMenu()
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(autoUpdaterMock.downloadUpdate).toHaveBeenCalledTimes(1)
+  })
+
   it('preserves user initiation while a manual check auto-downloads', async () => {
     autoUpdaterMock.checkForUpdates.mockImplementation(() => {
       autoUpdaterMock.emit('checking-for-update')
@@ -954,6 +984,44 @@ describe('updater', () => {
       'updater:status',
       expect.objectContaining({ state: 'downloaded', version: '1.0.61' })
     )
+  })
+
+  it('ignores stale downloaded events while replacing a staged update', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'linux' })
+    autoUpdaterMock.downloadUpdate.mockImplementation(() => new Promise(() => {}))
+
+    const sendMock = vi.fn()
+    const mainWindow = { webContents: { send: sendMock } }
+
+    const { setupAutoUpdater, getUpdateStatus } = await import('./updater')
+
+    setupAutoUpdater(mainWindow as never, { getLastUpdateCheckAt: () => Date.now() })
+    autoUpdaterMock.emit('update-downloaded', { version: '1.0.61' })
+    sendMock.mockClear()
+
+    autoUpdaterMock.emit('checking-for-update')
+    autoUpdaterMock.emit('update-available', { version: '1.0.62' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    autoUpdaterMock.emit('update-downloaded', { version: '1.0.61' })
+
+    expect(sendMock).not.toHaveBeenCalledWith(
+      'updater:status',
+      expect.objectContaining({ state: 'downloaded', version: '1.0.61' })
+    )
+    expect(getUpdateStatus()).toEqual({
+      state: 'available',
+      version: '1.0.62',
+      changelog: null
+    })
+
+    autoUpdaterMock.emit('update-downloaded', { version: '1.0.62' })
+
+    expect(sendMock).toHaveBeenCalledWith('updater:status', {
+      state: 'downloaded',
+      version: '1.0.62',
+      releaseUrl: undefined
+    })
   })
 
   it('does not leak a nudge marker into a later ordinary update cycle', async () => {
@@ -1797,7 +1865,11 @@ describe('updater', () => {
     autoUpdaterMock.emit('update-downloaded', { version: '1.4.26' })
     sendMock.mockClear()
 
-    resolveNudge?.({ id: 'campaign-1', minVersion: '1.0.0' })
+    expect(resolveNudge).toBeTypeOf('function')
+    ;(resolveNudge as unknown as (nudge: { id: string; minVersion: string }) => void)({
+      id: 'campaign-1',
+      minVersion: '1.0.0'
+    })
 
     await vi.waitFor(() => {
       expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1)

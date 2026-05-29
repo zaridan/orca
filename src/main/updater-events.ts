@@ -18,9 +18,11 @@ const AUTO_UPDATE_RETRY_INTERVAL_MS = 60 * 60 * 1000
 type UpdaterHandlerContext = {
   autoUpdater: ElectronAutoUpdater
   clearBackgroundCheckLaunchPending: () => void
+  clearActiveUpdateDownload: (version?: string) => void
   clearAvailableUpdateContext: () => void
   clearStagedUpdateContext: () => void
   consumeMissingManifestPrereleaseFallbackResult: () => { userInitiated: boolean } | null
+  getActiveDownloadVersion: () => string | null
   getPublishingWindowLastGoodCheck: () => { lastGoodTag: string } | null
   getMissingManifestPrereleaseFallbackUserInitiated: () => boolean | null
   getCurrentStatus: () => UpdateStatus
@@ -43,6 +45,7 @@ type UpdaterHandlerContext = {
   sendStatus: (status: UpdateStatus) => void
   scheduleAutomaticUpdateCheck: (delayMs: number) => void
   startAvailableUpdateDownload: () => void
+  shouldAcceptDownloadedUpdate: (version: string) => boolean
   shouldSuppressMissingManifestPrereleaseFallbackEvent: (message: string, error: unknown) => boolean
   suppressMissingManifestPrereleaseFallbackPromiseFailure: (message: string) => void
   setAvailableReleaseUrl: (releaseUrl: string | null) => void
@@ -64,9 +67,11 @@ function getActionableUpdateUserInitiated(status: UpdateStatus): boolean | undef
 export function registerAutoUpdaterHandlers({
   autoUpdater,
   clearBackgroundCheckLaunchPending,
+  clearActiveUpdateDownload,
   clearAvailableUpdateContext,
   clearStagedUpdateContext,
   consumeMissingManifestPrereleaseFallbackResult,
+  getActiveDownloadVersion,
   getPublishingWindowLastGoodCheck,
   getMissingManifestPrereleaseFallbackUserInitiated,
   getCurrentStatus,
@@ -84,6 +89,7 @@ export function registerAutoUpdaterHandlers({
   sendStatus,
   scheduleAutomaticUpdateCheck,
   startAvailableUpdateDownload,
+  shouldAcceptDownloadedUpdate,
   shouldSuppressMissingManifestPrereleaseFallbackEvent,
   suppressMissingManifestPrereleaseFallbackPromiseFailure,
   setAvailableReleaseUrl,
@@ -96,7 +102,10 @@ export function registerAutoUpdaterHandlers({
   // Track Squirrel readiness so we don't show "ready to install" prematurely.
   if (process.platform === 'darwin') {
     nativeUpdater.on('update-downloaded', () => {
-      handleMacInstallerReady(hasNewerDownloadedVersion(), performQuitAndInstall, () => {
+      if (!hasNewerDownloadedVersion()) {
+        return
+      }
+      handleMacInstallerReady(true, performQuitAndInstall, () => {
         // If we were holding the 'downloaded' status, send it now — but only
         // when the staged version is actually newer than what's running.
         sendStatus({
@@ -188,10 +197,6 @@ export function registerAutoUpdaterHandlers({
       return
     }
 
-    // A newer feed result supersedes the staged installer; don't keep offering
-    // restart for an update we now know is stale.
-    clearStagedUpdateContext()
-
     // Why: fetching changelog in the main process avoids CORS issues that
     // would block a renderer-side fetch to onorca.dev, and ensures the
     // card can render immediately without an async loading gap.
@@ -277,23 +282,28 @@ export function registerAutoUpdaterHandlers({
     sendStatus({
       state: 'downloading',
       percent: Math.round(progress.percent),
-      version: getPendingInstallVersion(),
+      version: getActiveDownloadVersion() ?? getPendingInstallVersion(),
       ...(userInitiated ? { userInitiated: true } : {})
     })
   })
 
   autoUpdater.on('update-downloaded', (info) => {
     clearBackgroundCheckLaunchPending()
+    if (!shouldAcceptDownloadedUpdate(info.version)) {
+      return
+    }
     // Don't show the banner if the downloaded version isn't actually newer
     // than what's running. This catches the exact-same-version case as well
     // as stale cached updates from an older release.
     if (compareVersions(info.version, app.getVersion()) <= 0) {
       clearAvailableUpdateContext()
       clearStagedUpdateContext()
+      clearActiveUpdateDownload(info.version)
       sendStatus({ state: 'not-available' })
       return
     }
     markStagedUpdate(info.version, getKnownReleaseUrl())
+    clearActiveUpdateDownload(info.version)
     // On macOS, defer the 'downloaded' status until Squirrel.Mac has finished
     // processing the update via the localhost proxy. On other platforms,
     // the update is ready immediately after electron-updater downloads it.
@@ -323,7 +333,11 @@ export function registerAutoUpdaterHandlers({
     if (shouldSuppressMissingManifestPrereleaseFallbackEvent(message, err)) {
       return
     }
+    const statusAtError = getCurrentStatus()
     clearBackgroundCheckLaunchPending()
+    if (statusAtError.state !== 'checking') {
+      clearActiveUpdateDownload()
+    }
     resetMacInstallState()
     suppressMissingManifestPrereleaseFallbackPromiseFailure(message)
     const missingManifestFallback = consumeMissingManifestPrereleaseFallbackResult()
@@ -331,7 +345,7 @@ export function registerAutoUpdaterHandlers({
       (missingManifestFallback?.userInitiated ?? getUserInitiatedCheck()) ||
       getActionableUpdateUserInitiated(getCurrentStatus())
     setUserInitiatedCheck(false)
-    if (getCurrentStatus().state === 'checking') {
+    if (statusAtError.state === 'checking') {
       void sendCheckFailureStatus(message, wasUserInitiated || undefined, 'event', err)
       return
     }

@@ -91,6 +91,8 @@ export function UpdateCard() {
   const dismissUpdate = useAppStore((s) => s.dismissUpdate)
   const collapsed = useAppStore((s) => s.updateCardCollapsed)
   const setCollapsed = useAppStore((s) => s.setUpdateCardCollapsed)
+  const downloadIntentVersion = useAppStore((s) => s.updateDownloadIntentVersion)
+  const markDownloadIntent = useAppStore((s) => s.markUpdateDownloadIntent)
   const reassuranceSeen = useAppStore((s) => s.updateReassuranceSeen)
   const markReassuranceSeen = useAppStore((s) => s.markUpdateReassuranceSeen)
   const hasStartedDownload = useRef(false)
@@ -207,9 +209,13 @@ export function UpdateCard() {
   // ── Visibility gates ──────────────────────────────────────────────
 
   const isUserInitiated = 'userInitiated' in status && status.userInitiated
+  const isNudgeDriven = 'activeNudgeId' in status && Boolean(status.activeNudgeId)
   const cachedVersion = versionRef.current
+  const hasExplicitDownloadIntent =
+    cachedVersion !== null && downloadIntentVersion === cachedVersion
   const shouldShowDetailedErrorCard =
-    status.state === 'error' && (hasStartedDownload.current || cachedVersion !== null)
+    status.state === 'error' &&
+    (isUserInitiated || isNudgeDriven || hasStartedDownload.current || hasExplicitDownloadIntent)
 
   // Why: track whether the current check cycle was user-initiated so the
   // dismiss gate doesn't hide the result of an explicit "Check for Updates"
@@ -239,7 +245,6 @@ export function UpdateCard() {
     return null
   }
 
-  const isNudgeDriven = 'activeNudgeId' in status && Boolean(status.activeNudgeId)
   // Why: ordinary background checks now pre-download updates; keep that path
   // quiet until the user explicitly checks, while explicit/nudge cycles stay visible.
   if (
@@ -255,6 +260,7 @@ export function UpdateCard() {
     !userInitiatedCycleRef.current &&
     !isUserInitiated &&
     !hasStartedDownload.current &&
+    !hasExplicitDownloadIntent &&
     !isNudgeDriven
   ) {
     return null
@@ -263,6 +269,7 @@ export function UpdateCard() {
     status.state === 'downloaded' &&
     !userInitiatedCycleRef.current &&
     !hasStartedDownload.current &&
+    !hasExplicitDownloadIntent &&
     !isNudgeDriven &&
     !isUserInitiated
   ) {
@@ -293,7 +300,9 @@ export function UpdateCard() {
     versionRef.current &&
     dismissedVersion === versionRef.current &&
     !userInitiatedCycleRef.current &&
-    !isUserInitiated
+    !isUserInitiated &&
+    !hasExplicitDownloadIntent &&
+    !isNudgeDriven
   ) {
     if (status.state !== 'downloading' && status.state !== 'error') {
       return null
@@ -313,6 +322,9 @@ export function UpdateCard() {
 
   const handleUpdate = () => {
     hasStartedDownload.current = true
+    if (cachedVersion) {
+      markDownloadIntent(cachedVersion)
+    }
     // Why: clicking "Update" implies the user is not worried about interruption,
     // so dismiss the reassurance tip permanently.
     if (!reassuranceSeen) {

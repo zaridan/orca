@@ -6,6 +6,7 @@ import { getDefaultUIState } from '../../../shared/constants'
 import type { ChangelogData, UpdateStatus } from '../../../shared/types'
 import { createUISlice } from '../store/slices/ui'
 import type { AppState } from '../store/types'
+import { shouldShowUpdateStatusSegment } from './status-bar/update-status-segment-visibility'
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -231,6 +232,36 @@ describe('updateCardCollapsed', () => {
   })
 })
 
+// ── updateDownloadIntentVersion ─────────────────────────────────────
+
+describe('updateDownloadIntentVersion', () => {
+  it('marks the version whose download was explicitly started in the renderer', () => {
+    const store = createTestStore()
+
+    store.getState().markUpdateDownloadIntent('1.2.0')
+
+    expect(store.getState().updateDownloadIntentVersion).toBe('1.2.0')
+  })
+
+  it('clears explicit download intent on update cycle boundaries', () => {
+    const store = createTestStore()
+    store.getState().markUpdateDownloadIntent('1.2.0')
+
+    setState(store, { state: 'checking' })
+
+    expect(store.getState().updateDownloadIntentVersion).toBeNull()
+  })
+
+  it('clears explicit download intent when a different version becomes current', () => {
+    const store = createTestStore()
+    store.getState().markUpdateDownloadIntent('1.2.0')
+
+    setState(store, { state: 'downloading', percent: 10, version: '1.3.0' })
+
+    expect(store.getState().updateDownloadIntentVersion).toBeNull()
+  })
+})
+
 // ── markUpdateReassuranceSeen ────────────────────────────────────────
 
 describe('markUpdateReassuranceSeen', () => {
@@ -294,6 +325,7 @@ type VisibilityInput = {
   cachedVersion: string | null
   hasStartedDownload: boolean
   userInitiatedCycle?: boolean
+  downloadIntentVersion?: string | null
 }
 
 type VisibilityResult = 'hidden' | 'visible'
@@ -305,12 +337,16 @@ function computeVisibility(input: VisibilityInput): VisibilityResult {
     dismissedVersion,
     cachedVersion,
     hasStartedDownload,
-    userInitiatedCycle = false
+    userInitiatedCycle = false,
+    downloadIntentVersion = null
   } = input
   const isUserInitiated = 'userInitiated' in status && status.userInitiated
   const isNudgeDriven = 'activeNudgeId' in status && Boolean(status.activeNudgeId)
+  const hasExplicitDownloadIntent =
+    cachedVersion !== null && downloadIntentVersion === cachedVersion
   const shouldShowDetailedErrorCard =
-    status.state === 'error' && (hasStartedDownload || cachedVersion !== null)
+    status.state === 'error' &&
+    (isUserInitiated || isNudgeDriven || hasStartedDownload || hasExplicitDownloadIntent)
 
   if (status.state === 'checking' && !isUserInitiated) {
     return 'hidden'
@@ -329,6 +365,7 @@ function computeVisibility(input: VisibilityInput): VisibilityResult {
     !userInitiatedCycle &&
     !isUserInitiated &&
     !hasStartedDownload &&
+    !hasExplicitDownloadIntent &&
     !isNudgeDriven
   ) {
     return 'hidden'
@@ -337,6 +374,7 @@ function computeVisibility(input: VisibilityInput): VisibilityResult {
     status.state === 'downloaded' &&
     !userInitiatedCycle &&
     !hasStartedDownload &&
+    !hasExplicitDownloadIntent &&
     !isNudgeDriven &&
     !isUserInitiated
   ) {
@@ -351,7 +389,9 @@ function computeVisibility(input: VisibilityInput): VisibilityResult {
     effectiveVersion &&
     dismissedVersion === effectiveVersion &&
     !userInitiatedCycle &&
-    !isUserInitiated
+    !isUserInitiated &&
+    !hasExplicitDownloadIntent &&
+    !isNudgeDriven
   ) {
     if (status.state !== 'downloading' && status.state !== 'error') {
       return 'hidden'
@@ -535,6 +575,18 @@ describe('UpdateCard visibility gates', () => {
     ).toBe('visible')
   })
 
+  it('shows settings-initiated download progress even when the version was dismissed', () => {
+    expect(
+      computeVisibility({
+        status: { state: 'downloading', percent: 42, version: '1.2.0' },
+        dismissedVersion: '1.2.0',
+        cachedVersion: '1.2.0',
+        hasStartedDownload: false,
+        downloadIntentVersion: '1.2.0'
+      })
+    ).toBe('visible')
+  })
+
   it('shows nudge-driven background download progress', () => {
     expect(
       computeVisibility({
@@ -551,7 +603,7 @@ describe('UpdateCard visibility gates', () => {
     ).toBe('visible')
   })
 
-  it('hides downloaded when version is dismissed (Settings-initiated, not card)', () => {
+  it('hides downloaded when version is dismissed and no explicit download is active', () => {
     expect(
       computeVisibility({
         status: { state: 'downloaded', version: '1.2.0' },
@@ -560,6 +612,18 @@ describe('UpdateCard visibility gates', () => {
         hasStartedDownload: false
       })
     ).toBe('hidden')
+  })
+
+  it('shows settings-initiated downloaded state even when the version was dismissed', () => {
+    expect(
+      computeVisibility({
+        status: { state: 'downloaded', version: '1.2.0' },
+        dismissedVersion: '1.2.0',
+        cachedVersion: '1.2.0',
+        hasStartedDownload: false,
+        downloadIntentVersion: '1.2.0'
+      })
+    ).toBe('visible')
   })
 
   it('hides ordinary background downloaded updates until the user checks', () => {
@@ -617,13 +681,25 @@ describe('UpdateCard visibility gates', () => {
     ).toBe('visible')
   })
 
-  it('shows settings-initiated download errors when a version is cached', () => {
+  it('hides passive background download errors even when a version is cached', () => {
     expect(
       computeVisibility({
         status: { state: 'error', message: 'ENOSPC' },
         dismissedVersion: null,
         cachedVersion: '1.2.0',
         hasStartedDownload: false
+      })
+    ).toBe('hidden')
+  })
+
+  it('shows settings-initiated download errors when the download intent version is cached', () => {
+    expect(
+      computeVisibility({
+        status: { state: 'error', message: 'ENOSPC' },
+        dismissedVersion: null,
+        cachedVersion: '1.2.0',
+        hasStartedDownload: false,
+        downloadIntentVersion: '1.2.0'
       })
     ).toBe('visible')
   })
@@ -671,6 +747,48 @@ describe('UpdateCard visibility gates', () => {
         hasStartedDownload: false
       })
     ).toBe('hidden')
+  })
+})
+
+// ── Status-bar update segment gates ─────────────────────────────────
+
+describe('UpdateStatusSegment visibility gates', () => {
+  it('hides suppressed passive background download states', () => {
+    expect(
+      shouldShowUpdateStatusSegment({ state: 'downloading', percent: 50, version: '1.2.0' }, null)
+    ).toBe(false)
+    expect(shouldShowUpdateStatusSegment({ state: 'downloaded', version: '1.2.0' }, null)).toBe(
+      false
+    )
+  })
+
+  it('shows explicit and user-visible update states', () => {
+    expect(
+      shouldShowUpdateStatusSegment(
+        { state: 'downloading', percent: 50, version: '1.2.0' },
+        '1.2.0'
+      )
+    ).toBe(true)
+    expect(shouldShowUpdateStatusSegment({ state: 'downloaded', version: '1.2.0' }, '1.2.0')).toBe(
+      true
+    )
+    expect(shouldShowUpdateStatusSegment({ state: 'error', message: 'ENOSPC' }, '1.2.0')).toBe(true)
+    expect(
+      shouldShowUpdateStatusSegment(
+        { state: 'error', message: 'network', userInitiated: true },
+        null
+      )
+    ).toBe(true)
+    expect(
+      shouldShowUpdateStatusSegment(
+        { state: 'downloaded', version: '1.2.0', activeNudgeId: 'campaign-1' },
+        null
+      )
+    ).toBe(true)
+  })
+
+  it('hides passive background errors', () => {
+    expect(shouldShowUpdateStatusSegment({ state: 'error', message: 'network' }, null)).toBe(false)
   })
 })
 

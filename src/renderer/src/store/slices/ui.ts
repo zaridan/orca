@@ -595,6 +595,11 @@ export type UISlice = {
   // Resets every session and on every phase transition (see setUpdateStatus).
   updateCardCollapsed: boolean
   setUpdateCardCollapsed: (collapsed: boolean) => void
+  // Why: Settings calls updater.download() directly, so main may report the
+  // same status shape as a passive predownload. Track the user's renderer-side
+  // click intent by version so progress/errors stay visible only for that path.
+  updateDownloadIntentVersion: string | null
+  markUpdateDownloadIntent: (version: string) => void
   updateReassuranceSeen: boolean
   markUpdateReassuranceSeen: () => void
   isFullScreen: boolean
@@ -1334,7 +1339,10 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   setUpdateStatus: (status) => {
     const prevState = get().updateStatus.state
     const update: Partial<
-      Pick<UISlice, 'updateStatus' | 'updateChangelog' | 'updateCardCollapsed'>
+      Pick<
+        UISlice,
+        'updateStatus' | 'updateChangelog' | 'updateCardCollapsed' | 'updateDownloadIntentVersion'
+      >
     > = {
       updateStatus: status
     }
@@ -1352,6 +1360,13 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       // Why: reset on cycle-boundary states so stale rich content from a
       // previous update cycle cannot resurface.
       update.updateChangelog = null
+      update.updateDownloadIntentVersion = null
+    } else if (
+      'version' in status &&
+      get().updateDownloadIntentVersion !== null &&
+      get().updateDownloadIntentVersion !== status.version
+    ) {
+      update.updateDownloadIntentVersion = null
     }
     // For 'downloading', 'downloaded', 'error': leave updateChangelog untouched
     // so the card can keep showing rich content from the original 'available'.
@@ -1389,6 +1404,8 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     }),
   updateCardCollapsed: false,
   setUpdateCardCollapsed: (collapsed) => set({ updateCardCollapsed: collapsed }),
+  updateDownloadIntentVersion: null,
+  markUpdateDownloadIntent: (version) => set({ updateDownloadIntentVersion: version }),
   updateReassuranceSeen: false,
   markUpdateReassuranceSeen: () => {
     void window.api.ui.set({ updateReassuranceSeen: true }).catch(console.error)

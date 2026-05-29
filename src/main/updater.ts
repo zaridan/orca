@@ -84,10 +84,10 @@ let _getPendingUpdateNudgeId: (() => string | null) | null = null
 let _getDismissedUpdateNudgeId: (() => string | null) | null = null
 let _setPendingUpdateNudgeId: ((id: string | null) => void) | null = null
 let _setDismissedUpdateNudgeId: ((id: string | null) => void) | null = null
-// Why: guards against duplicate download() calls when both the card and
-// Settings trigger a download before the first download-progress event
-// flips the status to 'downloading'.
-let downloadInFlight = false
+// Why: updater events can briefly move back to 'available'/'checking' while a
+// background download is still active, so the duplicate-download guard must be
+// version-scoped instead of tied to the visible status.
+let activeDownloadVersion: string | null = null
 /** Guards against the macOS `activate` handler re-opening the old version
  *  while Squirrel's ShipIt is replacing the .app bundle. */
 let quittingForUpdate = false
@@ -117,6 +117,16 @@ function getStagedUpdateVersion(): string | null {
 function markStagedUpdate(version: string, releaseUrl?: string): void {
   stagedUpdateVersion = version
   stagedUpdateReleaseUrl = releaseUrl ?? null
+}
+
+function getActiveDownloadVersion(): string | null {
+  return activeDownloadVersion
+}
+
+function clearActiveUpdateDownload(version?: string): void {
+  if (!version || !activeDownloadVersion || compareVersions(version, activeDownloadVersion) >= 0) {
+    activeDownloadVersion = null
+  }
 }
 
 function clearPrereleaseFallbackContext(): void {
@@ -212,16 +222,6 @@ function sendStatus(status: UpdateStatus): void {
     clearPublishingWindowLastGoodCheck()
   }
 
-  // Why: reset the in-flight guard when the status moves past the
-  // window where duplicate download() calls are possible.
-  if (
-    decoratedStatus.state === 'downloading' ||
-    decoratedStatus.state === 'downloaded' ||
-    decoratedStatus.state === 'error' ||
-    decoratedStatus.state === 'idle'
-  ) {
-    downloadInFlight = false
-  }
   if (statusesEqual(currentStatus, decoratedStatus)) {
     return
   }
@@ -249,21 +249,59 @@ function getKnownReleaseUrl(): string | undefined {
 }
 
 function hasNewerDownloadedVersion(): boolean {
-  const version = stagedUpdateVersion ?? availableVersion
-  return version !== null && compareVersions(version, app.getVersion()) > 0
+  if (!stagedUpdateVersion || compareVersions(stagedUpdateVersion, app.getVersion()) <= 0) {
+    return false
+  }
+  // Why: a newer feed result means the older staged installer is stale until
+  // its replacement is actually downloaded; don't let macOS readiness or quit
+  // flows report/install the wrong version.
+  if (availableVersion && compareVersions(availableVersion, stagedUpdateVersion) > 0) {
+    return false
+  }
+  if (activeDownloadVersion && compareVersions(activeDownloadVersion, stagedUpdateVersion) > 0) {
+    return false
+  }
+  return true
 }
 
 function getPendingInstallVersion(): string {
-  if (availableVersion) {
-    return availableVersion
-  }
-  if (stagedUpdateVersion) {
+  if (hasNewerDownloadedVersion() && stagedUpdateVersion) {
     return stagedUpdateVersion
   }
   if (currentStatus.state === 'downloading' || currentStatus.state === 'downloaded') {
     return currentStatus.version
   }
   return ''
+}
+
+function getPendingDownloadVersion(): string | null {
+  if (availableVersion && compareVersions(availableVersion, app.getVersion()) > 0) {
+    return availableVersion
+  }
+  if (
+    (currentStatus.state === 'available' || currentStatus.state === 'downloading') &&
+    compareVersions(currentStatus.version, app.getVersion()) > 0
+  ) {
+    return currentStatus.version
+  }
+  return null
+}
+
+function hasNewerAvailableVersion(): boolean {
+  return getPendingDownloadVersion() !== null
+}
+
+function shouldAcceptDownloadedUpdate(version: string): boolean {
+  if (activeDownloadVersion && compareVersions(version, activeDownloadVersion) < 0) {
+    return false
+  }
+  if (availableVersion && compareVersions(version, availableVersion) < 0) {
+    return false
+  }
+  if (stagedUpdateVersion && compareVersions(version, stagedUpdateVersion) < 0) {
+    return false
+  }
+  return true
 }
 
 function getCurrentActionableUpdateUserInitiated(): boolean | undefined {
@@ -921,9 +959,11 @@ export function setupAutoUpdater(
 
   registerAutoUpdaterHandlers({
     autoUpdater,
+    clearActiveUpdateDownload,
     clearAvailableUpdateContext,
     clearStagedUpdateContext,
     consumeMissingManifestPrereleaseFallbackResult,
+    getActiveDownloadVersion,
     getMissingManifestPrereleaseFallbackUserInitiated,
     getPublishingWindowLastGoodCheck,
     getCurrentStatus: () => currentStatus,
@@ -943,6 +983,7 @@ export function setupAutoUpdater(
     sendStatus,
     scheduleAutomaticUpdateCheck,
     startAvailableUpdateDownload,
+    shouldAcceptDownloadedUpdate,
     clearBackgroundCheckLaunchPending,
     setAvailableReleaseUrl: (releaseUrl) => {
       availableReleaseUrl = releaseUrl
@@ -991,7 +1032,11 @@ export function setupAutoUpdater(
 }
 
 function startAvailableUpdateDownload(): void {
-  if (downloadInFlight) {
+  const targetVersion = getPendingDownloadVersion()
+  if (!targetVersion) {
+    return
+  }
+  if (activeDownloadVersion === targetVersion) {
     return
   }
   // Why: permit retry from 'error' when we still have a cached availableVersion —
@@ -1000,16 +1045,16 @@ function startAvailableUpdateDownload(): void {
   // download. Without this, the button would appear to do nothing.
   const canStart =
     currentStatus.state === 'available' ||
-    (currentStatus.state === 'error' && hasNewerDownloadedVersion())
+    (currentStatus.state === 'error' && hasNewerAvailableVersion())
   if (!canStart) {
     return
   }
-  downloadInFlight = true
+  activeDownloadVersion = targetVersion
   beginMacUpdateDownload()
   getAutoUpdater()
     .downloadUpdate()
     .catch((err) => {
-      downloadInFlight = false
+      clearActiveUpdateDownload(targetVersion)
       sendErrorStatus(String(err?.message ?? err), getCurrentActionableUpdateUserInitiated())
     })
 }
