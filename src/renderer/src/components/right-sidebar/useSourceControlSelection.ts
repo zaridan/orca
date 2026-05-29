@@ -91,21 +91,12 @@ export function useSourceControlSelection({
   const onOpenDiffRef = useRef(onOpenDiff)
   const shouldOpenAsSplitRef = useRef(shouldOpenAsSplit)
 
-  useEffect(() => {
-    flatEntriesRef.current = flatEntries
-  }, [flatEntries])
-
-  useEffect(() => {
-    anchorKeyRef.current = anchorKey
-  }, [anchorKey])
-
-  useEffect(() => {
-    selectedKeysRef.current = selectedKeys
-  }, [selectedKeys])
-
-  useEffect(() => {
-    onOpenDiffRef.current = onOpenDiff
-  }, [onOpenDiff])
+  // Why: source-control row handlers stay stable for desktop-like list
+  // selection, while range/context actions must see the latest visible rows.
+  flatEntriesRef.current = flatEntries
+  anchorKeyRef.current = anchorKey
+  selectedKeysRef.current = selectedKeys
+  onOpenDiffRef.current = onOpenDiff
 
   useEffect(() => {
     shouldOpenAsSplitRef.current = shouldOpenAsSplit
