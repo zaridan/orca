@@ -141,11 +141,16 @@ describe('MacOSNativeProviderClient', () => {
     const firstRejection = expect(firstCall).rejects.toThrow('active helper failed')
     await vi.waitFor(() => expect(sockets).toHaveLength(1))
     const firstSocket = sockets[0]!
+    const firstSocketDirectory = mkdtempSyncMock.mock.results[0]?.value as string
     await vi.waitFor(() => expect(firstSocket.writes).toHaveLength(1))
 
     firstSocket.emit('error', new Error('active helper failed'))
     await firstRejection
     expect(firstSocket.destroyed).toBe(true)
+    expect(rmSyncMock).toHaveBeenCalledWith(firstSocketDirectory, {
+      recursive: true,
+      force: true
+    })
 
     const secondCall = client.capabilities()
     await vi.waitFor(() => expect(sockets).toHaveLength(2))
