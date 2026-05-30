@@ -1,3 +1,5 @@
+/* eslint-disable max-lines -- Why: filesystem authorization shares module-local
+ * root caches with the path validation entrypoints that consume them. */
 import { resolve, relative, dirname, basename, isAbsolute } from 'path'
 import { realpathSync } from 'fs'
 import { realpath } from 'fs/promises'
@@ -102,7 +104,9 @@ export async function rebuildAuthorizedRootsCache(store: Store): Promise<void> {
 
         const worktrees = await listRepoWorktrees(repo)
         const worktreeRoots = worktrees.map((wt) => resolve(wt.path))
-        roots.push(...worktreeRoots)
+        for (const worktreeRoot of worktreeRoots) {
+          roots.push(worktreeRoot)
+        }
       } catch (error) {
         // Why: a single inaccessible repo (EACCES, EIO, etc.) must not break
         // the entire cache rebuild — that would disable File Explorer and
