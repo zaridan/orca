@@ -77,8 +77,10 @@ export class RuntimeRpcCallQueuePool {
       }
       // Why: runtime streams and worktree actions share transport capacity with
       // per-card status refreshes, so decorative calls must not stampede it.
-      void call
-        .run()
+      // Invoke through the promise chain so sync validation errors free the
+      // queue slot just like async transport failures.
+      void Promise.resolve()
+        .then(call.run)
         .then(call.resolve, call.reject)
         .finally(() => {
           queue.active = Math.max(0, queue.active - 1)
