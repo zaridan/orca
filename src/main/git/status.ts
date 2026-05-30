@@ -1158,7 +1158,13 @@ async function listTrackedPathSpecs(
         cwd: worktreePath
       }
     )
-    trackedPaths.push(...stdout.split('\0').filter(Boolean))
+    // Why: a selected directory can expand to more tracked descendants than
+    // V8 allows as spread arguments.
+    for (const trackedPath of stdout.split('\0')) {
+      if (trackedPath) {
+        trackedPaths.push(trackedPath)
+      }
+    }
   }
   return trackedPaths
 }

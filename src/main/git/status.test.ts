@@ -210,6 +210,24 @@ describe('bulk git helpers', () => {
     expect(rmMock).not.toHaveBeenCalled()
   })
 
+  it('handles bulk discard directories with many tracked descendants', async () => {
+    const trackedDescendants = Array.from({ length: 125_000 }, (_, index) => `src/file-${index}.ts`)
+    gitExecFileAsyncMock
+      .mockResolvedValueOnce({ stdout: `${trackedDescendants.join('\0')}\0` })
+      .mockResolvedValueOnce({ stdout: '' })
+
+    await bulkDiscardChanges('/repo', ['src'])
+
+    expect(gitExecFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      ['restore', '--worktree', '--source=HEAD', '--', ':(literal)src'],
+      {
+        cwd: '/repo'
+      }
+    )
+    expect(rmMock).not.toHaveBeenCalled()
+  })
+
   it('rejects bulk discard paths that traverse outside the worktree', async () => {
     await expect(bulkDiscardChanges('/repo', ['src/file.ts', '../outside.txt'])).rejects.toThrow(
       'resolves outside the worktree'
