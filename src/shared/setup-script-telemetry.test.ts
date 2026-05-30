@@ -57,15 +57,15 @@ describe('setup script telemetry payload builders', () => {
     })
   })
 
-  it('builds generation action telemetry for the no-candidate state', () => {
+  it('builds configure action telemetry for the no-candidate state', () => {
     expect(
       buildSetupScriptPromptActionTelemetry({
-        action: 'generate_setup_completed',
+        action: 'configure_clicked',
         candidate: null,
         hasSharedHooks: false
       })
     ).toEqual({
-      action: 'generate_setup_completed',
+      action: 'configure_clicked',
       mode: 'configure_needed',
       file_count_bucket: '0',
       unsupported_field_count_bucket: '0',

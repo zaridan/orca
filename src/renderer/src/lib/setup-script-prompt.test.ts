@@ -4,6 +4,7 @@ import type { Repo } from '../../../shared/types'
 import {
   buildImportedHookSettings,
   filterSetupScriptPromptDismissalsToValidRepos,
+  formatCandidateProvenance,
   getSetupScriptPromptDismissalKey,
   ignoresSharedSetupScripts,
   inspectSetupScriptPromptState,
@@ -171,5 +172,24 @@ describe('setup script prompt inspection', () => {
         new Set(['repo-1'])
       )
     ).toEqual([getSetupScriptPromptDismissalKey('repo-1')])
+  })
+
+  it('formats setup candidate provenance for sidebar review copy', () => {
+    expect(
+      formatCandidateProvenance({
+        provider: 'package-manager',
+        label: 'package manager',
+        files: ['pnpm-lock.yaml', 'package.json'],
+        setup: 'pnpm install'
+      })
+    ).toBe('pnpm-lock.yaml')
+    expect(
+      formatCandidateProvenance({
+        provider: 'codex',
+        label: 'Codex environment',
+        files: ['.codex/environments/environment.toml', 'package.json'],
+        setup: 'pnpm install'
+      })
+    ).toBe('.codex/environments/environment.toml and package.json')
   })
 })

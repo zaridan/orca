@@ -1,4 +1,5 @@
 import { inspectCodexEnvironmentConfig } from './setup-script-import-codex-environment'
+import { inspectPackageManagerSetupCandidate } from './setup-script-package-manager-suggestion'
 import type { SetupScriptImportProvider } from './setup-script-import-providers'
 
 export type SetupScriptImportCandidate = {
@@ -24,7 +25,8 @@ export async function inspectSetupScriptImportCandidates(
     inspectSupersetConfig(readFile),
     inspectConductorConfig(readFile),
     inspectCodexEnvironmentConfig(readFile),
-    inspectCmuxConfig(readFile)
+    inspectCmuxConfig(readFile),
+    inspectPackageManagerSetupCandidate(readFile)
   ])
   return candidates.filter(
     (candidate): candidate is SetupScriptImportCandidate => candidate != null

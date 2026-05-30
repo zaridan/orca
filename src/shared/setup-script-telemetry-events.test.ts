@@ -29,8 +29,9 @@ describe('setup script prompt schemas', () => {
     (action) => {
       const parsed = eventSchemas.setup_script_prompt_action.safeParse({
         action,
-        mode: 'configure_needed',
-        file_count_bucket: '0',
+        mode: 'import_available',
+        provider: 'package-manager',
+        file_count_bucket: '2-3',
         unsupported_field_count_bucket: '0',
         has_shared_hooks: false
       })
@@ -101,7 +102,8 @@ describe('setup script prompt schemas', () => {
       'superset',
       'conductor',
       'codex',
-      'cmux'
+      'cmux',
+      'package-manager'
     ])
   })
 })

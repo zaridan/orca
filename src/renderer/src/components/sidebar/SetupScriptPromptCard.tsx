@@ -1,16 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Download, LoaderCircle, RefreshCw, Settings, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAppStore } from '@/store'
-import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { track } from '@/lib/telemetry'
-import { cn } from '@/lib/utils'
 import { getRepositoryLocalCommandsSectionId } from '@/components/settings/repository-settings-targets'
-import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
-import SetupScriptGenerationAction from './SetupScriptGenerationAction'
 import {
   buildImportedHookSettings,
+  formatCandidateProvenance,
   formatCandidateSource,
   isSetupScriptPromptDismissed,
   ignoresSharedSetupScripts,
@@ -19,12 +14,54 @@ import {
 } from '@/lib/setup-script-prompt'
 import { checkRuntimeHooks, inspectRuntimeSetupScriptImports } from '@/runtime/runtime-hooks-client'
 import { isGitRepoKind } from '../../../../shared/repo-kind'
+import type { SetupScriptImportCandidate } from '../../../../shared/setup-script-imports'
 import {
   buildSetupScriptPromptActionTelemetry,
   buildSetupScriptPromptTelemetry
 } from '../../../../shared/setup-script-telemetry'
+import {
+  ConfigureOnlyAction,
+  DetectedSetupPreview,
+  DismissButton,
+  InspectionErrorActions,
+  PackageManagerActions,
+  SaveLocalSetupAction,
+  SetupScriptPromptBody
+} from './SetupScriptPromptCardViews'
 
 type PromptState = SetupScriptPromptInspection
+
+type SavedInProjectSettingsToastProps = {
+  onOpenSettings: () => void
+}
+
+function SavedInProjectSettingsToast({
+  onOpenSettings
+}: SavedInProjectSettingsToastProps): React.JSX.Element {
+  return (
+    <span>
+      Saved in this{' '}
+      <button
+        type="button"
+        className="rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        onClick={onOpenSettings}
+      >
+        project&apos;s settings
+      </button>
+    </span>
+  )
+}
+
+function showSavedInProjectSettingsToast(input: {
+  onOpenSettings: () => void
+  description?: React.ReactNode
+}): void {
+  // Why: the save confirmation is also the fastest path back to the exact
+  // local setup editor the user just changed.
+  toast.success(<SavedInProjectSettingsToast onOpenSettings={input.onOpenSettings} />, {
+    description: input.description
+  })
+}
 
 function SetupScriptPromptCard(): React.JSX.Element | null {
   const sidebarOpen = useAppStore((s) => s.sidebarOpen)
@@ -38,6 +75,7 @@ function SetupScriptPromptCard(): React.JSX.Element | null {
   const dismissedRepoIds = useAppStore((s) => s.setupScriptPromptDismissedRepoIds)
   const dismissSetupScriptPrompt = useAppStore((s) => s.dismissSetupScriptPrompt)
   const [promptState, setPromptState] = useState<PromptState | null>(null)
+  const [detectedSetupDraft, setDetectedSetupDraft] = useState('')
   const [isImporting, setIsImporting] = useState(false)
   const [inspectionRetryKey, setInspectionRetryKey] = useState(0)
   const trackedPromptKeysRef = useRef<Set<string>>(new Set())
@@ -53,6 +91,7 @@ function SetupScriptPromptCard(): React.JSX.Element | null {
   useEffect(() => {
     if (!sidebarOpen || !activeRepo || !isGitRepoKind(activeRepo) || isDismissed) {
       setPromptState(null)
+      setDetectedSetupDraft('')
       return
     }
 
@@ -68,6 +107,11 @@ function SetupScriptPromptCard(): React.JSX.Element | null {
       })
       if (!cancelled) {
         setPromptState(nextState)
+        setDetectedSetupDraft(
+          nextState.status === 'ok' && nextState.candidate?.provider === 'package-manager'
+            ? nextState.candidate.setup
+            : ''
+        )
       }
     }
 
@@ -173,76 +217,126 @@ function SetupScriptPromptCard(): React.JSX.Element | null {
     }
   }, [activeRepo, dismissSetupScriptPrompt, promptState])
 
+  const saveSetupCandidate = useCallback(
+    async (input: {
+      candidate: SetupScriptImportCandidate
+      hasSharedHooks: boolean
+      actionPrefix: 'generate_setup' | 'import'
+    }) => {
+      const { candidate, hasSharedHooks, actionPrefix } = input
+      if (!activeRepo) {
+        return
+      }
+      setIsImporting(true)
+      try {
+        const importedRepoId = activeRepo.id
+        const nextSettings = buildImportedHookSettings(activeRepo, candidate, hasSharedHooks)
+        const didUpdate = await updateRepo(activeRepo.id, { hookSettings: nextSettings })
+        if (!didUpdate) {
+          track(
+            'setup_script_prompt_action',
+            buildSetupScriptPromptActionTelemetry({
+              action: actionPrefix === 'generate_setup' ? 'generate_setup_failed' : 'import_failed',
+              candidate,
+              hasSharedHooks
+            })
+          )
+          toast.error('Failed to save setup script')
+          return
+        }
+        track(
+          'setup_script_prompt_action',
+          buildSetupScriptPromptActionTelemetry({
+            action:
+              actionPrefix === 'generate_setup' ? 'generate_setup_completed' : 'import_completed',
+            candidate,
+            hasSharedHooks
+          })
+        )
+        if (actionPrefix === 'generate_setup') {
+          // Why: the user has already reviewed the detected script in the
+          // card; after saving, close the prompt instead of showing a second
+          // confirmation panel.
+          setPromptState((current) =>
+            current?.repoId === activeRepo.id && current.status === 'ok'
+              ? { ...current, hasEffectiveSetup: true }
+              : current
+          )
+          showSavedInProjectSettingsToast({
+            onOpenSettings: () => openLocalCommandSettings(importedRepoId),
+            description: 'Orca will run this command each time a new worktree is created.'
+          })
+          return
+        }
+        setPromptState((current) =>
+          current?.repoId === activeRepo.id && current.status === 'ok'
+            ? { ...current, hasEffectiveSetup: true }
+            : current
+        )
+        const skippedCount = candidate.unsupportedFields?.length ?? 0
+        showSavedInProjectSettingsToast({
+          onOpenSettings: () => openLocalCommandSettings(importedRepoId),
+          description:
+            skippedCount > 0
+              ? `${skippedCount} unsupported field${skippedCount === 1 ? '' : 's'} skipped. Saved locally; move it to orca.yaml later to share it.`
+              : 'Move it to orca.yaml later to share it.'
+        })
+      } catch (error) {
+        track(
+          'setup_script_prompt_action',
+          buildSetupScriptPromptActionTelemetry({
+            action: actionPrefix === 'generate_setup' ? 'generate_setup_failed' : 'import_failed',
+            candidate,
+            hasSharedHooks
+          })
+        )
+        console.warn('[setup-script-prompt] Failed to save setup script:', error)
+        toast.error('Failed to save setup script')
+      } finally {
+        setIsImporting(false)
+      }
+    },
+    [activeRepo, openLocalCommandSettings, updateRepo]
+  )
+
   const handleImport = useCallback(async () => {
     if (!activeRepo || promptState?.status !== 'ok' || !promptState.candidate) {
       return
     }
-    setIsImporting(true)
-    try {
-      const importedRepoId = activeRepo.id
-      const nextSettings = buildImportedHookSettings(
-        activeRepo,
-        promptState.candidate,
-        promptState.hasSharedHooks
-      )
-      const didUpdate = await updateRepo(activeRepo.id, { hookSettings: nextSettings })
-      if (!didUpdate) {
-        track(
-          'setup_script_prompt_action',
-          buildSetupScriptPromptActionTelemetry({
-            action: 'import_failed',
-            candidate: promptState.candidate,
-            hasSharedHooks: promptState.hasSharedHooks
-          })
-        )
-        toast.error('Failed to import setup script')
-        return
-      }
-      track(
-        'setup_script_prompt_action',
-        buildSetupScriptPromptActionTelemetry({
-          action: 'import_completed',
-          candidate: promptState.candidate,
-          hasSharedHooks: promptState.hasSharedHooks
-        })
-      )
-      setPromptState((current) =>
-        current?.repoId === activeRepo.id && current.status === 'ok'
-          ? { ...current, hasEffectiveSetup: true }
-          : current
-      )
-      const skippedCount = promptState.candidate.unsupportedFields?.length ?? 0
-      toast.success('Setup script imported', {
-        description:
-          skippedCount > 0
-            ? `${skippedCount} unsupported field${skippedCount === 1 ? '' : 's'} skipped. Saved to this repo's local settings.`
-            : "Saved to this repo's local settings.",
-        action: {
-          label: 'View in Settings',
-          onClick: () => openLocalCommandSettings(importedRepoId)
+    const isPackageManagerCandidate = promptState.candidate.provider === 'package-manager'
+    const actionPrefix = isPackageManagerCandidate ? 'generate_setup' : 'import'
+    const candidate = isPackageManagerCandidate
+      ? {
+          ...promptState.candidate,
+          setup: detectedSetupDraft.trim()
         }
-      })
-    } catch (error) {
+      : promptState.candidate
+    if (!candidate.setup) {
+      toast.error('Setup script cannot be empty')
+      return
+    }
+    if (actionPrefix === 'generate_setup') {
       track(
         'setup_script_prompt_action',
         buildSetupScriptPromptActionTelemetry({
-          action: 'import_failed',
-          candidate: promptState.candidate,
+          action: 'generate_setup_clicked',
+          candidate,
           hasSharedHooks: promptState.hasSharedHooks
         })
       )
-      console.warn('[setup-script-prompt] Failed to import setup script:', error)
-      toast.error('Failed to import setup script')
-    } finally {
-      setIsImporting(false)
     }
-  }, [activeRepo, openLocalCommandSettings, promptState, updateRepo])
+    await saveSetupCandidate({
+      candidate,
+      hasSharedHooks: promptState.hasSharedHooks,
+      actionPrefix
+    })
+  }, [activeRepo, detectedSetupDraft, promptState, saveSetupCandidate])
+
+  if (!sidebarOpen || !activeRepo || !isGitRepoKind(activeRepo) || isDismissed) {
+    return null
+  }
 
   if (
-    !sidebarOpen ||
-    !activeRepo ||
-    !isGitRepoKind(activeRepo) ||
-    isDismissed ||
     promptState?.repoId !== activeRepo.id ||
     (promptState.status === 'ok' && promptState.hasEffectiveSetup)
   ) {
@@ -251,120 +345,52 @@ function SetupScriptPromptCard(): React.JSX.Element | null {
 
   const isInspectionError = promptState.status === 'error'
   const candidate = promptState.status === 'ok' ? promptState.candidate : null
+  const isPackageManagerSuggestion = candidate?.provider === 'package-manager'
   const sharedSetupIgnored =
     promptState.status === 'ok' && candidate === null && ignoresSharedSetupScripts(activeRepo)
-  const title = 'Setup scripts'
   const candidateSource = candidate ? formatCandidateSource(candidate) : null
+  const candidateProvenance = candidate ? formatCandidateProvenance(candidate) : null
 
   return (
     <div className="px-3 pb-2">
       <div className="rounded-lg border border-sidebar-border bg-sidebar-accent p-3 text-sidebar-accent-foreground shadow-xs">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-semibold leading-snug">{title}</p>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label="Dismiss setup scripts"
-                className="-mr-1 text-muted-foreground"
-                onClick={handleDismiss}
-              >
-                <X className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top" sideOffset={4}>
-              Dismiss
-            </TooltipContent>
-          </Tooltip>
+          <p className="text-sm font-semibold leading-snug">Add a setup script</p>
+          <DismissButton onDismiss={handleDismiss} />
         </div>
 
         <p className="mt-1 text-xs leading-snug text-muted-foreground">
-          {isInspectionError ? (
-            <>Couldn&apos;t verify this repo&apos;s setup script right now.</>
-          ) : sharedSetupIgnored ? (
-            <>
-              This repo is set to ignore <code>orca.yaml</code> setup scripts. Configure a local
-              setup command or change the script source in Settings.
-            </>
-          ) : candidateSource ? (
-            <>
-              Detected setup config from <span className="break-words">{candidateSource}</span>.
-              Import it so every workspace starts ready automatically.
-            </>
-          ) : (
-            <>
-              A setup script installs dependencies and prepares each new workspace the same way, so
-              agents and teammates start from a ready{' '}
-              <span className="inline-flex items-center gap-1.5 align-baseline px-1.5 py-0.5 rounded-[4px] bg-accent border border-border dark:bg-accent/50 dark:border-border/60">
-                <RepoBadgeMark color={activeRepo.badgeColor} />
-                <span className="text-[10px] font-semibold text-foreground truncate max-w-[8rem] leading-none lowercase">
-                  {activeRepo.displayName}
-                </span>
-              </span>
-            </>
-          )}
+          <SetupScriptPromptBody
+            repo={activeRepo}
+            isInspectionError={isInspectionError}
+            sharedSetupIgnored={sharedSetupIgnored}
+            isPackageManagerSuggestion={Boolean(isPackageManagerSuggestion && candidate)}
+            candidateSource={candidateSource}
+          />
         </p>
 
-        {isInspectionError ? (
-          <div className="mt-3 flex gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 flex-1 text-xs"
-              onClick={handleRetryInspection}
-            >
-              <RefreshCw className="size-3.5" />
-              <span className="truncate">Retry</span>
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-xs"
-              onClick={handleConfigure}
-            >
-              <Settings className="size-3.5" />
-              <span className="sr-only">Settings</span>
-            </Button>
-          </div>
-        ) : sharedSetupIgnored ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="mt-3 h-7 w-full text-xs"
-            onClick={handleConfigure}
-          >
-            <Settings className="size-3.5" />
-            <span className="truncate">Configure</span>
-          </Button>
-        ) : candidate ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="mt-3 h-7 w-full text-xs"
-            onClick={() => void handleImport()}
-            disabled={isImporting}
-          >
-            {isImporting ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
-            ) : (
-              <Download className="size-3.5" />
-            )}
-            <span className={cn('truncate', isImporting && 'text-muted-foreground')}>
-              Import setup
-            </span>
-          </Button>
-        ) : promptState.status === 'ok' ? (
-          <SetupScriptGenerationAction
-            repo={activeRepo}
-            hasSharedHooks={promptState.hasSharedHooks}
-            isImporting={isImporting}
+        {!isInspectionError && !sharedSetupIgnored && candidate && isPackageManagerSuggestion ? (
+          <DetectedSetupPreview
+            setup={detectedSetupDraft}
+            onSetupChange={setDetectedSetupDraft}
+            provenance={candidateProvenance}
           />
+        ) : null}
+
+        {isInspectionError ? (
+          <InspectionErrorActions onRetry={handleRetryInspection} onConfigure={handleConfigure} />
+        ) : sharedSetupIgnored ? (
+          <ConfigureOnlyAction onConfigure={handleConfigure} />
+        ) : candidate && isPackageManagerSuggestion ? (
+          <PackageManagerActions
+            isSaving={isImporting}
+            onSave={() => void handleImport()}
+            onConfigure={handleConfigure}
+          />
+        ) : candidate ? (
+          <SaveLocalSetupAction isSaving={isImporting} onSave={() => void handleImport()} />
+        ) : promptState.status === 'ok' ? (
+          <ConfigureOnlyAction onConfigure={handleConfigure} />
         ) : null}
       </div>
     </div>

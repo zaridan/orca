@@ -156,3 +156,26 @@ export function formatCandidateSource(candidate: SetupScriptImportCandidate): st
     ? `${candidate.label} (${primaryFile} +${remainingFiles.length})`
     : `${candidate.label} (${primaryFile})`
 }
+
+// Why: card provenance shows the file(s) we matched, not the provider label.
+// For a single file we just print its name; for two we join with "and"; for
+// more we keep the leading file and summarize the rest as "+N more".
+export function formatCandidateProvenance(candidate: SetupScriptImportCandidate): string | null {
+  if (candidate.provider === 'package-manager') {
+    const lockfile = candidate.files.find((file) => file !== 'package.json')
+    if (lockfile) {
+      return lockfile
+    }
+  }
+  const [primaryFile, secondaryFile, ...rest] = candidate.files
+  if (!primaryFile) {
+    return null
+  }
+  if (!secondaryFile) {
+    return primaryFile
+  }
+  if (rest.length === 0) {
+    return `${primaryFile} and ${secondaryFile}`
+  }
+  return `${primaryFile} +${rest.length + 1} more`
+}
