@@ -34,6 +34,7 @@ import { useActiveWorktree } from '../../store/selectors'
 import { Button } from '../ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
 import { Label } from '../ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { SearchableSetting } from './SearchableSetting'
 
@@ -118,7 +119,6 @@ export function AutoRenameBranchFromWorkSetting({
   latestConfigRef.current = config
   const settingsWriteQueueRef = useRef<Promise<void>>(Promise.resolve())
   const [optionsOpen, setOptionsOpen] = useState(false)
-  const [builtInPromptOpen, setBuiltInPromptOpen] = useState(false)
   const persistedBranchNamePrompt = config.instructionsByOperation.branchName ?? ''
   const [branchNamePromptDraft, setBranchNamePromptDraft] = useState(persistedBranchNamePrompt)
   const [isSavingPrompt, setIsSavingPrompt] = useState(false)
@@ -326,77 +326,75 @@ export function AutoRenameBranchFromWorkSetting({
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div className="mt-2 space-y-3 rounded-md border border-border/60 bg-muted/20 px-3 py-3">
-            <Collapsible open={builtInPromptOpen} onOpenChange={setBuiltInPromptOpen}>
-              <div className="space-y-2">
-                <div className="space-y-0.5">
-                  <Label htmlFor="git-auto-rename-branch-name-prompt">Branch name prompt</Label>
-                  <p className="text-xs text-muted-foreground">
-                    Appended to Orca&apos;s{' '}
-                    <CollapsibleTrigger asChild>
+            <div className="space-y-2">
+              <div className="space-y-0.5">
+                <Label htmlFor="git-auto-rename-branch-name-prompt">Branch name prompt</Label>
+                <p className="text-xs text-muted-foreground">
+                  Appended to Orca&apos;s{' '}
+                  <Popover>
+                    <PopoverTrigger asChild>
                       <button
                         type="button"
-                        className="inline-flex items-center gap-0.5 rounded-sm font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        className="inline rounded-sm font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
                         built-in branch-name prompt
-                        <ChevronDown
-                          className={cn(
-                            'size-3 transition-transform',
-                            builtInPromptOpen && 'rotate-180'
-                          )}
-                        />
                       </button>
-                    </CollapsibleTrigger>
-                    . Orca still forces the result to be a short lowercase kebab-case name.
-                  </p>
-                </div>
-                <textarea
-                  id="git-auto-rename-branch-name-prompt"
-                  rows={4}
-                  value={branchNamePromptDraft}
-                  onChange={(event) => setBranchNamePromptDraft(event.target.value)}
-                  placeholder="Prefer domain nouns from the task, avoid ticket IDs, and keep names reviewer-friendly."
-                  className="w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-1 focus-visible:ring-ring"
-                />
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[11px] text-muted-foreground">
-                    {branchNamePromptDirty ? 'Unsaved changes' : 'Saved'}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    {branchNamePromptDirty ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        onClick={onDiscardPrompt}
-                        disabled={isSavingPrompt}
-                      >
-                        Discard
-                      </Button>
-                    ) : null}
+                    </PopoverTrigger>
+                    <PopoverContent
+                      align="start"
+                      side="bottom"
+                      className="w-[520px] max-w-[calc(100vw-2rem)] p-3"
+                    >
+                      <div className="space-y-2">
+                        <p className="text-xs text-muted-foreground">
+                          Your Branch name prompt is appended as{' '}
+                          <code className="font-mono">Additional user prompt</code>.
+                        </p>
+                        <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                          {BUILT_IN_BRANCH_NAME_PROMPT}
+                        </pre>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  . Orca still forces the result to be a short lowercase kebab-case name.
+                </p>
+              </div>
+              <textarea
+                id="git-auto-rename-branch-name-prompt"
+                rows={4}
+                value={branchNamePromptDraft}
+                onChange={(event) => setBranchNamePromptDraft(event.target.value)}
+                placeholder="Prefer domain nouns from the task, avoid ticket IDs, and keep names reviewer-friendly."
+                className="w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[11px] text-muted-foreground">
+                  {branchNamePromptDirty ? 'Unsaved changes' : 'Saved'}
+                </p>
+                <div className="flex items-center gap-2">
+                  {branchNamePromptDirty ? (
                     <Button
                       type="button"
-                      variant="secondary"
+                      variant="ghost"
                       size="xs"
-                      onClick={() => void onSavePrompt()}
-                      disabled={!branchNamePromptDirty || isSavingPrompt}
+                      onClick={onDiscardPrompt}
+                      disabled={isSavingPrompt}
                     >
-                      {isSavingPrompt ? 'Saving...' : 'Save'}
+                      Discard
                     </Button>
-                  </div>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="xs"
+                    onClick={() => void onSavePrompt()}
+                    disabled={!branchNamePromptDirty || isSavingPrompt}
+                  >
+                    {isSavingPrompt ? 'Saving...' : 'Save'}
+                  </Button>
                 </div>
-                <CollapsibleContent>
-                  <div className="mt-2 space-y-2">
-                    <p className="text-xs text-muted-foreground">
-                      Your Branch name prompt is appended as{' '}
-                      <code className="font-mono">Additional user prompt</code>.
-                    </p>
-                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                      {BUILT_IN_BRANCH_NAME_PROMPT}
-                    </pre>
-                  </div>
-                </CollapsibleContent>
               </div>
-            </Collapsible>
+            </div>
 
             <div className="flex flex-col gap-3 border-t border-border/50 pt-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="space-y-0.5">
