@@ -3759,8 +3759,13 @@ export default function MobileTasksScreen() {
     return () => clearTimeout(timer)
   }, [githubKind, provider, query, taskStateHydrated])
 
-  useEffect(() => {
-    return () => clearMobileTaskCopyFeedbackTimer(copiedLinkResetTimerRef)
+  const setTaskCopyFeedbackRootRef = useCallback((node: View | null): void => {
+    if (node !== null) {
+      return
+    }
+    // Why: copied-link feedback is screen-local; clear the pending reset when
+    // the Tasks screen detaches without a passive cleanup-only Effect.
+    clearMobileTaskCopyFeedbackTimer(copiedLinkResetTimerRef)
   }, [])
 
   useEffect(() => {
@@ -8244,7 +8249,7 @@ export default function MobileTasksScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.topChrome}>
+      <View ref={setTaskCopyFeedbackRootRef} style={styles.topChrome}>
         <View style={styles.statusBar}>
           <Pressable style={styles.backButton} onPress={() => router.back()}>
             <ChevronLeft size={22} color={colors.textPrimary} />
