@@ -11,9 +11,7 @@ type Issue = {
 }
 
 const ISSUES: readonly Issue[] = [
-  { number: 1842, title: 'Worktree picker truncates names' },
-  { number: 1799, title: 'Sleep workspace keeps scrollback' },
-  { number: 1721, title: 'Bulk archive in source control' }
+  { number: 1842, title: 'Worktree picker truncates names' }
 ]
 
 type Phase =

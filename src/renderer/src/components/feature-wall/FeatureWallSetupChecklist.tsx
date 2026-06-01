@@ -189,7 +189,7 @@ function TaskSourcesAction(props: { reducedMotion: boolean }): React.JSX.Element
   const openTaskPage = useAppStore((s) => s.openTaskPage)
   return (
     <div className="space-y-5">
-      <div className="mx-auto h-[288px] w-full max-w-[520px]">
+      <div className="mx-auto h-[220px] w-full max-w-[480px]">
         <TasksAnimatedVisual reducedMotion={props.reducedMotion} />
       </div>
       <div className="grid gap-3 xl:grid-cols-2">
