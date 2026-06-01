@@ -162,7 +162,7 @@ function getComputerUseInstallStatus(
       label:
         permissions.unavailableReason === 'web_client'
           ? 'open Orca Desktop on this Mac'
-          : 'Computer Use is not available in this build',
+          : 'Unavailable in this build',
       tone: 'pending',
       installed: true
     }
