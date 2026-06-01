@@ -47,7 +47,7 @@ describe('contextual tour definitions', () => {
     // page tours, so the in-app tour ends after the worktree CTA.
     expect(tour?.steps.map((step) => step.title)).toEqual([
       'Split a terminal pane',
-      'Run another task in parallel'
+      'Start another task in parallel'
     ])
     // The opening step teaches the split gesture and offers the convenience button.
     expect(tour?.steps[0]).toMatchObject({

@@ -251,7 +251,7 @@ describe('contextual tour gate', () => {
 
     expect(tour.steps.map((step) => step.title)).toEqual([
       'Split a terminal pane',
-      'Run another task in parallel'
+      'Start another task in parallel'
     ])
     expect(visibleStepIndexes).toEqual([0, 1])
     expect(

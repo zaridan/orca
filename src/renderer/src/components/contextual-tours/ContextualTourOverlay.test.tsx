@@ -249,7 +249,7 @@ describe('ContextualTourOverlaySurface', () => {
     const pulsedMarkup = renderToStaticMarkup(
       renderSurface({
         targetPulse: true,
-        title: 'Run another task in parallel'
+        title: 'Start another task in parallel'
       })
     )
     const defaultMarkup = renderToStaticMarkup(renderSurface())
@@ -263,7 +263,7 @@ describe('ContextualTourOverlaySurface', () => {
       renderSurface({
         hidePrimaryAction: true,
         isLastStep: true,
-        title: 'Run another task in parallel'
+        title: 'Start another task in parallel'
       })
     )
 
