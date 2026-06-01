@@ -25,53 +25,52 @@ export type FeatureWallSetupSectionId = 'parallel-work' | 'setup'
 export const FEATURE_WALL_SETUP_STEPS: readonly FeatureWallSetupStep[] = [
   {
     id: 'split-terminal',
-    name: 'Split a terminal',
-    subtitle: 'Split a terminal',
-    description:
-      'Split the terminal to run two things at once — a second agent, a dev server, or a REPL.'
+    name: 'Run two things at once',
+    subtitle: 'Run two things at once',
+    description: 'Keep an agent, dev server, or REPL visible side by side in one workspace.'
   },
   {
     id: 'two-worktrees',
-    name: 'Create a second worktree',
-    subtitle: 'Create a second worktree',
-    description: 'Keep separate tasks in separate worktrees so agents can work independently.'
+    name: 'Work on a second branch',
+    subtitle: 'Work on a second branch',
+    description: 'Let agents tackle separate changes in separate worktrees without stepping on each other.'
   },
   {
     id: 'notifications',
-    name: 'Configure notifications',
-    subtitle: 'Configure notifications',
-    description: 'Know when agents need attention, finish work, or get blocked.'
+    name: 'Turn on notifications',
+    subtitle: 'Turn on notifications',
+    description: 'Know the moment an agent finishes, needs attention, or gets blocked.'
   },
   {
     id: 'default-agent',
-    name: 'Pick a default agent',
-    subtitle: 'Pick a default agent',
-    description: 'Start new work with the agent you trust most, without choosing every time.'
+    name: 'Choose your default agent',
+    subtitle: 'Choose your default agent',
+    description: 'Start new work faster with your preferred agent already selected.'
   },
   {
     id: 'task-sources',
-    name: 'Enable task sources',
-    subtitle: 'Enable task sources',
-    description: 'Start work directly from your tasks and keep PR status in view.'
+    name: 'Connect integrations',
+    subtitle: 'Connect integrations',
+    description: 'Start an agent from a task in one click and keep PR status in view.'
   },
   {
     id: 'setup-script',
-    name: 'Configure a setup script',
-    subtitle: 'Configure a setup script',
+    name: 'Automate workspace setup',
+    subtitle: 'Automate workspace setup',
     description:
-      "Add a script that runs automatically when you create a new worktree, so you don't have to run the same command every time."
+      'Run install and setup commands automatically so every new worktree is ready for agents.'
   },
   {
     id: 'add-two-repos',
-    name: 'Add 2 projects',
-    subtitle: 'Add 2 projects',
-    description: 'Bring your key repos into Orca and run agent work across them in parallel.'
+    name: 'Add your projects',
+    subtitle: 'Add your projects',
+    description: 'Bring your key repos into Orca so you can start agent work without hunting for folders.'
   },
   {
     id: 'agent-capabilities',
-    name: 'Install CLI & Skills',
-    subtitle: 'Install CLI & Skills',
-    description: 'Unlock browser, orchestration, and computer-use actions for agents.'
+    name: 'Unlock agent actions',
+    subtitle: 'Unlock agent actions',
+    description: 'Let agents use the browser, computer, and orchestration tools when a task needs it.'
   }
 ] as const
 
