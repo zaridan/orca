@@ -222,7 +222,7 @@ export function SetupWorkspacesVisual(props: { reducedMotion: boolean }): JSX.El
         </div>
       </div>
 
-      <div className="relative grid min-w-0 gap-3 md:grid-rows-[108px_minmax(0,1fr)]">
+      <div className="relative grid min-w-0 gap-3 md:grid-rows-[88px_minmax(0,1fr)]">
         <div className="min-w-0 overflow-hidden rounded-lg border border-border bg-background">
           <VisualTitlebar title="release notes - Claude Code" compact />
           <div className="space-y-1.5 p-2.5 font-mono text-[11px]">
