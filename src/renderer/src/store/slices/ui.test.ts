@@ -1278,6 +1278,37 @@ describe('createUISlice feature tips', () => {
   })
 })
 
+describe('createUISlice setup guide sidebar dismissal', () => {
+  it('persists sidebar dismissal changes once', () => {
+    const setMock = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('window', {
+      api: {
+        ui: {
+          set: setMock
+        }
+      }
+    })
+    const store = createUIStore()
+
+    store.getState().setSetupGuideSidebarDismissed(true)
+    store.getState().setSetupGuideSidebarDismissed(true)
+
+    expect(store.getState().setupGuideSidebarDismissed).toBe(true)
+    expect(setMock).toHaveBeenCalledTimes(1)
+    expect(setMock).toHaveBeenCalledWith({ setupGuideSidebarDismissed: true })
+  })
+
+  it('hydrates only explicit sidebar dismissals as hidden', () => {
+    const store = createUIStore()
+
+    store.getState().hydratePersistedUI(makePersistedUI({ setupGuideSidebarDismissed: true }))
+    expect(store.getState().setupGuideSidebarDismissed).toBe(true)
+
+    store.getState().hydratePersistedUI(makePersistedUI({ setupGuideSidebarDismissed: undefined }))
+    expect(store.getState().setupGuideSidebarDismissed).toBe(false)
+  })
+})
+
 describe('createUISlice feature interactions', () => {
   it('normalizes persisted feature interaction records during hydration', () => {
     const store = createUIStore()

@@ -2513,6 +2513,9 @@ export type PersistedUIState = {
    *  stateStartedAt that beats the old ack via the existing comparison in
    *  WorktreeCardAgents. Renderer-owned, written through ui:set. */
   acknowledgedAgentsByPaneKey?: Record<string, number>
+  /** User-hidden sidebar entry for the setup guide. The Help menu remains
+   *  available so this is a reversible declutter preference, not completion. */
+  setupGuideSidebarDismissed?: boolean
   /** URL to navigate to when a new browser tab is opened. Null means blank tab.
    *  Phase 3 will expand this to a full BrowserSessionProfile per workspace. */
   browserDefaultUrl?: string | null

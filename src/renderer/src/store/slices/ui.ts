@@ -687,6 +687,8 @@ export type UISlice = {
   clearOrcaHookTrustForRepo: (repoId: string) => void
   setupScriptPromptDismissedRepoIds: string[]
   dismissSetupScriptPrompt: (repoId: string) => void
+  setupGuideSidebarDismissed: boolean
+  setSetupGuideSidebarDismissed: (dismissed: boolean) => void
   groupBy: 'none' | 'workspace-status' | 'repo' | 'pr-status'
   setGroupBy: (g: UISlice['groupBy']) => void
   sortBy: 'name' | 'smart' | 'recent' | 'repo' | 'manual'
@@ -1545,6 +1547,15 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       window.api.ui.set({ setupScriptPromptDismissedRepoIds: next }).catch(console.error)
       return { setupScriptPromptDismissedRepoIds: next }
     }),
+  setupGuideSidebarDismissed: false,
+  setSetupGuideSidebarDismissed: (dismissed) =>
+    set((s) => {
+      if (s.setupGuideSidebarDismissed === dismissed) {
+        return s
+      }
+      window.api.ui.set({ setupGuideSidebarDismissed: dismissed }).catch(console.error)
+      return { setupGuideSidebarDismissed: dismissed }
+    }),
 
   groupBy: 'repo',
   // Why: group keys are mode-specific (e.g. repo id vs PR status), so
@@ -1871,6 +1882,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
           ui.setupScriptPromptDismissedRepoIds,
           validRepoIds
         ),
+        setupGuideSidebarDismissed: ui.setupGuideSidebarDismissed === true,
         // Why: restore visited-row acks alongside the persisted hook entries
         // they pair with. Stale acks for paneKeys whose tab/PTY no longer
         // exists are inert (no row references them); a paneKey reuse stamps a
