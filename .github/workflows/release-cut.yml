@@ -196,7 +196,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Latest stable release tag, picked by *tag shape*:
+          # Latest stable release tag, picked by *tag shape* and semver max:
           #   - must start with `v<digit>` (desktop convention, e.g. v1.3.32)
           #   - must NOT contain `-rc.` (not a prerelease)
           #
@@ -212,12 +212,12 @@ jobs:
           # `mobile`, `Number("mobile")` → NaN → 0, and a patch-bump would
           # produce `0.0.1` — exactly the wedge on 2026-05-04 (run
           # 25304336767). Any non-desktop tag shape must be excluded here.
-          latest_stable="$(gh release list \
-              --repo "$GITHUB_REPOSITORY" \
-              --exclude-drafts \
-              --limit 50 \
-              --json tagName \
-              --jq '[.[] | .tagName | select(test("^v[0-9]") and (test("-rc\\.") | not))] | .[0] // ""')"
+          #
+          # Why not `gh release list` order: GitHub can list a newer published
+          # stable after older releases. On 2026-06-04, v1.4.44 existed but
+          # the list returned v1.4.42 first, causing a manual RC cut to reopen
+          # the already-shipped 1.4.43 series as v1.4.43-rc.0.
+          latest_stable="$(node config/scripts/latest-stable-release.mjs)"
           latest_stable="${latest_stable#v}"
           echo "Latest stable: ${latest_stable:-<none>}"
 
