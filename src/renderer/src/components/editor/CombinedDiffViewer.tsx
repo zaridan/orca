@@ -441,11 +441,19 @@ export default function CombinedDiffViewer({
   // find their place again.
   useEffect(() => {
     const cached = combinedDiffViewStateCache.get(viewStateKey)
+    // Why: the save-side signature is '' for branch/commit modes (only the
+    // uncommitted tree tracks git status), so the restore-side recompute must
+    // apply the same treeMode short-circuit. Otherwise '' can never equal the
+    // recomputed '[]'/'[...]', and branch/commit combined diffs would always
+    // discard their cached sections and re-enter Loading on every remount.
+    const cachedGitStatusSignature =
+      cached && treeMode === 'uncommitted'
+        ? buildCombinedGitStatusSignature(cached.sections, gitStatusEntries)
+        : ''
     const canRestoreCachedSections =
       cached &&
       cached.entrySignature === entrySignature &&
-      (cached.gitStatusSignature ?? '') ===
-        buildCombinedGitStatusSignature(cached.sections, gitStatusEntries) &&
+      (cached.gitStatusSignature ?? '') === cachedGitStatusSignature &&
       (cached.sections.length > 0 || entries.length === 0)
     if (canRestoreCachedSections && cached) {
       const collapsedPreference = combinedDiffCollapsedPreference
@@ -493,7 +501,7 @@ export default function CombinedDiffViewer({
     loadSchedulerRef.current.reset()
     generationRef.current += 1
     setGeneration((prev) => prev + 1)
-  }, [entries, entrySignature, file.diffSource, gitStatusEntries, viewStateKey])
+  }, [entries, entrySignature, file.diffSource, gitStatusEntries, treeMode, viewStateKey])
 
   const loadSectionNow = useCallback(
     async (index: number) => {

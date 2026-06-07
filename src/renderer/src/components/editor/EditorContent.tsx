@@ -851,10 +851,24 @@ export function EditorContent({
   // edit-buffer text, so editable unstaged diffs keep their undo stack.
   const diffReloadNonce = activeFile.diffContentReloadNonce ?? 0
   const originalModelKey = `${diffViewStateKey}:original:${getDiffContentSignature(dc.originalContent)}`
-  const modifiedModelKey = `${diffViewStateKey}:modified:${getDiffContentSignature(dc.modifiedContent)}:${diffReloadNonce}`
+  // Why: for editable diffs the modified side is the working tree the user is
+  // editing. Saving rewrites dc.modifiedContent (via the FILE_SAVED handler),
+  // so embedding its signature in the modified-model identity / component key
+  // would remount Monaco on every save and wipe the undo stack the user just
+  // built. Rotate the modified side on the explicit reload nonce instead; a
+  // kept modified model still repaints refreshed git blobs through the
+  // `modified` prop's undo-preserving executeEdits. Non-editable diffs have no
+  // undo to lose, so they keep rotating on the content signature.
+  const modifiedContentSignature = getDiffContentSignature(dc.modifiedContent)
+  const modifiedModelKey = isEditable
+    ? `${diffViewStateKey}:modified:${diffReloadNonce}`
+    : `${diffViewStateKey}:modified:${modifiedContentSignature}:${diffReloadNonce}`
+  const diffViewerKey = isEditable
+    ? `${viewStateScopeId}:${diffReloadNonce}`
+    : `${viewStateScopeId}:${diffReloadNonce}:${modifiedContentSignature}`
   return (
     <DiffViewer
-      key={`${viewStateScopeId}:${diffReloadNonce}:${getDiffContentSignature(dc.modifiedContent)}`}
+      key={diffViewerKey}
       modelKey={diffViewStateKey}
       originalModelKey={originalModelKey}
       modifiedModelKey={modifiedModelKey}
