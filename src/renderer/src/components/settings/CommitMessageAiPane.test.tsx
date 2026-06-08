@@ -56,7 +56,7 @@ describe('CommitMessageAiPane', () => {
     const markup = renderPane(buildSettings())
 
     expect(markup).toContain('Source Control AI')
-    expect(markup).toContain('Enable Source Control AI')
+    expect(markup).toContain('Show Source Control AI actions')
     expect(markup).toContain('aria-checked="false"')
     expect(markup).not.toContain('Action recipes')
     expect(markup).not.toContain('Command template')
