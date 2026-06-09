@@ -1667,7 +1667,7 @@ function App(): React.JSX.Element {
                 {!workspaceActive ? (
                   <div className="titlebar">
                     <div
-                      className={`flex items-center${showSidebar && sidebarOpen ? ' overflow-hidden shrink-0' : ' shrink-0 mr-2'}`}
+                      className={`flex items-center${showSidebar && sidebarOpen ? ' overflow-hidden shrink-0 bg-worktree-sidebar' : ' shrink-0 mr-2'}`}
                       style={{ width: showSidebar && sidebarOpen ? sidebarWidth : undefined }}
                     >
                       {titlebarLeftControls}
@@ -1732,7 +1732,7 @@ function App(): React.JSX.Element {
                           className={`titlebar-left${
                             sidebarOpen
                               ? ''
-                              : ' absolute top-0 left-0 z-10 w-max border-r border-border'
+                              : ' titlebar-left-floating absolute top-0 left-0 z-10 w-max border-r border-border'
                           }`}
                           style={{
                             // Why: the Sidebar resize hook updates the sidebar DOM width
