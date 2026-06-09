@@ -401,6 +401,21 @@ describe('remote runtime terminal multiplex ACK gate', () => {
     expect(onSnapshot).toHaveBeenCalledWith(`\x1b[2J\x1b[3J\x1b[H${'recovered state'}`)
     expect(onSubscribed).toHaveBeenCalledTimes(1)
 
+    // Why: an empty recovery snapshot means the model terminal is blank, so
+    // the client must still clear stale dropped output.
+    injectSnapshot(
+      {
+        kind: 'scrollback',
+        cols: 120,
+        rows: 40,
+        reason: 'ack-pending-overflow',
+        truncated: false
+      },
+      ''
+    )
+    expect(onSnapshot).toHaveBeenCalledWith('\x1b[2J\x1b[3J\x1b[H')
+    expect(onSubscribed).toHaveBeenCalledTimes(1)
+
     stream.close()
   })
 })

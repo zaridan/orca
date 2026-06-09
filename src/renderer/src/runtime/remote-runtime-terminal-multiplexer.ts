@@ -471,10 +471,12 @@ class RemoteRuntimeTerminalMultiplexer {
           clearPendingSnapshotRequest(stream)
         } else if (target === 'initial') {
           stream.callbacks.onSnapshot(data ?? '')
-        } else if (target === 'recovery' && data) {
+        } else if (target === 'recovery') {
           // Why: a server-pushed recovery snapshot replaces terminal state
           // mid-session; clear the screen and scrollback before applying it.
-          stream.callbacks.onSnapshot(`\x1b[2J\x1b[3J\x1b[H${data}`)
+          // An empty snapshot is still applied so stale dropped output does
+          // not linger on a terminal the model says is blank.
+          stream.callbacks.onSnapshot(`\x1b[2J\x1b[3J\x1b[H${data ?? ''}`)
         }
       } else if (matchesPendingRequest) {
         pendingRequest.resolve(null)
