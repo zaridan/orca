@@ -82,6 +82,13 @@ import {
   scheduleHiddenOutputRestore
 } from './hidden-output-restore-scheduler'
 import { getRuntimeEnvironmentIdForWorktree } from '@/lib/worktree-runtime-owner'
+import { CLIENT_PLATFORM } from '@/lib/new-workspace'
+import { buildAgentResumeStartupPlan } from '@/lib/tui-agent-startup'
+import {
+  isResumableTuiAgent,
+  normalizeAgentProviderSession
+} from '../../../../shared/agent-session-resume'
+import { isWslUncPath } from '../../../../shared/wsl-paths'
 
 const pendingSpawnByPaneKey = new Map<string, Promise<string | null>>()
 const SSH_SESSION_EXPIRED_ERROR = 'SSH_SESSION_EXPIRED'
@@ -1750,6 +1757,70 @@ export function connectPanePty(
     // stay renderer-delivered so xterm can apply bracketed-paste semantics.
     let pendingStartupCommand =
       shouldDeliverStartupViaTerminalPaste || connectionId ? (paneStartup?.command ?? null) : null
+    const getColdRestoreAgentResumePlatform = (): NodeJS.Platform => {
+      if (connectionId || (worktree?.path && isWslUncPath(worktree.path))) {
+        return 'linux'
+      }
+      return CLIENT_PLATFORM
+    }
+    const prepareColdRestoreAgentResumeCommand = (): boolean => {
+      if (pendingStartupCommand) {
+        return false
+      }
+      const entry = useAppStore.getState().agentStatusByPaneKey[cacheKey]
+      if (!entry || entry.state === 'done' || !isResumableTuiAgent(entry.agentType)) {
+        return false
+      }
+      const providerSession = normalizeAgentProviderSession(entry.providerSession)
+      if (!providerSession) {
+        return false
+      }
+      const startupPlan = buildAgentResumeStartupPlan({
+        agent: entry.agentType,
+        providerSession,
+        cmdOverrides: useAppStore.getState().settings?.agentCmdOverrides ?? {},
+        platform: getColdRestoreAgentResumePlatform()
+      })
+      if (!startupPlan) {
+        return false
+      }
+      // Why: cold restore means the PTY process is gone but the agent provider
+      // session is still resumable, so the replacement shell must launch it.
+      pendingStartupCommand = startupPlan.launchCommand
+      return true
+    }
+    const schedulePendingStartupCommandDelivery = (): void => {
+      if (!pendingStartupCommand) {
+        return
+      }
+      if (startupInjectTimer !== null) {
+        clearTimeout(startupInjectTimer)
+      }
+      startupInjectTimer = setTimeout(() => {
+        startupInjectTimer = null
+        void (async () => {
+          const command = pendingStartupCommand
+          if (!command || disposed) {
+            return
+          }
+          if (shouldDeliverStartupViaTerminalPaste) {
+            await waitForTerminalOutputParsed(pane.terminal)
+          }
+          if (pendingStartupCommand !== command || disposed) {
+            return
+          }
+          if (shouldDeliverStartupViaTerminalPaste) {
+            // Why: this mode must pass through xterm so bracketed-paste
+            // wrapping is applied before the submit Enter.
+            pasteTerminalText(pane.terminal, command)
+            transport.sendInput('\r')
+          } else {
+            transport.sendInput(`${command}\r`)
+          }
+          pendingStartupCommand = null
+        })()
+      }, 50)
+    }
 
     const startFreshSpawn = (): void => {
       // Why: pre-signal the main process so its cooperation gate suppresses
@@ -2554,35 +2625,7 @@ export function connectPanePty(
         writePtyOutputToXterm(data, foreground)
       }
 
-      if (pendingStartupCommand) {
-        if (startupInjectTimer !== null) {
-          clearTimeout(startupInjectTimer)
-        }
-        startupInjectTimer = setTimeout(() => {
-          startupInjectTimer = null
-          void (async () => {
-            const command = pendingStartupCommand
-            if (!command || disposed) {
-              return
-            }
-            if (shouldDeliverStartupViaTerminalPaste) {
-              await waitForTerminalOutputParsed(pane.terminal)
-            }
-            if (pendingStartupCommand !== command || disposed) {
-              return
-            }
-            if (shouldDeliverStartupViaTerminalPaste) {
-              // Why: this mode must pass through xterm so bracketed-paste
-              // wrapping is applied before the submit Enter.
-              pasteTerminalText(pane.terminal, command)
-              transport.sendInput('\r')
-            } else {
-              transport.sendInput(`${command}\r`)
-            }
-            pendingStartupCommand = null
-          })()
-        }, 50)
-      }
+      schedulePendingStartupCommandDelivery()
     }
     unregisterE2ePtyDataInjection = registerE2eTerminalPtyDataInjection(cacheKey, (data, meta) => {
       if (!disposed) {
@@ -2616,6 +2659,7 @@ export function connectPanePty(
         if (staleSessionId) {
           deps.clearTabPtyId(deps.tabId, staleSessionId)
         }
+        prepareColdRestoreAgentResumeCommand()
         startFreshSpawn()
         return
       }
@@ -2627,6 +2671,7 @@ export function connectPanePty(
         // Why: SSH sleep/reconnect can invalidate the relay-held PTY while
         // leaving the tab mounted. Replace the dead lease in-place instead of
         // stranding the pane behind a stale expired-session overlay.
+        prepareColdRestoreAgentResumeCommand()
         startFreshSpawn()
         return
       }
@@ -2696,6 +2741,9 @@ export function connectPanePty(
         writeReplayData(POST_REPLAY_MODE_RESET)
         if (!isRemoteRuntimePtyId(ptyId)) {
           window.api.pty.ackColdRestore(ptyId)
+        }
+        if (prepareColdRestoreAgentResumeCommand()) {
+          schedulePendingStartupCommandDelivery()
         }
       }
       // Why: when a mobile-fit override is active, skip sending desktop dims
@@ -2917,6 +2965,7 @@ export function connectPanePty(
                   }
                   deps.syncPanePtyLayoutBinding(pane.id, null)
                   deps.clearTabPtyId(deps.tabId, pendingSessionId)
+                  prepareColdRestoreAgentResumeCommand()
                   startFreshSpawn()
                   return
                 }
@@ -2940,9 +2989,11 @@ export function connectPanePty(
                 if (isSshSessionExpiredError(err)) {
                   deps.syncPanePtyLayoutBinding(pane.id, null)
                   deps.clearTabPtyId(deps.tabId, pendingSessionId)
+                  prepareColdRestoreAgentResumeCommand()
                   startFreshSpawn()
                   return
                 }
+                prepareColdRestoreAgentResumeCommand()
                 startFreshSpawn()
               })
           } else {
@@ -3043,6 +3094,7 @@ export function connectPanePty(
             }
             deps.syncPanePtyLayoutBinding(pane.id, null)
             deps.clearTabPtyId(deps.tabId, deferredReattachSessionId)
+            prepareColdRestoreAgentResumeCommand()
             startFreshSpawn()
             return
           }
@@ -3071,10 +3123,12 @@ export function connectPanePty(
           deps.syncPanePtyLayoutBinding(pane.id, null)
           deps.clearTabPtyId(deps.tabId, deferredReattachSessionId)
           if (connectionId && isSshSessionExpiredError(err)) {
+            prepareColdRestoreAgentResumeCommand()
             startFreshSpawn()
             return
           }
           reportError(message)
+          prepareColdRestoreAgentResumeCommand()
           startFreshSpawn()
         })
     } else if (detachedRemoteLeafPtyId || detachedLivePtyId) {
