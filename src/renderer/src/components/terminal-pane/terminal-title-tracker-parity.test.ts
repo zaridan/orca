@@ -8,8 +8,10 @@
 // event sequences match.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAgentStatusOscProcessor } from '../../../../shared/agent-status-osc'
+import { createTerminalGitHubPRLinkDetector } from '../../../../shared/terminal-github-pr-link-detector'
 import { createTerminalTitleTracker } from '../../../../shared/terminal-output-side-effects'
 import { createPtyOutputProcessor } from './pty-transport'
+import { createTerminalCommandLifecycle } from './terminal-command-lifecycle'
 
 const ESC = '\x1b'
 const BEL = '\x07'
@@ -69,7 +71,9 @@ function createMainPath(): TitleFactPath {
   }
 }
 
-function feedBoth(paths: { renderer: TitleFactPath; main: TitleFactPath }, chunk: string): void {
+type ChunkFeed = { feed: (chunk: string) => void }
+
+function feedBoth(paths: { renderer: ChunkFeed; main: ChunkFeed }, chunk: string): void {
   paths.renderer.feed(chunk)
   paths.main.feed(chunk)
 }
@@ -182,6 +186,98 @@ describe('main title tracker parity with the renderer transport processor', () =
 
   it('keeps bells suppressed inside OSC 9999 status payloads in both paths', () => {
     feedBoth(paths, `${ESC}]9999;{"state":"working","agentType":"codex"}${BEL}`)
+
+    expect(paths.main.events).toEqual(paths.renderer.events)
+    expect(paths.main.events).toEqual([])
+  })
+})
+
+// Why: slice 3 moves the renderer's OSC 133;D and PR-link byte parsing into
+// main's tracker for local/SSH PTYs. Both must derive identical fact
+// sequences from the same chunk boundaries, or flipping the kill switch
+// changes which commands/links are observed.
+type LifecycleFactEvent = ['command-finished', number | null] | ['pr-link', string, number]
+
+type LifecycleFactPath = {
+  events: LifecycleFactEvent[]
+  feed: (chunk: string) => void
+}
+
+function createRendererLifecyclePath(): LifecycleFactPath {
+  const events: LifecycleFactEvent[] = []
+  // Why: mirrors pty-connection's dataCallback wiring — the transport
+  // processor strips OSC 9999 before the lifecycle/PR-link byte scans run.
+  const processAgentStatusChunk = createAgentStatusOscProcessor()
+  const lifecycle = createTerminalCommandLifecycle({
+    onCommandFinished: (exitCode) => events.push(['command-finished', exitCode])
+  })
+  const detectPRLinks = createTerminalGitHubPRLinkDetector()
+  return {
+    events,
+    feed(chunk: string): void {
+      const clean = processAgentStatusChunk(chunk).cleanData
+      lifecycle.handlePtyData(clean)
+      for (const link of detectPRLinks(clean)) {
+        events.push(['pr-link', link.url, link.number])
+      }
+    }
+  }
+}
+
+function createMainLifecyclePath(): LifecycleFactPath {
+  const events: LifecycleFactEvent[] = []
+  const processAgentStatusChunk = createAgentStatusOscProcessor()
+  const tracker = createTerminalTitleTracker({
+    onCommandFinished: (exitCode) => events.push(['command-finished', exitCode]),
+    onPrLink: (link) => events.push(['pr-link', link.url, link.number])
+  })
+  return {
+    events,
+    feed(chunk: string): void {
+      tracker.handleChunk(processAgentStatusChunk(chunk).cleanData)
+    }
+  }
+}
+
+describe('main tracker parity with renderer 133;D and PR-link byte parsers', () => {
+  let paths: { renderer: LifecycleFactPath; main: LifecycleFactPath }
+
+  beforeEach(() => {
+    paths = { renderer: createRendererLifecyclePath(), main: createMainLifecyclePath() }
+  })
+
+  it('derives identical command-finished facts from split OSC 133;D chunks', () => {
+    feedBoth(paths, `output${ESC}]133`)
+    feedBoth(paths, ';D;13')
+    feedBoth(paths, `0${BEL}prompt $ `)
+    feedBoth(paths, `${ESC}]133;D;0${BEL}`)
+    feedBoth(paths, `${ESC}]133;D${ST}`)
+
+    expect(paths.main.events).toEqual(paths.renderer.events)
+    expect(paths.main.events).toEqual([
+      ['command-finished', 130],
+      ['command-finished', 0],
+      ['command-finished', null]
+    ])
+  })
+
+  it('derives identical pr-link facts from split and repeated URLs', () => {
+    feedBoth(paths, 'Created https://github.com/acme/orca/pull/4')
+    feedBoth(paths, '2\r\nAlso https://github.com/acme/orca/pull/43 merged\r\n')
+    feedBoth(paths, 'again https://github.com/acme/orca/pull/42\r\n')
+
+    expect(paths.main.events).toEqual(paths.renderer.events)
+    expect(paths.main.events).toEqual([
+      ['pr-link', 'https://github.com/acme/orca/pull/42', 42],
+      ['pr-link', 'https://github.com/acme/orca/pull/43', 43]
+    ])
+  })
+
+  it('ignores 133;D and PR URLs inside stripped OSC 9999 payloads in both paths', () => {
+    feedBoth(
+      paths,
+      `${ESC}]9999;{"state":"done","prompt":"https://github.com/acme/orca/pull/9"}${BEL}\r\n`
+    )
 
     expect(paths.main.events).toEqual(paths.renderer.events)
     expect(paths.main.events).toEqual([])

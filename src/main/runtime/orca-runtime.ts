@@ -17,6 +17,7 @@ import type {
   TerminalSideEffectBatch,
   TerminalSideEffectFact
 } from '../../shared/terminal-side-effect-facts'
+import type { TerminalGitHubPRLink } from '../../shared/terminal-github-pr-link-detector'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type ParsedAgentStatusPayload,
@@ -3571,6 +3572,33 @@ export class OrcaRuntimeService {
     }
   }
 
+  /** Raw last title from main's tracked PTY/leaf records — the title surface
+   *  the tracker (live bytes + synthetic frames) keeps current. */
+  private getTrackedRawTitleForPty(ptyId: string): string | null {
+    const recordTitle = this.ptysById.get(ptyId)?.lastOscTitle
+    if (recordTitle) {
+      return recordTitle
+    }
+    for (const leaf of this.getLeavesForPty(ptyId)) {
+      if (leaf.lastOscTitle) {
+        return leaf.lastOscTitle
+      }
+    }
+    return null
+  }
+
+  /** Why: synthetic agent title frames no longer ride pty:data, so neither
+   *  renderer xterm nor the headless emulator observes them. Mobile-parity
+   *  snapshot titles must prefer main's tracker over snapshot lastTitle, or
+   *  hook-driven spinner/idle titles vanish from mobile tabs. */
+  private preferTrackedLastTitle<T extends { lastTitle?: string }>(ptyId: string, snapshot: T): T {
+    const tracked = this.getTrackedRawTitleForPty(ptyId)
+    if (!tracked) {
+      return snapshot
+    }
+    return { ...snapshot, lastTitle: tracked }
+  }
+
   /** Decorative comparison key: spinner frame glyphs stripped, derived agent
    *  status kept so a working→idle flip with an otherwise-equal label still
    *  counts as a change. */
@@ -3646,12 +3674,19 @@ export class OrcaRuntimeService {
         onAgentExited: () => {
           this.recordTerminalSideEffectFact(ptyId, { kind: 'agent-exited' })
         },
-        // Why: bell facts exist only for the pty:sideEffect channel. Headless
-        // serve has no consumer, so skip the per-chunk bell walk entirely.
+        // Why: bell/command-finished/pr-link facts exist only for the
+        // pty:sideEffect channel. Headless serve has no consumer, so skip the
+        // per-chunk bell walk and 133/URL scans entirely.
         ...(this.onTerminalSideEffects
           ? {
               onBell: () => {
                 this.recordTerminalSideEffectFact(ptyId, { kind: 'bell' })
+              },
+              onCommandFinished: (exitCode: number | null) => {
+                this.recordTerminalSideEffectFact(ptyId, { kind: 'command-finished', exitCode })
+              },
+              onPrLink: (link: TerminalGitHubPRLink) => {
+                this.recordTerminalSideEffectFact(ptyId, { kind: 'pr-link', link })
               }
             }
           : {})
@@ -4124,10 +4159,9 @@ export class OrcaRuntimeService {
       // If renderer serialization races reload/unmount, the runtime snapshot
       // below can still preserve colored terminal state.
     }
-    if (rendererSnapshot && rendererSnapshot.data.length > 0) {
-      return { ...rendererSnapshot, source: 'renderer' }
-    }
-    return rendererSnapshot ? { ...rendererSnapshot, source: 'renderer' } : null
+    return rendererSnapshot
+      ? this.preferTrackedLastTitle(ptyId, { ...rendererSnapshot, source: 'renderer' as const })
+      : null
   }
 
   private async withVisibleSnapshotFallback(
@@ -4212,15 +4246,15 @@ export class OrcaRuntimeService {
     const snapshot = state.emulator.getSnapshot({ scrollbackRows })
     const data = snapshot.rehydrateSequences + snapshot.snapshotAnsi
     return data.length > 0 || opts.includeEmpty === true
-      ? {
+      ? this.preferTrackedLastTitle(ptyId, {
           data,
           cols: snapshot.cols,
           rows: snapshot.rows,
           cwd: snapshot.cwd,
           lastTitle: snapshot.lastTitle,
           seq: state.outputSequence,
-          source: 'headless'
-        }
+          source: 'headless' as const
+        })
       : null
   }
 

@@ -5281,6 +5281,100 @@ describe('connectPanePty', () => {
       expect(deps.markTerminalPaneUnread).not.toHaveBeenCalled()
     })
 
+    it('drops the agent status from a command-finished fact like the byte path did', async () => {
+      enableMainAuthority()
+      const { connectPanePty } = await import('./pty-connection')
+      const handler = await import('./terminal-side-effect-facts-handler')
+      const transport = createMockTransport()
+      transportFactoryQueue.push(transport)
+      const paneKey = makePaneKey('tab-1', LEAF_1)
+      mockStoreState.agentStatusByPaneKey = {
+        [paneKey]: {
+          paneKey,
+          state: 'done',
+          prompt: 'hi',
+          updatedAt: 1000,
+          stateStartedAt: 1000,
+          agentType: 'codex',
+          stateHistory: []
+        }
+      }
+
+      connectPanePty(createPane(1) as never, createManager(1) as never, createDeps() as never)
+      const onPtySpawn = createdTransportOptions[0]?.onPtySpawn as (ptyId: string) => void
+      onPtySpawn('pty-fact-133')
+
+      handler._dispatchTerminalSideEffectBatchForTest({
+        ptyId: 'pty-fact-133',
+        seq: 1,
+        facts: [{ kind: 'command-finished', exitCode: 130 }]
+      })
+
+      expect(mockStoreState.dropAgentStatus).toHaveBeenCalledWith(paneKey)
+      expect(mockStoreState.removeAgentStatus).not.toHaveBeenCalled()
+    })
+
+    it('routes pr-link facts to the worktree PR observer', async () => {
+      enableMainAuthority()
+      const { connectPanePty } = await import('./pty-connection')
+      const handler = await import('./terminal-side-effect-facts-handler')
+      const transport = createMockTransport()
+      transportFactoryQueue.push(transport)
+
+      connectPanePty(createPane(1) as never, createManager(1) as never, createDeps() as never)
+      const onPtySpawn = createdTransportOptions[0]?.onPtySpawn as (ptyId: string) => void
+      onPtySpawn('pty-fact-pr')
+
+      const link = {
+        url: 'https://github.com/acme/orca/pull/42',
+        slug: { owner: 'acme', repo: 'orca' },
+        number: 42
+      }
+      handler._dispatchTerminalSideEffectBatchForTest({
+        ptyId: 'pty-fact-pr',
+        seq: 1,
+        facts: [{ kind: 'pr-link', link }]
+      })
+
+      expect(mockStoreState.observeTerminalGitHubPullRequestLink).toHaveBeenCalledWith('wt-1', link)
+    })
+
+    it('does not byte-scan PR links or OSC 133 — facts are the only consumer', async () => {
+      enableMainAuthority()
+      const { connectPanePty } = await import('./pty-connection')
+      const transport = createMockTransport()
+      const capturedDataCallback: { current: ((data: string) => void) | null } = { current: null }
+      transport.connect.mockImplementation(
+        async ({ callbacks }: { callbacks: ConnectCallbacks }) => {
+          capturedDataCallback.current = callbacks.onData ?? null
+          return 'pty-authority-bytes'
+        }
+      )
+      transportFactoryQueue.push(transport)
+      const paneKey = makePaneKey('tab-1', LEAF_1)
+      mockStoreState.agentStatusByPaneKey = {
+        [paneKey]: {
+          paneKey,
+          state: 'done',
+          prompt: 'hi',
+          updatedAt: 1000,
+          stateStartedAt: 1000,
+          agentType: 'codex',
+          stateHistory: []
+        }
+      }
+
+      connectPanePty(createPane(1) as never, createManager(1) as never, createDeps() as never)
+      await flushAsyncTicks()
+      expect(capturedDataCallback.current).not.toBeNull()
+
+      capturedDataCallback.current?.('Created https://github.com/acme/orca/pull/42\r\n')
+      capturedDataCallback.current?.('\x1b]133;D;130\x07prompt $ ')
+
+      expect(mockStoreState.observeTerminalGitHubPullRequestLink).not.toHaveBeenCalled()
+      expect(mockStoreState.dropAgentStatus).not.toHaveBeenCalled()
+    })
+
     it('honors the persisted kill switch for panes bound before settings hydrate', async () => {
       // Pre-hydration: the store has no settings yet, but the user persisted
       // the kill switch off. The pane must register byte parsers, not a fact

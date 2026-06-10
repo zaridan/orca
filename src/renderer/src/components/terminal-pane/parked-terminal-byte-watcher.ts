@@ -19,7 +19,7 @@ import {
 } from '../../../../shared/terminal-color-scheme-protocol'
 import { useAppStore } from '@/store'
 import { getSystemPrefersDark } from '@/lib/terminal-theme'
-import { createTerminalGitHubPRLinkDetector } from '@/lib/terminal-github-pr-link-detector'
+import { createTerminalGitHubPRLinkDetector } from '../../../../shared/terminal-github-pr-link-detector'
 import {
   AGENT_TASK_COMPLETE_NOTIFICATION_GRACE_MS,
   isAgentTaskCompleteOsNotificationEnabledFromState,
@@ -93,7 +93,6 @@ export function startParkedTerminalByteWatcher(
   let bellNotificationTimer: ReturnType<typeof setTimeout> | null = null
   let agentTaskCompleteTimer: ReturnType<typeof setTimeout> | null = null
   let mode2031ScanTail = ''
-  const observeTerminalGitHubPRLink = createTerminalGitHubPRLinkDetector()
 
   const clearBellNotificationTimer = (): void => {
     if (bellNotificationTimer !== null) {
@@ -238,12 +237,21 @@ export function startParkedTerminalByteWatcher(
         ...(options.initialTitle !== undefined ? { initialAgentTitle: options.initialTitle } : {}),
         ...sideEffectCallbacks
       })
+  // Why (byte-parser mode only): with main authority, pr-link facts arrive on
+  // the channel below; byte-scanning too would observe every link twice.
+  const observeTerminalGitHubPRLink = mainSideEffectAuthority
+    ? null
+    : createTerminalGitHubPRLinkDetector()
   const unregisterFactConsumer = mainSideEffectAuthority
     ? registerTerminalSideEffectFactConsumer({
         ptyId,
         // Why: no title snapshot on park — the pane's runtime title slot is
         // already current at park time, exactly like the byte-parser mode.
-        callbacks: sideEffectCallbacks
+        callbacks: {
+          ...sideEffectCallbacks,
+          onPrLink: (link) =>
+            useAppStore.getState().observeTerminalGitHubPullRequestLink(worktreeId, link)
+        }
       })
     : null
 
@@ -260,16 +268,20 @@ export function startParkedTerminalByteWatcher(
     sendInput(mode2031SequenceFor(resolveTerminalColorSchemeMode(settings, getSystemPrefersDark())))
   }
 
-  // Why: the byte sidecar stays in BOTH modes for the 2031 reply and PR-link
-  // scan — those move to main in a later slice. Only the title/bell/agent
-  // parsing is gated: processor is null when main holds authority.
+  // Why: under main authority the byte sidecar stays ONLY for the DECSET 2031
+  // reply — query authority belongs to the view/watcher (model/view contract
+  // invariant 6), so it can never move to main. Title/bell/agent parsing and
+  // the PR-link scan are byte-parser-mode only (null when main holds
+  // authority; their facts arrive on pty:sideEffect instead).
   const unsubscribe = subscribeToPtyData(ptyId, (data) => {
     // Why: empty pane callbacks — the watcher wants only the parser side
     // effects; there is no xterm to deliver bytes to.
     processor?.processData(data, {})
     respondToMode2031Subscribe(data)
-    for (const link of observeTerminalGitHubPRLink(data)) {
-      useAppStore.getState().observeTerminalGitHubPullRequestLink(worktreeId, link)
+    if (observeTerminalGitHubPRLink) {
+      for (const link of observeTerminalGitHubPRLink(data)) {
+        useAppStore.getState().observeTerminalGitHubPullRequestLink(worktreeId, link)
+      }
     }
   })
 

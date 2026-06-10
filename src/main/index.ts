@@ -129,6 +129,7 @@ import {
   type SyntheticTitleSpinnerEntry
 } from './synthetic-title-spinner'
 import { shouldSendSyntheticTitleFrame } from './synthetic-title-visibility'
+import { shouldCopySyntheticTitleFrameToPtyData } from './synthetic-title-frame-routing'
 import { isCrashReportReason } from '../shared/crash-reporting'
 import {
   getSyntheticAgentTitleProfile,
@@ -990,10 +991,14 @@ function sendSyntheticTitle(ptyId: string, data: string, options: { force?: bool
   // Why: feed the per-PTY tracker directly (never onPtyData — emulator state,
   // tails, transcripts, and stats must not see fabricated bytes) so synthetic
   // titles/BELs reach pty:sideEffect consumers when main holds side-effect
-  // authority. The legacy pty:data copy below stays until slice 3 so renderer
-  // byte parsers keep working while the kill switch is off.
+  // authority.
   runtime?.ingestSyntheticTitleFrame(ptyId, data)
-  mainWindow.webContents.send('pty:data', { id: ptyId, data })
+  // Why: only the kill-switch-off renderer still byte-parses synthetic frames;
+  // under main authority the copy would just mint phantom ACKs for unmetered
+  // bytes (see synthetic-title-frame-routing.ts).
+  if (shouldCopySyntheticTitleFrameToPtyData(store?.getSettings())) {
+    mainWindow.webContents.send('pty:data', { id: ptyId, data })
+  }
 }
 
 function isSyntheticTitleWindowVisible(): boolean {

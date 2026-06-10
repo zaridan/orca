@@ -75,7 +75,7 @@ import {
 } from './terminal-bracketed-paste'
 import { createCommandCodeOutputStatusDetector } from './command-code-output-status'
 import type { PtyDataMeta } from './pty-dispatcher'
-import { createTerminalGitHubPRLinkDetector } from '@/lib/terminal-github-pr-link-detector'
+import { createTerminalGitHubPRLinkDetector } from '../../../../shared/terminal-github-pr-link-detector'
 import { installConptyDeviceAttributesHandler } from './terminal-conpty-device-attributes'
 import {
   cancelScheduledHiddenOutputRestore,
@@ -889,33 +889,40 @@ export function connectPanePty(
     }
     return pendingWrite.then(() => interruptInference.flushPending())
   }
-  const commandLifecycle = createTerminalCommandLifecycle({
-    onCommandFinished: () => {
-      const state = useAppStore.getState()
-      const entry = state.agentStatusByPaneKey[cacheKey]
-      const inferenceResult = flushPendingInterruptInference()
-      if (inferenceResult === true) {
-        // Why: OSC 133 D means the foreground shell command exited. If an
-        // interrupt was inferred first, drop only when the current interrupted
-        // row is still the same turn; otherwise a killed OpenCode CLI leaves a
-        // stale "interrupted" row even though the process is gone.
-        dropCommandFinishedStatusIfSameTurn(entry, { allowInferredInterrupt: true })
-        return
-      }
-      if (inferenceResult instanceof Promise) {
-        void inferenceResult.then((applied) => {
-          dropCommandFinishedStatusIfSameTurn(entry, {
-            allowInferredInterrupt: applied === true
-          })
-        })
-        return
-      }
-      // Why: OSC 133 D marks the foreground shell command exiting. Remove the
-      // row without retaining a done snapshot; this section represents a live
-      // agent process, and the shell prompt means that process is gone.
-      dropCommandFinishedStatusIfSameTurn(entry)
+  // Why: one command-finished policy whether the signal arrives as bytes
+  // (remote PTYs, kill switch off) or as a main-derived pty:sideEffect fact —
+  // routing both through this handler keeps the drop/interrupt semantics
+  // identical across authority modes.
+  const handleCommandFinished = (_bestEffortExitCode: number | null): void => {
+    const state = useAppStore.getState()
+    const entry = state.agentStatusByPaneKey[cacheKey]
+    const inferenceResult = flushPendingInterruptInference()
+    if (inferenceResult === true) {
+      // Why: OSC 133 D means the foreground shell command exited. If an
+      // interrupt was inferred first, drop only when the current interrupted
+      // row is still the same turn; otherwise a killed OpenCode CLI leaves a
+      // stale "interrupted" row even though the process is gone.
+      dropCommandFinishedStatusIfSameTurn(entry, { allowInferredInterrupt: true })
+      return
     }
+    if (inferenceResult instanceof Promise) {
+      void inferenceResult.then((applied) => {
+        dropCommandFinishedStatusIfSameTurn(entry, {
+          allowInferredInterrupt: applied === true
+        })
+      })
+      return
+    }
+    // Why: OSC 133 D marks the foreground shell command exiting. Remove the
+    // row without retaining a done snapshot; this section represents a live
+    // agent process, and the shell prompt means that process is gone.
+    dropCommandFinishedStatusIfSameTurn(entry)
+  }
+  const commandLifecycle = createTerminalCommandLifecycle({
+    onCommandFinished: handleCommandFinished
   })
+  // Why: the xterm OSC 133 swallow is rendering hygiene, not a side effect —
+  // it stays attached in every authority mode.
   commandLifecycle.attachXtermConsumer(pane.terminal)
   const onTerminalKeyDown = (event: KeyboardEvent): void => {
     if (isPlainEscapeKeyEvent(event)) {
@@ -993,7 +1000,10 @@ export function connectPanePty(
         onBell,
         onAgentBecameIdle,
         onAgentBecameWorking,
-        onAgentExited
+        onAgentExited,
+        onCommandFinished: handleCommandFinished,
+        onPrLink: (link) =>
+          useAppStore.getState().observeTerminalGitHubPullRequestLink(deps.worktreeId, link)
       },
       restoreTitleOnRegister: true
     })
@@ -2660,11 +2670,17 @@ export function connectPanePty(
     const dataCallback = (data: string, meta?: PtyDataMeta): void => {
       resetHiddenOutputRestoreIfPtyChanged()
       observeTerminalBracketedPasteModeOutput(pane.terminal, data)
-      for (const link of observeTerminalGitHubPRLink(data)) {
-        useAppStore.getState().observeTerminalGitHubPullRequestLink(deps.worktreeId, link)
+      // Why: with main side-effect authority, command-finished and pr-link
+      // arrive as pty:sideEffect facts — byte-scanning here too would
+      // double-fire the same policy. Remote-runtime PTYs (and the kill
+      // switch off) keep this byte path as their only parser.
+      if (!mainSideEffectAuthority) {
+        for (const link of observeTerminalGitHubPRLink(data)) {
+          useAppStore.getState().observeTerminalGitHubPullRequestLink(deps.worktreeId, link)
+        }
+        commandLifecycle.handlePtyData(data)
       }
       commandCodeOutputStatusDetector.observe(data)
-      commandLifecycle.handlePtyData(data)
       // Why: split-pane layouts have multiple visible-but-inactive panes whose
       // output the user is watching. Throttle only when the pane or whole
       // Electron document is hidden.

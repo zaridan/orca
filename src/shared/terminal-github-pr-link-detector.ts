@@ -1,3 +1,12 @@
+/**
+ * Chunk-boundary-safe GitHub PR URL scan over PTY output.
+ *
+ * Why shared: terminal-side-effect-authority.md (slice 3) makes main emit
+ * `pr-link` facts from its per-PTY tracker for local/SSH PTYs, while the
+ * renderer keeps byte-scanning for remote-runtime PTYs and the kill-switch-off
+ * path. Both paths must share the carry/dedupe semantics or links split across
+ * chunks would resolve differently per authority mode.
+ */
 import type { RepoSlug } from './github-links'
 import { parseGitHubIssueOrPRLink } from './github-links'
 

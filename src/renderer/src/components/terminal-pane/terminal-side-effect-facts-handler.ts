@@ -12,6 +12,7 @@
  * where pre-mount output produces no attention side effects.
  */
 import type { GlobalSettings } from '../../../../shared/types'
+import type { TerminalGitHubPRLink } from '../../../../shared/terminal-github-pr-link-detector'
 import type {
   TerminalSideEffectBatch,
   TerminalSideEffectFact
@@ -73,6 +74,10 @@ export type TerminalSideEffectFactConsumerCallbacks = {
   onAgentBecameIdle?: (title: string, meta?: { staleWorkingTitleClear?: boolean }) => void
   onAgentBecameWorking?: () => void
   onAgentExited?: () => void
+  /** OSC 133;D — same policy hook the byte-mode commandLifecycle drove
+   *  (stale agent-status row drop + interrupt-inference coordination). */
+  onCommandFinished?: (bestEffortExitCode: number | null) => void
+  onPrLink?: (link: TerminalGitHubPRLink) => void
 }
 
 type ConsumerEntry = {
@@ -109,6 +114,12 @@ function applyLiveFact(entry: ConsumerEntry, fact: TerminalSideEffectFact, seq: 
       return
     case 'agent-exited':
       entry.callbacks.onAgentExited?.()
+      return
+    case 'command-finished':
+      entry.callbacks.onCommandFinished?.(fact.exitCode)
+      return
+    case 'pr-link':
+      entry.callbacks.onPrLink?.(fact.link)
   }
 }
 

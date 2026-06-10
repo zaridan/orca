@@ -468,8 +468,8 @@ describe('startParkedTerminalByteWatcher', () => {
   //
   // With the kill switch on, the watcher must not register byte parsers —
   // main is the single byte parser and the watcher's policy block consumes
-  // pty:sideEffect facts instead. The byte sidecar stays only for the 2031
-  // reply and PR-link scan (they move to main in a later slice).
+  // pty:sideEffect facts instead. The byte sidecar stays ONLY for the 2031
+  // reply (query authority never moves to main); PR links arrive as facts.
   describe('with main side-effect authority on', () => {
     function enableMainAuthority(): void {
       mockStoreState.settings = {
@@ -664,15 +664,36 @@ describe('startParkedTerminalByteWatcher', () => {
       dispose()
     })
 
-    it('still answers DECSET 2031 and observes PR links from the byte sidecar', async () => {
+    it('keeps the byte sidecar only for the DECSET 2031 reply — no PR byte scan', async () => {
       enableMainAuthority()
       const { dispose, sendInput } = await startWatcher()
 
       emit('\x1b[?2031h')
       expect(sendInput).toHaveBeenCalledWith('\x1b[?997;1n')
 
+      // Why: pr-link facts arrive on the channel; byte-scanning here too
+      // would observe every link twice.
       emit('PR: https://github.com/orca-dev/orca/pull/42\r\n')
+      expect(mockStoreState.observeTerminalGitHubPullRequestLink).not.toHaveBeenCalled()
+      dispose()
+    })
+
+    it('observes PR links from pr-link facts with worktree attribution', async () => {
+      enableMainAuthority()
+      const { dispose } = await startWatcher()
+
+      const link = {
+        url: 'https://github.com/orca-dev/orca/pull/421',
+        slug: { owner: 'orca-dev', repo: 'orca' },
+        number: 421
+      }
+      await dispatchFacts([{ kind: 'pr-link', link }])
+
       expect(mockStoreState.observeTerminalGitHubPullRequestLink).toHaveBeenCalledTimes(1)
+      expect(mockStoreState.observeTerminalGitHubPullRequestLink).toHaveBeenCalledWith(
+        WORKTREE_ID,
+        link
+      )
       dispose()
     })
 

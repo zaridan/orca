@@ -18,6 +18,11 @@ import {
   normalizeTerminalTitle
 } from './agent-detection'
 import { createBellDetector } from './terminal-bell-detector'
+import {
+  createTerminalGitHubPRLinkDetector,
+  type TerminalGitHubPRLink
+} from './terminal-github-pr-link-detector'
+import { createOsc133CommandFinishedScanner } from './terminal-osc133-command-finished'
 
 /** Ms of title-less output after a working title before it is cleared. */
 export const STALE_WORKING_TITLE_TIMEOUT_MS = 3000
@@ -59,6 +64,15 @@ export type TerminalTitleTrackerCallbacks = {
    * across chunks), after the chunk's title facts — the renderer drain order.
    */
   onBell?: () => void
+  /**
+   * Fired per complete OSC 133;D (chunk-boundary-safe) with the sequence's
+   * best-effort exit code — mirrors the renderer terminal-command-lifecycle
+   * semantics so the fact path drops stale agent rows exactly like byte mode.
+   */
+  onCommandFinished?: (bestEffortExitCode: number | null) => void
+  /** Fired once per newly observed GitHub PR URL (chunk-boundary-safe,
+   *  deduplicated per tracker like the renderer detector). */
+  onPrLink?: (link: TerminalGitHubPRLink) => void
 }
 
 export type TerminalTitleTracker = {
@@ -87,8 +101,22 @@ export function createTerminalTitleTracker(
   callbacks: TerminalTitleTrackerCallbacks,
   options: { initialTitle?: string } = {}
 ): TerminalTitleTracker {
-  const { onTitle, onAgentBecameIdle, onAgentBecameWorking, onAgentExited, onBell } = callbacks
+  const {
+    onTitle,
+    onAgentBecameIdle,
+    onAgentBecameWorking,
+    onAgentExited,
+    onBell,
+    onCommandFinished,
+    onPrLink
+  } = callbacks
   const bellDetector = onBell ? createBellDetector() : null
+  // Why: created only when a consumer exists (like the bell detector) so
+  // headless serve never pays the per-chunk 133/URL scans.
+  const commandFinishedScanner = onCommandFinished
+    ? createOsc133CommandFinishedScanner(onCommandFinished)
+    : null
+  const prLinkDetector = onPrLink ? createTerminalGitHubPRLinkDetector() : null
   // Why: seed both the emitted-title memory (stale-title probe) and the agent
   // tracker so a mid-session tracker behaves as if it had observed the pane's
   // last live title — parity with the renderer processor's seeding.
@@ -183,6 +211,15 @@ export function createTerminalTitleTracker(
         }
       }, STALE_WORKING_TITLE_TIMEOUT_MS)
     }
+    // Per-chunk fact order: titles → command-finished → pr-link → bell. The
+    // bell stays last (the renderer drain's order); the byte scanners keep
+    // their own cross-chunk carry so split sequences/URLs still resolve.
+    commandFinishedScanner?.scan(data)
+    if (prLinkDetector) {
+      for (const link of prLinkDetector(data)) {
+        onPrLink?.(link)
+      }
+    }
     if (containsBell) {
       onBell?.()
     }
@@ -204,6 +241,8 @@ export function createTerminalTitleTracker(
     // The deliberate permission BEL rides outside the OSC title sequence. A
     // FRESH detector instance keeps the OSC-terminator-vs-bell semantics
     // while guaranteeing zero interaction with the chunk detector's state.
+    // Synthetic frames never reach the 133/PR-link scanners: fabricated bytes
+    // contain neither and must not perturb their cross-chunk carry state.
     if (onBell && createBellDetector().chunkContainsBell(frame)) {
       onBell()
     }
@@ -227,6 +266,7 @@ export function createTerminalTitleTracker(
       clearStaleTitleTimer()
       agentTracker?.reset()
       bellDetector?.reset()
+      commandFinishedScanner?.reset()
     }
   }
 }

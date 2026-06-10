@@ -3763,6 +3763,97 @@ describe('OrcaRuntimeService', () => {
       expect(batches[0].facts.at(-1)).toEqual({ kind: 'bell' })
     })
 
+    it('emits command-finished facts with best-effort exit codes across chunk splits', () => {
+      const { runtime, batches } = createSideEffectRuntime()
+      syncSinglePty(runtime)
+
+      runtime.onPtyData('pty-1', 'output\x1b]133;D;13', 100)
+      expect(batches).toEqual([])
+      runtime.onPtyData('pty-1', '0\x07prompt $ ', 101)
+      runtime.onPtyData('pty-1', '\x1b]133;D\x07', 102)
+
+      expect(batches.flatMap((batch) => batch.facts)).toEqual([
+        { kind: 'command-finished', exitCode: 130 },
+        { kind: 'command-finished', exitCode: null }
+      ])
+    })
+
+    it('emits pr-link facts once per URL with batch attribution', () => {
+      const { runtime, batches } = createSideEffectRuntime()
+      syncSinglePty(runtime)
+
+      runtime.onPtyData('pty-1', 'PR https://github.com/acme/orca/pull/4', 100)
+      runtime.onPtyData('pty-1', '2\r\nand https://github.com/acme/orca/pull/43 done\r\n', 101)
+      // Repeated URL: deduped per PTY, like the renderer byte detector.
+      runtime.onPtyData('pty-1', 'again https://github.com/acme/orca/pull/42\r\n', 102)
+
+      expect(batches).toHaveLength(1)
+      expect(batches[0]).toMatchObject({
+        ptyId: 'pty-1',
+        worktreeId: TEST_WORKTREE_ID,
+        tabId: 'tab-1'
+      })
+      expect(batches[0].facts).toEqual([
+        {
+          kind: 'pr-link',
+          link: {
+            url: 'https://github.com/acme/orca/pull/42',
+            slug: { owner: 'acme', repo: 'orca' },
+            number: 42
+          }
+        },
+        {
+          kind: 'pr-link',
+          link: {
+            url: 'https://github.com/acme/orca/pull/43',
+            slug: { owner: 'acme', repo: 'orca' },
+            number: 43
+          }
+        }
+      ])
+    })
+
+    it('prefers the tracked title over the renderer snapshot lastTitle', async () => {
+      const { runtime } = createSideEffectRuntime()
+      const serializeBuffer = vi.fn().mockResolvedValue({
+        data: 'visible content',
+        cols: 80,
+        rows: 24,
+        // The renderer xterm never saw the synthetic frame (it no longer
+        // rides pty:data), so its serializer reports a stale title.
+        lastTitle: 'stale shell title'
+      })
+      runtime.setPtyController({
+        write: () => true,
+        kill: () => true,
+        getForegroundProcess: async () => null,
+        serializeBuffer,
+        hasRendererSerializer: () => true,
+        getSize: () => ({ cols: 80, rows: 24 })
+      })
+      syncSinglePty(runtime)
+
+      runtime.ingestSyntheticTitleFrame('pty-1', '\x1b]0;⠋ Cursor Agent\x07')
+
+      const snapshot = await runtime.serializeTerminalBuffer('pty-1', { scrollbackRows: 10 })
+      expect(snapshot?.source).toBe('renderer')
+      expect(snapshot?.lastTitle).toBe('⠋ Cursor Agent')
+    })
+
+    it('prefers the tracked title over the headless emulator lastTitle', async () => {
+      const { runtime } = createSideEffectRuntime()
+      syncSinglePty(runtime)
+
+      runtime.onPtyData('pty-1', '\x1b]0;Codex working\x07real output\r\n', 100)
+      // The hook-driven idle frame lands only in main's tracker — the
+      // emulator never sees fabricated bytes (invariant 5).
+      runtime.ingestSyntheticTitleFrame('pty-1', '\x1b]0;Codex ready\x07')
+
+      const snapshot = await runtime.serializeMainTerminalBuffer('pty-1', { scrollbackRows: 10 })
+      expect(snapshot?.source).toBe('headless')
+      expect(snapshot?.lastTitle).toBe('Codex ready')
+    })
+
     it('returns a title-only replay snapshot and never historical attention', () => {
       const { runtime } = createSideEffectRuntime()
       syncSinglePty(runtime)

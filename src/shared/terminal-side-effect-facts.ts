@@ -6,6 +6,8 @@
  * See docs/reference/terminal-side-effect-authority.md.
  */
 
+import type { TerminalGitHubPRLink } from './terminal-github-pr-link-detector'
+
 /** Why tagged: stale-clear facts come from main's unthrottled 3s timer, not
  *  observed bytes. Renderer policy clears title/cache state from them but
  *  must not schedule task-complete notifications or unread attention — a
@@ -16,6 +18,11 @@ export type TerminalSideEffectFact =
   | { kind: 'agent-working' }
   | { kind: 'agent-idle'; title: string; staleWorkingTitleClear?: boolean }
   | { kind: 'agent-exited' }
+  /** OSC 133;D — foreground shell command exited (exit code best-effort). */
+  | { kind: 'command-finished'; exitCode: number | null }
+  /** Carries the parsed link so the renderer store consumer never re-parses
+   *  the URL (parse drift would break the per-PTY dedupe contract). */
+  | { kind: 'pr-link'; link: TerminalGitHubPRLink }
 
 export type TerminalSideEffectBatch = {
   ptyId: string
