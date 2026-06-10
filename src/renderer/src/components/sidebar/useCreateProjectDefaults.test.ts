@@ -4,6 +4,8 @@ import type * as ReactModule from 'react'
 const mocks = vi.hoisted(() => ({
   stateValues: [] as unknown[],
   stateIndex: 0,
+  refValues: [] as { current: unknown }[],
+  refIndex: 0,
   browseRuntimeServerDirectory: vi.fn(),
   callRuntimeRpc: vi.fn(),
   isGitAvailable: vi.fn(),
@@ -15,7 +17,13 @@ vi.mock('react', async (importOriginal) => {
   return {
     ...actual,
     useCallback: <T extends (...args: never[]) => unknown>(fn: T) => fn,
-    useRef: <T>(value: T) => ({ current: value }),
+    useRef: <T>(value: T) => {
+      const index = mocks.refIndex++
+      if (!(index in mocks.refValues)) {
+        mocks.refValues[index] = { current: value }
+      }
+      return mocks.refValues[index] as { current: T }
+    },
     useEffect: (effect: () => void | (() => void)) => {
       void effect()
     },
@@ -53,6 +61,7 @@ function flushAsync(): Promise<void> {
 
 function useHarness(overrides: Partial<Parameters<typeof useCreateProjectDefaults>[0]> = {}) {
   mocks.stateIndex = 0
+  mocks.refIndex = 0
   const setCreateParent = vi.fn()
   const setCreateKind = vi.fn()
   const result = useCreateProjectDefaults({
@@ -71,6 +80,8 @@ describe('useCreateProjectDefaults', () => {
     vi.clearAllMocks()
     mocks.stateValues = []
     mocks.stateIndex = 0
+    mocks.refValues = []
+    mocks.refIndex = 0
     vi.stubGlobal('window', {
       api: {
         repos: {
@@ -166,6 +177,44 @@ describe('useCreateProjectDefaults', () => {
     )
     expect(mocks.isGitAvailable).not.toHaveBeenCalled()
     expect(setCreateKind).toHaveBeenCalledWith('git')
+  })
+
+  it('replaces an untouched local default when switching to a runtime target', async () => {
+    mocks.isGitAvailable.mockResolvedValue(true)
+    mocks.browseRuntimeServerDirectory.mockResolvedValue({ resolvedPath: '/home/alice' })
+    mocks.callRuntimeRpc.mockResolvedValue({ available: true })
+
+    const local = useHarness()
+    await flushAsync()
+    expect(local.setCreateParent).toHaveBeenCalledWith('/Users/alice/orca/projects')
+
+    const runtime = useHarness({
+      activeRuntimeEnvironmentId: 'env-1',
+      createParent: '/Users/alice/orca/projects'
+    })
+    await flushAsync()
+
+    expect(mocks.browseRuntimeServerDirectory).toHaveBeenCalledWith('env-1', '~')
+    expect(runtime.setCreateParent).toHaveBeenCalledWith('/home/alice/orca/projects')
+    expect(mocks.stateValues[DEFAULT_PARENT_STATE]).toBe('/home/alice/orca/projects')
+  })
+
+  it('does not replace a touched parent when switching to a runtime target', async () => {
+    mocks.isGitAvailable.mockResolvedValue(true)
+    mocks.browseRuntimeServerDirectory.mockResolvedValue({ resolvedPath: '/home/alice' })
+    mocks.callRuntimeRpc.mockResolvedValue({ available: true })
+
+    const local = useHarness()
+    local.result.markCreateParentTouched()
+
+    const runtime = useHarness({
+      activeRuntimeEnvironmentId: 'env-1',
+      createParent: '/Users/alice/custom-projects'
+    })
+    await flushAsync()
+
+    expect(mocks.browseRuntimeServerDirectory).not.toHaveBeenCalled()
+    expect(runtime.setCreateParent).not.toHaveBeenCalled()
   })
 
   it('marks the runtime parent lookup failed without filling a parent', async () => {

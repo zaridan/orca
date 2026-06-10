@@ -99,15 +99,31 @@ export function CreateStep({
     createParent.trim().length > 0 &&
     gitAvailability !== 'checking' &&
     !isCreating
+  const missingLocationLabel = translate(
+    'auto.components.sidebar.AddRepoCreateStep.3a13f6e88b',
+    'location not selected'
+  )
+  const missingServerLocationLabel = translate(
+    'auto.components.sidebar.AddRepoCreateStep.6ed14c0281',
+    'server folder not selected'
+  )
 
   const summaryParent = useMemo(
     () =>
       formatCreateProjectParentSummary({
         parent: createParent,
         defaultParent,
-        runtimeEnvironmentId
+        runtimeEnvironmentId,
+        missingLocationLabel,
+        missingServerLocationLabel
       }),
-    [createParent, defaultParent, runtimeEnvironmentId]
+    [
+      createParent,
+      defaultParent,
+      missingLocationLabel,
+      missingServerLocationLabel,
+      runtimeEnvironmentId
+    ]
   )
   const targetPathPreview = useMemo(() => {
     const name = createName.trim() || CREATE_PROJECT_NAME_PLACEHOLDER

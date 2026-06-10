@@ -3030,6 +3030,8 @@
           "2a762f3b19": "Checking Git on this host...",
           "fe1e616c5b": "Git isn't installed, so a plain folder is the default.",
           "c234df77f7": "Choose or enter a server parent folder before creating.",
+          "3a13f6e88b": "location not selected",
+          "6ed14c0281": "server folder not selected",
           "5e97f0c4b9": "Project created",
           "2c12db1511": "Project already added",
           "875dda0995": "Enter a server parent path.",

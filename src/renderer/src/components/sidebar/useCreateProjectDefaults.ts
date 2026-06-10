@@ -6,7 +6,6 @@ import { browseRuntimeServerDirectory } from '@/runtime/runtime-server-directory
 import { callRuntimeRpc } from '@/runtime/runtime-rpc-client'
 import type { AddRepoDialogStep } from './add-repo-dialog-types'
 import {
-  getCreateProjectDefaultParentAutoFill,
   getDefaultCreateProjectParent,
   type GitAvailability,
   type RepoKind
@@ -16,6 +15,11 @@ const LOCAL_GIT_AVAILABILITY_TIMEOUT_MS = 1500
 const RUNTIME_GIT_AVAILABILITY_TIMEOUT_MS = 3000
 
 export type CreateRuntimeParentStatus = 'idle' | 'checking' | 'failed'
+
+type AutoFilledCreateParent = {
+  parent: string
+  runtimeEnvironmentId: string | null
+}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null
@@ -63,15 +67,25 @@ export function useCreateProjectDefaults({
   const [createRuntimeParentStatus, setCreateRuntimeParentStatus] =
     useState<CreateRuntimeParentStatus>('idle')
   const createStepAutoFilledRef = useRef(false)
+  const autoFilledCreateParentRef = useRef<AutoFilledCreateParent | null>(null)
   const createParentTouchedRef = useRef(false)
   const createKindTouchedRef = useRef(false)
   const createParentDefaultGenRef = useRef(0)
   const createGitProbeGenRef = useRef(0)
 
+  const canReplaceCreateParentDefault = useCallback((parent: string): boolean => {
+    if (createParentTouchedRef.current) {
+      return false
+    }
+    const trimmedParent = parent.trim()
+    return !trimmedParent || autoFilledCreateParentRef.current?.parent === trimmedParent
+  }, [])
+
   const resetCreateDefaultState = useCallback(() => {
     createParentDefaultGenRef.current++
     createGitProbeGenRef.current++
     createStepAutoFilledRef.current = false
+    autoFilledCreateParentRef.current = null
     createParentTouchedRef.current = false
     createKindTouchedRef.current = false
     setCreateDefaultParent('')
@@ -81,6 +95,7 @@ export function useCreateProjectDefaults({
 
   // Why: a default must never clobber a parent or kind the user picked themselves.
   const markCreateParentTouched = useCallback(() => {
+    autoFilledCreateParentRef.current = null
     createParentTouchedRef.current = true
   }, [])
   const markCreateKindTouched = useCallback(() => {
@@ -96,36 +111,41 @@ export function useCreateProjectDefaults({
     }
     // Why: invalidate any in-flight runtime parent probe once local mode owns the default.
     const gen = ++createParentDefaultGenRef.current
-    if (createParent.trim() || createParentTouchedRef.current) {
+    if (!canReplaceCreateParentDefault(createParent)) {
+      return
+    }
+    if (
+      autoFilledCreateParentRef.current?.runtimeEnvironmentId === null &&
+      autoFilledCreateParentRef.current.parent === createParent.trim()
+    ) {
       return
     }
     setCreateDefaultParent('')
     void window.api.repos
       .getDefaultCreateProjectParent()
       .then((parent) => {
-        const autoFill = getCreateProjectDefaultParentAutoFill({
-          step,
-          createParent,
-          activeRuntimeEnvironmentId,
-          defaultParent: parent,
-          createStepAutoFilled: createStepAutoFilledRef.current || createParentTouchedRef.current
-        })
         if (
           gen !== createParentDefaultGenRef.current ||
-          createParentTouchedRef.current ||
-          createParent.trim() ||
-          !autoFill
+          !canReplaceCreateParentDefault(createParent) ||
+          !parent
         ) {
           return
         }
         setCreateDefaultParent(parent)
         createStepAutoFilledRef.current = true
-        setCreateParent(autoFill.parent)
+        autoFilledCreateParentRef.current = { parent, runtimeEnvironmentId: null }
+        setCreateParent(parent)
       })
       .catch(() => {
         // Keep the field empty if the local host cannot provide a submit-ready default.
       })
-  }, [activeRuntimeEnvironmentId, createParent, setCreateParent, step])
+  }, [
+    activeRuntimeEnvironmentId,
+    canReplaceCreateParentDefault,
+    createParent,
+    setCreateParent,
+    step
+  ])
 
   useEffect(() => {
     if (step !== 'create') {
@@ -136,7 +156,14 @@ export function useCreateProjectDefaults({
       setCreateRuntimeParentStatus('idle')
       return
     }
-    if (createParent.trim() || createParentTouchedRef.current) {
+    if (!canReplaceCreateParentDefault(createParent)) {
+      setCreateRuntimeParentStatus('idle')
+      return
+    }
+    if (
+      autoFilledCreateParentRef.current?.runtimeEnvironmentId === runtimeEnvironmentId &&
+      autoFilledCreateParentRef.current.parent === createParent.trim()
+    ) {
       setCreateRuntimeParentStatus('idle')
       return
     }
@@ -151,13 +178,13 @@ export function useCreateProjectDefaults({
       .then((result) => {
         if (
           gen !== createParentDefaultGenRef.current ||
-          createParentTouchedRef.current ||
-          createParent.trim()
+          !canReplaceCreateParentDefault(createParent)
         ) {
           return
         }
         const parent = getDefaultCreateProjectParent(result.resolvedPath)
         createStepAutoFilledRef.current = true
+        autoFilledCreateParentRef.current = { parent, runtimeEnvironmentId }
         setCreateDefaultParent(parent)
         setCreateParent(parent)
         setCreateRuntimeParentStatus('idle')
@@ -168,7 +195,13 @@ export function useCreateProjectDefaults({
         }
         setCreateRuntimeParentStatus('failed')
       })
-  }, [activeRuntimeEnvironmentId, createParent, setCreateParent, step])
+  }, [
+    activeRuntimeEnvironmentId,
+    canReplaceCreateParentDefault,
+    createParent,
+    setCreateParent,
+    step
+  ])
 
   useEffect(() => {
     if (step !== 'create') {

@@ -67,15 +67,19 @@ export function getCreateProjectDefaultParentAutoFill({
 export function formatCreateProjectParentSummary({
   parent,
   defaultParent,
-  runtimeEnvironmentId
+  runtimeEnvironmentId,
+  missingLocationLabel = 'location not selected',
+  missingServerLocationLabel = 'server folder not selected'
 }: {
   parent: string
   defaultParent: string
   runtimeEnvironmentId?: string | null
+  missingLocationLabel?: string
+  missingServerLocationLabel?: string
 }): string {
   const trimmedParent = parent.trim()
   if (!trimmedParent) {
-    return runtimeEnvironmentId ? 'server folder not selected' : 'location not selected'
+    return runtimeEnvironmentId ? missingServerLocationLabel : missingLocationLabel
   }
   if (defaultParent && trimmedParent === defaultParent && !runtimeEnvironmentId) {
     return '~/orca/projects'
