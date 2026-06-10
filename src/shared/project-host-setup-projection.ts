@@ -1,5 +1,11 @@
 import { getRepoExecutionHostId } from './execution-host'
-import type { Project, ProjectHostSetup, ProjectProviderIdentity, Repo } from './types'
+import type {
+  Project,
+  ProjectHostSetup,
+  ProjectProviderIdentity,
+  Repo,
+  WorktreeMeta
+} from './types'
 
 type ProjectAccumulator = {
   project: Project
@@ -114,4 +120,26 @@ export function getProjectHostSetupsForProject(
   projectId: string
 ): ProjectHostSetup[] {
   return setups.filter((setup) => setup.projectId === projectId)
+}
+
+export function getProjectHostSetupForRepo(
+  setups: readonly ProjectHostSetup[],
+  repo: Repo
+): ProjectHostSetup {
+  return (
+    setups.find((setup) => setup.repoId === repo.id) ??
+    projectHostSetupProjectionFromRepos([repo]).setups[0]
+  )
+}
+
+export function getProjectHostSetupWorktreeMeta(
+  setups: readonly ProjectHostSetup[],
+  repo: Repo
+): Pick<WorktreeMeta, 'projectId' | 'hostId' | 'projectHostSetupId'> {
+  const setup = getProjectHostSetupForRepo(setups, repo)
+  return {
+    projectId: setup.projectId,
+    hostId: setup.hostId,
+    projectHostSetupId: setup.id
+  }
 }

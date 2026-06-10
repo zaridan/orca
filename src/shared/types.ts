@@ -286,6 +286,12 @@ export type Worktree = {
   id: string // `${repoId}::${path}`
   instanceId?: string
   repoId: string
+  /** Durable project identity. Optional while legacy repo-only workspaces migrate. */
+  projectId?: string
+  /** Execution host that owns the workspace. Optional for pre-project-host metadata. */
+  hostId?: ExecutionHostId
+  /** Host-specific setup used to create/run this workspace. */
+  projectHostSetupId?: string
   displayName: string
   comment: string
   linkedIssue: number | null
@@ -360,6 +366,12 @@ export type GitHubPrStartPoint = {
 export type WorktreeMeta = {
   /** Immutable per-workspace-instance ID used to reject stale lineage after path reuse. */
   instanceId?: string
+  /** See Worktree.projectId. Persisted for project-first workspace ownership. */
+  projectId?: string
+  /** See Worktree.hostId. Persisted for project-first workspace ownership. */
+  hostId?: ExecutionHostId
+  /** See Worktree.projectHostSetupId. Persisted for project-first workspace ownership. */
+  projectHostSetupId?: string
   displayName: string
   comment: string
   linkedIssue: number | null

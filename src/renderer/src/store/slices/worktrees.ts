@@ -195,6 +195,9 @@ function areWorktreesEqual(current: Worktree[] | undefined, next: Worktree[]): b
       worktree.id === candidate.id &&
       worktree.instanceId === candidate.instanceId &&
       worktree.repoId === candidate.repoId &&
+      worktree.projectId === candidate.projectId &&
+      worktree.hostId === candidate.hostId &&
+      worktree.projectHostSetupId === candidate.projectHostSetupId &&
       worktree.path === candidate.path &&
       worktree.head === candidate.head &&
       worktree.branch === candidate.branch &&

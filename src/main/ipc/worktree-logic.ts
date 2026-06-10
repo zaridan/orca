@@ -279,6 +279,11 @@ export function mergeWorktree(
     id: `${repoId}::${git.path}`,
     ...(meta?.instanceId !== undefined ? { instanceId: meta.instanceId } : {}),
     repoId,
+    ...(meta?.projectId !== undefined ? { projectId: meta.projectId } : {}),
+    ...(meta?.hostId !== undefined ? { hostId: meta.hostId } : {}),
+    ...(meta?.projectHostSetupId !== undefined
+      ? { projectHostSetupId: meta.projectHostSetupId }
+      : {}),
     path: git.path,
     head: git.head,
     branch: git.branch,

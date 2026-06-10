@@ -716,6 +716,10 @@ Landed so far:
   drafts can now carry `projectId`, `hostId`, and `projectHostSetupId`, and the
   initial creation target can resolve those fields through a ready setup before
   falling back to the legacy repo priority order.
+- Added optional `projectId`, `hostId`, and `projectHostSetupId` ownership
+  fields to `Worktree`/`WorktreeMeta`, threaded them through worktree merge
+  paths, and stamped them for new local, SSH, folder, and runtime-created
+  workspaces when project-host setup data is available.
 - Added tests for local repos, SSH repos, same-provider multi-host grouping,
   no-identity same-name non-grouping, selector cache behavior, persistence
   backfill, repo mutation synchronization, renderer hydration, and runtime RPC
@@ -730,8 +734,9 @@ Important limitation:
 - This is not the full migration yet. `Repo` remains the source of truth for the
   compatibility records, and workspace creation still maps the resolved
   project-host setup back into the existing repo-centric `createWorktree` API.
-  Settings and setup-on-host flows still use the current repo-centric APIs until
-  later steps are implemented.
+  Existing workspaces without the new ownership metadata still infer host/project
+  through their repo compatibility record. Settings and setup-on-host flows still
+  use the current repo-centric APIs until later steps are implemented.
 
 Remaining end-to-end work:
 
@@ -740,8 +745,9 @@ Remaining end-to-end work:
 - add setup-on-host flows for local paths and SSH paths
 - split settings into explicit client, host, project, and project-host setup
   scopes
-- persist explicit workspace project/setup/host ownership instead of relying on
-  the repo compatibility record
+- backfill explicit workspace project/setup/host ownership for existing
+  metadata-only workspaces where safe, while keeping repo compatibility fallback
+  for older servers and profiles
 - audit runtime routing, cache keys, request cancellation, and stale-response
   handling for host/setup-local ownership
 - add project-first CLI/API commands with compatibility aliases for existing

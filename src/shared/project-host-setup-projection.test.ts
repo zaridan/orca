@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   projectHostSetupProjectionFromRepos,
-  getProjectHostSetupsForProject
+  getProjectHostSetupsForProject,
+  getProjectHostSetupWorktreeMeta
 } from './project-host-setup-projection'
 import type { Repo } from './types'
 
@@ -127,5 +128,22 @@ describe('project host setup projection', () => {
 
     expect(projection.projects[0]?.id).toBe('repo:repo-1')
     expect(projection.projects[0]?.providerIdentity).toBeUndefined()
+  })
+
+  it('derives workspace ownership metadata from the repo setup', () => {
+    const targetRepo = repo({
+      id: 'remote-repo',
+      path: '/home/alice/orca',
+      displayName: 'orca',
+      connectionId: 'openclaw 2',
+      upstream: { owner: 'stablyai', repo: 'orca' }
+    })
+    const projection = projectHostSetupProjectionFromRepos([targetRepo])
+
+    expect(getProjectHostSetupWorktreeMeta(projection.setups, targetRepo)).toEqual({
+      projectId: 'github:stablyai/orca',
+      hostId: 'ssh:openclaw%202',
+      projectHostSetupId: 'remote-repo'
+    })
   })
 })
