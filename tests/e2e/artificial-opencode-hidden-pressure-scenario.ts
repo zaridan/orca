@@ -54,9 +54,10 @@ type HiddenPressureDeps<TMeasurement, TDebug, TScheduler, TMainPressure, TAckGat
   writeInteractivePromptScript: (scriptPath: string, runId: string) => void
 }
 
+// Why: the renderer hidden-skip counters are gone with the skip grammar —
+// withheld hidden output is observed via main's delivery-drop counters only.
 type HiddenPressureDebug = {
-  hiddenRendererSkipCount: number
-  hiddenRendererSkippedChars: number
+  hiddenRendererMode2031ReplyCount: number
 }
 
 type HiddenPressureMeasurement = {
@@ -185,11 +186,11 @@ export async function runHiddenRealPtyPressureScenario<
       ackGate
     )
 
-    // New hidden-delivery contract (all pressure modes): bytes never reach the
-    // renderer, so hidden skips may legitimately be zero — at most a pre-latch
-    // trickle below one pane's output — and main's renderer-delivery pressure
-    // must stay clearly below the old 2 MB backpressure target.
-    expect(debug?.hiddenRendererSkippedChars ?? 0).toBeLessThan(pressureOutputChars)
+    // Hidden-delivery contract (all pressure modes): bytes never reach the
+    // renderer — main's drop counter is the withheld-output signal (the
+    // renderer skip counters were deleted with the skip grammar) — and main's
+    // renderer-delivery pressure must stay clearly below the old 2 MB
+    // backpressure target.
     expect(mainPressure?.hiddenDeliveryDroppedChars ?? 0).toBeGreaterThanOrEqual(
       pressureOutputChars
     )
@@ -214,7 +215,7 @@ export async function runHiddenRealPtyPressureScenario<
       type: `opencode-hidden-real-pty-restore${annotationSuffix ?? ''}`,
       description: `panes=${hiddenPanes.length + 1} restore=${restoreLatencyMs.toFixed(
         1
-      )}ms hiddenSkippedChars=${debug?.hiddenRendererSkippedChars ?? 0} hiddenDeliveryDroppedChars=${
+      )}ms hiddenDeliveryDroppedChars=${
         mainPressure?.hiddenDeliveryDroppedChars ?? 0
       } mainPeakInFlightChars=${mainPressure?.peakRendererInFlightChars ?? 0} heldAckChars=${
         ackGate?.heldAckChars ?? 0
@@ -236,8 +237,7 @@ export async function runHiddenRealPtyPressureScenario<
 
 // Why: replaces the old waitForMainPtyPressureBacklog premise — the Phase-4
 // gate drops hidden bytes in main, so renderer-delivery pressure never builds;
-// readiness is the gate reporting one pane's worth of dropped output. The 30s
-// timeout covers the rich-model 11s startup-window delay.
+// readiness is the gate reporting one pane's worth of dropped output.
 async function waitForMainHiddenDeliveryDrops<TMainPressure extends HiddenPressureMainSnapshot>(
   orcaPage: Page,
   deps: { readMainPtyPressureDebug: (page: Page) => Promise<TMainPressure | null> },

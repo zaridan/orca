@@ -169,7 +169,7 @@ type ScrollbackTabSetup = {
 }
 
 // Why: each tab generates its scrollback while visible, so every xterm holds
-// the full buffer before going hidden — the hidden skip latch never gets a
+// the full buffer before going hidden — the hidden-delivery gate never gets a
 // chance to drop the output the memory comparison depends on.
 async function setUpScrollbackTabs(
   page: Page,

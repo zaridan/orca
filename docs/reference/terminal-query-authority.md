@@ -175,9 +175,6 @@ closed by the slice-3 `initiallyHidden` spawn flag (races section).
 
 - Visible or unmarked PTY (chunk was delivered).
 - Renderer delivery interest registered (chunk was delivered to a sidecar).
-- Codex startup window active — the renderer never marks the PTY hidden while
-  the window runs (`pty-connection.ts:2259-2261`), so the gate predicate is
-  structurally false; the live xterm answers startup probes.
 - Remote-runtime (`remote:`) PTYs — never markable
   (`isHiddenDeliveryGateManagedPty`), bytes never transit local main.
 - Remote view subscriber attached (mobile/web/remote desktop owns replies).
@@ -210,13 +207,12 @@ point per chunk); where the race costs anything it costs a missing reply.
 That is acceptable for state queries (DSR/CPR/DECRPM — TUIs re-probe or
 tolerate silence, as they did for every hidden pane before this phase). The
 one blocking-on-no-reply sequence, ConPTY DA1, only fires at spawn. A visible
-pane or an active codex startup window answers it from the renderer xterm.
-A PTY spawned hidden **without** the startup window previously had no
-answerer until the renderer's hidden mark landed in main (one IPC hop after
-spawn). Slice 3 closes that window with the `initiallyHidden` spawn-record
-flag: the renderer declares hidden-at-spawn on `pty:spawn` (never while the
-codex startup window would run, and never for remote-runtime transports),
-and main marks the PTY hidden before the first byte — pre-spawn for
+pane answers it from the renderer xterm. A PTY spawned hidden previously had
+no answerer until the renderer's hidden mark landed in main (one IPC hop
+after spawn). Slice 3 closes that window with the `initiallyHidden`
+spawn-record flag: the renderer declares hidden-at-spawn on `pty:spawn`
+(never for remote-runtime transports), and main marks the PTY hidden before
+the first byte — pre-spawn for
 daemon-host sessions whose id is minted up front, immediately after
 `provider.spawn` resolves otherwise — so the gate and responder own queries
 from byte one. The pane's first visibility sync then re-marks or unmarks
@@ -293,15 +289,20 @@ otherwise untouched in this phase.
 
 ## What Phase 6 (delete skip grammar + startup window) requires from this design
 
+Phase 6 is shipped: the renderer hidden-skip eligibility grammar and the 10s
+codex startup renderer-query window are deleted. Kill-switch-off hidden panes
+fall back to the pre-grammar path — hidden bytes ride the bounded background
+scheduler queue; overflow latches the model-snapshot restore — and never run
+a per-chunk content scan.
+
 Accepted and shipped in slice 3 (except where noted):
 
 - **Mark-before-first-byte** (shipped): panes spawned without a visible view
   are hidden-marked at spawn via the `initiallyHidden` flag on `pty:spawn`
   (spawn-record flag, not a renderer round trip) so startup queries —
-  including ConPTY's blocking DA1 — are main-owned from byte zero. Codex
-  startup probes stay renderer-answered while the 10s window exists: the
-  renderer never sets the flag for codex startups; once Phase 6 deletes the
-  window, dropping that exclusion makes codex spawns main-owned too.
+  including ConPTY's blocking DA1 — are main-owned from byte zero. Phase 6
+  removed the codex exclusion with the window: codex spawns are main-owned
+  from byte zero too, the responder answering their startup probes.
 - **Attributes before spawn** (shipped): the renderer pushes composed view
   attributes once at app start (right after settings load, before terminal
   reconnect/spawn), so spawn-time view-attribute queries no longer fall into

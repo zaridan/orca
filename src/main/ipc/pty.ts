@@ -2219,7 +2219,6 @@ export function registerPtyHandlers(
         // §races) — the renderer knows at spawn time that no visible view
         // will consume this PTY's bytes, so main marks it hidden BEFORE the
         // first byte and the gate + model responder own spawn-time queries.
-        // The renderer never sets this while the codex startup window runs.
         initiallyHidden?: boolean
         // Why: closes the SIGKILL race documented in INVESTIGATION.md by
         // letting main patch + sync-flush the (worktreeId, tabId, leafId →

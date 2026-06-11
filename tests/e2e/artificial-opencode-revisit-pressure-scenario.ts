@@ -26,7 +26,9 @@ type RevisitPressureMeasurement = {
   maxTimerDriftMs: number
 }
 
-type RevisitPressureDebug = { hiddenRendererSkipCount: number; hiddenRendererSkippedChars: number }
+// Why: the renderer hidden-skip counters were deleted with the skip grammar;
+// only the mode-2031 fact-reply counter still exists renderer-side.
+type RevisitPressureDebug = { hiddenRendererMode2031ReplyCount: number }
 
 type RevisitPressureSchedulerSnapshot = {
   peakQueuedChars: number
@@ -180,7 +182,6 @@ export async function runRendererBackpressureRevisitScenario<
 
     expectPressureStayedBounded({
       ackGate,
-      hiddenDebug,
       mainRendererPressureTargetChars,
       maxMedianKeyLatencyMs,
       maxRendererSchedulerQueuedChars,
@@ -273,7 +274,6 @@ async function waitForMarkerLatency(
 
 function expectPressureStayedBounded<TMeasurement extends RevisitPressureMeasurement>({
   ackGate,
-  hiddenDebug,
   mainRendererPressureTargetChars,
   maxMedianKeyLatencyMs,
   maxRendererSchedulerQueuedChars,
@@ -285,7 +285,6 @@ function expectPressureStayedBounded<TMeasurement extends RevisitPressureMeasure
   duringPressure
 }: {
   ackGate: RevisitPressureAckGate | null
-  hiddenDebug: RevisitPressureDebug | null
   mainRendererPressureTargetChars: number
   maxMedianKeyLatencyMs: number
   maxRendererSchedulerQueuedChars: number
@@ -306,8 +305,6 @@ function expectPressureStayedBounded<TMeasurement extends RevisitPressureMeasure
   expect(scheduler?.peakQueuedChars ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
     maxRendererSchedulerQueuedChars
   )
-  expect(hiddenDebug?.hiddenRendererSkipCount ?? 0).toBe(0)
-  expect(hiddenDebug?.hiddenRendererSkippedChars ?? 0).toBe(0)
   expect(measurement.medianLatencyMs).toBeLessThan(maxMedianKeyLatencyMs)
   expect(measurement.worstLatencyMs).toBeLessThan(maxWorstKeyLatencyMs)
   expect(measurement.maxTimerDriftMs).toBeLessThan(maxTimerDriftMs)

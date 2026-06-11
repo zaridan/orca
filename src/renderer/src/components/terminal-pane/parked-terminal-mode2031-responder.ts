@@ -8,6 +8,11 @@
  * as a delivery-interest signal, so it is only used while the hidden-delivery
  * gate is OFF — gated parked PTYs answer from the main tracker's
  * '2031-subscribe' fact instead (parked-terminal-byte-watcher.ts).
+ *
+ * Survives Phase 6 (skip-grammar deletion): mounted switch-off hidden panes
+ * answer 2031 from xterm once the background queue drains, but a PARKED tab
+ * has no xterm in any switch-off mode, and the '2031-subscribe' fact is only
+ * consumed while the gate is ON — this sidecar stays the only answerer here.
  */
 import {
   mode2031SequenceFor,

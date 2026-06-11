@@ -58,14 +58,11 @@ type SyntheticOpenCodeWindow = Window & {
   }
 }
 
+// Why: the renderer hidden-skip grammar is deleted — hidden bytes are dropped
+// in main (gate) or ride the background queue. Only the mode-2031 fact-reply
+// counter still has a renderer-side producer.
 type TerminalPtyOutputDebugSnapshot = {
-  hiddenRendererSkipCount: number
-  hiddenRendererSkippedChars: number
   hiddenRendererMode2031ReplyCount: number
-  hiddenRendererLiveSynchronizedChars: number
-  hiddenRendererLiveNonSynchronizedChars: number
-  hiddenRendererStartupWindowChars: number
-  hiddenRendererSplitBoundaryChars: number
 }
 
 type TerminalOutputSchedulerDebugSnapshot = {
@@ -120,7 +117,6 @@ const DEFAULT_PRESSURE_BACKGROUND_PANES = 17
 const DEFAULT_PRESSURE_OUTPUT_CHARS = 768 * 1024
 const DEFAULT_HIDDEN_PRESSURE_PANES = 17
 const HIDDEN_PRESSURE_START_DELAY_MS = 1200
-const RICH_MODEL_HIDDEN_PRESSURE_START_DELAY_MS = 11_000
 const DEFAULT_FRAME_COUNT = 180
 const DEFAULT_FRAME_INTERVAL_MS = 6
 const TIMER_SAMPLE_MS = 16
@@ -427,11 +423,7 @@ function annotateTypingMeasurement(
   mainPressure: MainPtyPressureDebugSnapshot | null = null,
   ackGate: TerminalPtyAckGateSnapshot | null = null
 ): void {
-  const hiddenSkipSummary = debug
-    ? ` hiddenSkips=${debug.hiddenRendererSkipCount} hiddenSkippedChars=${debug.hiddenRendererSkippedChars} mode2031Replies=${debug.hiddenRendererMode2031ReplyCount}` +
-      ` hiddenLiveSyncChars=${debug.hiddenRendererLiveSynchronizedChars} hiddenLiveNonSyncChars=${debug.hiddenRendererLiveNonSynchronizedChars}` +
-      ` hiddenStartupWindowChars=${debug.hiddenRendererStartupWindowChars} hiddenSplitBoundaryChars=${debug.hiddenRendererSplitBoundaryChars}`
-    : ''
+  const mode2031Summary = debug ? ` mode2031Replies=${debug.hiddenRendererMode2031ReplyCount}` : ''
   const schedulerSummary = scheduler
     ? ` deferredForegroundEnqueue=${scheduler.deferredForegroundEnqueueCount} deferredForegroundWrite=${scheduler.deferredForegroundWriteCount} scheduledDrains=${scheduler.scheduledDrainCount} rendererQueuedTerminals=${scheduler.queuedTerminalCount} rendererQueuedChars=${scheduler.queuedChars} rendererPeakQueuedTerminals=${scheduler.peakQueuedTerminalCount} rendererPeakQueuedChars=${scheduler.peakQueuedChars} rendererPeakQueuedCharsByTerminal=${scheduler.peakQueuedCharsByTerminal} rendererDroppedBacklogs=${scheduler.droppedBacklogCount}`
     : ''
@@ -449,7 +441,7 @@ function annotateTypingMeasurement(
       1
     )}ms maxTimerDrift=${measurement.maxTimerDriftMs.toFixed(1)}ms samples=${measurement.latencies
       .map((value) => value.toFixed(1))
-      .join(',')}${hiddenSkipSummary}${schedulerSummary}${mainPressureSummary}${ackGateSummary}`
+      .join(',')}${mode2031Summary}${schedulerSummary}${mainPressureSummary}${ackGateSummary}`
   })
 }
 
@@ -508,9 +500,6 @@ async function measureCrossWorkspaceTypingDuringHiddenLoad({
       scheduler,
       mainPressure
     )
-    if ((debug?.hiddenRendererSkipCount ?? 0) > 0) {
-      expect(debug?.hiddenRendererSkippedChars ?? 0).toBeGreaterThan(0)
-    }
     expect(scheduler?.rendererDroppedBacklogs ?? 0).toBe(0)
     expect(measurement.medianLatencyMs).toBeLessThan(MAX_MEDIAN_KEY_LATENCY_MS)
     expect(measurement.worstLatencyMs).toBeLessThan(MAX_WORST_KEY_LATENCY_MS)
@@ -776,12 +765,9 @@ test.describe('Artificial OpenCode terminal load', () => {
       hiddenPaneCount,
       pressureOutputChars: PRESSURE_OUTPUT_CHARS,
       pressureOutputMode,
-      // Why: Codex/OpenCode startup queries intentionally stay live for 10s.
-      // This benchmark measures steady-state model restore after that guard.
-      pressureStartDelayMs:
-        pressureOutputMode === 'rich-model'
-          ? RICH_MODEL_HIDDEN_PRESSURE_START_DELAY_MS
-          : HIDDEN_PRESSURE_START_DELAY_MS,
+      // Why: the 10s codex startup renderer-query window is deleted — every
+      // pressure mode measures steady-state model restore with one delay.
+      pressureStartDelayMs: HIDDEN_PRESSURE_START_DELAY_MS,
       testInfo,
       deps: terminalLoadScenarioDeps
     })
@@ -792,18 +778,21 @@ test.describe('Artificial OpenCode terminal load', () => {
     mode?: HiddenPressureOutputMode
   }[] = [
     { title: 'keeps typing responsive while hidden real PTYs are ACK-backpressured' },
+    // Why: "withholds renderer delivery" — hidden bytes are dropped in main by
+    // the delivery gate; the renderer no longer skip-scans chunks (Phase 6).
     {
-      title: 'skips renderer writes for plain hidden PTY output while preserving restore',
+      title: 'withholds renderer delivery for plain hidden PTY output while preserving restore',
       suffix: '-plain',
       mode: 'plain'
     },
     {
-      title: 'skips renderer writes for Latin hidden PTY output while preserving restore',
+      title: 'withholds renderer delivery for Latin hidden PTY output while preserving restore',
       suffix: '-latin',
       mode: 'latin'
     },
     {
-      title: 'skips renderer writes for title-only hidden PTY output while preserving restore',
+      title:
+        'withholds renderer delivery for title-only hidden PTY output while preserving restore',
       suffix: '-title',
       mode: 'title'
     },

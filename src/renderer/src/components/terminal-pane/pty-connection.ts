@@ -33,8 +33,7 @@ import {
 import { getSystemPrefersDark } from '@/lib/terminal-theme'
 import {
   mode2031SequenceFor,
-  resolveTerminalColorSchemeMode,
-  scanMode2031Sequences
+  resolveTerminalColorSchemeMode
 } from '../../../../shared/terminal-color-scheme-protocol'
 import { warnTerminalLifecycleAnomaly } from './terminal-lifecycle-diagnostics'
 import { registerPtySerializer, registerPtyTitleSource } from './pty-buffer-serializer'
@@ -92,7 +91,6 @@ import {
   normalizeAgentProviderSession
 } from '../../../../shared/agent-session-resume'
 import { isWslUncPath } from '../../../../shared/wsl-paths'
-import { shouldSkipHiddenRendererOutput } from './hidden-renderer-skip-eligibility'
 import {
   AGENT_TASK_COMPLETE_NOTIFICATION_GRACE_MS,
   AGENT_TASK_COMPLETE_NOTIFICATION_MAX_WAIT_MS,
@@ -115,10 +113,7 @@ const HIDDEN_OUTPUT_RESTORE_SCROLLBACK_ROWS = 5000
 const HIDDEN_OUTPUT_RESTORE_PENDING_CHARS = 512 * 1024
 const HIDDEN_OUTPUT_RESTORE_DEFERRED_RETRY_MS = 50
 const HIDDEN_OUTPUT_RESTORE_DEFERRED_RETRY_MAX = 3
-const HIDDEN_STARTUP_RENDERER_QUERY_WINDOW_MS = 10_000
-const STARTUP_COMMAND_EXTENSION_RE = /\.(?:exe|cmd|bat|ps1)$/i
 const TERMINAL_RENDERER_RISK_SCAN_TAIL_CHARS = 256
-const SYNCHRONIZED_OUTPUT_SCAN_TAIL_CHARS = 16
 const CURSOR_SHOW_SEQUENCE = '\x1b[?25h'
 const CURSOR_HIDE_SEQUENCE = '\x1b[?25l'
 const REATTACH_IDLE_AGENT_CURSOR_RESET_DELAY_MS = 250
@@ -162,14 +157,11 @@ type E2eTerminalHiddenSnapshotOverride = {
 
 const e2eTerminalHiddenSnapshotOverrides = new Map<string, E2eTerminalHiddenSnapshotOverride>()
 
+// Why: the per-chunk hidden-skip grammar is deleted (Phase 6) — hidden bytes
+// either never reach the renderer (delivery gate) or ride the background
+// scheduler queue. Only the mode-2031 fact-reply counter still has a producer.
 type E2eTerminalPtyOutputDebugSnapshot = {
-  hiddenRendererSkipCount: number
-  hiddenRendererSkippedChars: number
   hiddenRendererMode2031ReplyCount: number
-  hiddenRendererLiveSynchronizedChars: number
-  hiddenRendererLiveNonSynchronizedChars: number
-  hiddenRendererStartupWindowChars: number
-  hiddenRendererSplitBoundaryChars: number
 }
 
 type E2eTerminalPtyOutputDebugApi = {
@@ -182,23 +174,11 @@ type E2eTerminalPtyOutputDebugWindow = Window & {
 }
 
 const e2eTerminalPtyOutputDebugState: E2eTerminalPtyOutputDebugSnapshot = {
-  hiddenRendererSkipCount: 0,
-  hiddenRendererSkippedChars: 0,
-  hiddenRendererMode2031ReplyCount: 0,
-  hiddenRendererLiveSynchronizedChars: 0,
-  hiddenRendererLiveNonSynchronizedChars: 0,
-  hiddenRendererStartupWindowChars: 0,
-  hiddenRendererSplitBoundaryChars: 0
+  hiddenRendererMode2031ReplyCount: 0
 }
 
 function resetE2eTerminalPtyOutputDebug(): void {
-  e2eTerminalPtyOutputDebugState.hiddenRendererSkipCount = 0
-  e2eTerminalPtyOutputDebugState.hiddenRendererSkippedChars = 0
   e2eTerminalPtyOutputDebugState.hiddenRendererMode2031ReplyCount = 0
-  e2eTerminalPtyOutputDebugState.hiddenRendererLiveSynchronizedChars = 0
-  e2eTerminalPtyOutputDebugState.hiddenRendererLiveNonSynchronizedChars = 0
-  e2eTerminalPtyOutputDebugState.hiddenRendererStartupWindowChars = 0
-  e2eTerminalPtyOutputDebugState.hiddenRendererSplitBoundaryChars = 0
 }
 
 function exposeE2eTerminalPtyOutputDebug(): void {
@@ -209,34 +189,6 @@ function exposeE2eTerminalPtyOutputDebug(): void {
   target.__terminalPtyOutputDebug ??= {
     reset: resetE2eTerminalPtyOutputDebug,
     snapshot: () => ({ ...e2eTerminalPtyOutputDebugState })
-  }
-}
-
-function recordHiddenRendererSkip(chars: number): void {
-  if (!e2eConfig.exposeStore) {
-    return
-  }
-  exposeE2eTerminalPtyOutputDebug()
-  e2eTerminalPtyOutputDebugState.hiddenRendererSkipCount += 1
-  e2eTerminalPtyOutputDebugState.hiddenRendererSkippedChars += chars
-}
-
-function recordHiddenRendererLiveOutput(
-  chars: number,
-  reason: 'synchronized' | 'non-synchronized' | 'startup-window' | 'split-boundary'
-): void {
-  if (!e2eConfig.exposeStore) {
-    return
-  }
-  exposeE2eTerminalPtyOutputDebug()
-  if (reason === 'synchronized') {
-    e2eTerminalPtyOutputDebugState.hiddenRendererLiveSynchronizedChars += chars
-  } else if (reason === 'non-synchronized') {
-    e2eTerminalPtyOutputDebugState.hiddenRendererLiveNonSynchronizedChars += chars
-  } else if (reason === 'startup-window') {
-    e2eTerminalPtyOutputDebugState.hiddenRendererStartupWindowChars += chars
-  } else {
-    e2eTerminalPtyOutputDebugState.hiddenRendererSplitBoundaryChars += chars
   }
 }
 
@@ -317,33 +269,6 @@ function readE2eHiddenSnapshotOverride(ptyId: string): Promise<PtyBufferSnapshot
       e2eTerminalHiddenSnapshotOverrides.delete(ptyId)
     }
   })
-}
-
-function firstStartupCommandToken(command: string): string {
-  const trimmed = command.trim()
-  const quote = trimmed[0]
-  if ((quote === '"' || quote === "'") && trimmed.length > 1) {
-    const end = trimmed.indexOf(quote, 1)
-    if (end > 1) {
-      return trimmed.slice(1, end)
-    }
-  }
-  return trimmed.split(/\s+/)[0] ?? ''
-}
-
-function isCodexStartupCommand(command: string): boolean {
-  const executable = firstStartupCommandToken(command)
-    .split(/[\\/]/)
-    .pop()
-    ?.toLowerCase()
-    .replace(STARTUP_COMMAND_EXTENSION_RE, '')
-  return executable === 'codex' || executable?.startsWith('codex-') === true
-}
-
-function shouldKeepHiddenStartupRendererQueriesLive(
-  startup: PtyConnectionDeps['startup']
-): boolean {
-  return startup?.telemetry?.agent_kind === 'codex' || isCodexStartupCommand(startup?.command ?? '')
 }
 
 let codexRestartNoticePresenceSource: Record<
@@ -579,23 +504,6 @@ function shouldSynchronizedOutputRemainActive(data: string, wasActive: boolean):
   return lastStartIndex > lastEndIndex
 }
 
-function updateSynchronizedOutputScanTail(data: string): string {
-  return data.slice(-SYNCHRONIZED_OUTPUT_SCAN_TAIL_CHARS)
-}
-
-function containsSequenceAcrossBoundary(tail: string, data: string, sequence: string): boolean {
-  const maxPrefixLength = Math.min(sequence.length - 1, tail.length, data.length)
-  for (let prefixLength = 1; prefixLength <= maxPrefixLength; prefixLength++) {
-    if (
-      tail.endsWith(sequence.slice(0, prefixLength)) &&
-      data.startsWith(sequence.slice(prefixLength))
-    ) {
-      return true
-    }
-  }
-  return false
-}
-
 function containsCursorPositionSequence(data: string): boolean {
   let offset = data.indexOf('\x1b[')
   while (offset !== -1) {
@@ -644,10 +552,9 @@ export function connectPanePty(
   let terminalBellNotificationTimer: ReturnType<typeof setTimeout> | null = null
   let pendingTerminalBellNotification = false
   let reattachIdleAgentCursorResetTimer: ReturnType<typeof setTimeout> | null = null
+  // Why: DEC 2026 tracking survives only for the FOREGROUND native-Windows
+  // repaint protection — hidden chunks are no longer classified per chunk.
   let synchronizedForegroundOutputActive = false
-  let synchronizedHiddenOutputActive = false
-  let synchronizedHiddenOutputScanTail = ''
-  let synchronizedHiddenOutputPtyId: string | null = null
   // Why: hidden-delivery gate sync is wired up alongside the deferred PTY
   // output plumbing inside the connect frame; lifecycle hooks (visibility
   // flips, exit, dispose) run before/after it exists, so start with no-ops.
@@ -2169,10 +2076,6 @@ export function connectPanePty(
     }
     let foregroundImmediateBudgetChars = 0
     let foregroundImmediateBudgetWindowStart = 0
-    let hiddenMode2031ScanTail = ''
-    const hiddenStartupRendererQueryUntil = shouldKeepHiddenStartupRendererQueriesLive(paneStartup)
-      ? Date.now() + HIDDEN_STARTUP_RENDERER_QUERY_WINDOW_MS
-      : 0
 
     function canUseMainBufferSnapshot(ptyId: string | null): ptyId is string {
       return Boolean(ptyId) && !isRemoteRuntimePtyId(ptyId)
@@ -2205,29 +2108,19 @@ export function connectPanePty(
       return transport.serializeBuffer(opts)
     }
 
-    function isHiddenStartupRendererQueryWindowActive(): boolean {
-      return (
-        paneStartup !== null &&
-        Date.now() < hiddenStartupRendererQueryUntil &&
-        !shouldWritePtyOutputForeground(deps.isVisibleRef.current)
-      )
-    }
-
     // Why: hidden/parked panes used to mark hidden only at the first
     // dataCallback sync, leaving a spawn-time window where neither side
-    // answered queries (the non-codex DA1 loss). Declaring hidden on the
-    // spawn IPC lets main mark the PTY before its first byte. Codex startups
-    // are excluded — their startup window needs live renderer delivery, and
-    // the window predicate is checked at connect time (same tick the flag is
-    // sent), so the two decisions cannot disagree. Remote-runtime PTYs are
-    // never gate-markable (no local main transit).
+    // answered queries (the spawn-time DA1 loss). Declaring hidden on the
+    // spawn IPC lets main mark the PTY before its first byte — including
+    // codex spawns: the model responder answers their startup probes from
+    // byte zero now that the 10s renderer query window is gone.
+    // Remote-runtime PTYs are never gate-markable (no local main transit).
     function shouldDeclareHiddenAtSpawn(): boolean {
       return (
         hiddenDeliveryGateActive &&
         !runtimeEnvironmentId &&
         !disposed &&
-        !shouldWritePtyOutputForeground(deps.isVisibleRef.current) &&
-        !isHiddenStartupRendererQueryWindowActive()
+        !shouldWritePtyOutputForeground(deps.isVisibleRef.current)
       )
     }
 
@@ -2251,12 +2144,8 @@ export function connectPanePty(
       if (disposed) {
         return
       }
-      // Why: dropped bytes invalidate every cross-chunk carry — a DEC 2026
-      // classification or partial OSC-9999 prefix spanning the gap would
-      // corrupt the next live chunk.
-      synchronizedHiddenOutputActive = false
-      synchronizedHiddenOutputScanTail = ''
-      hiddenMode2031ScanTail = ''
+      // Why: dropped bytes invalidate every cross-chunk carry — a partial
+      // OSC-9999 prefix spanning the gap would corrupt the next live chunk.
       transport.resetCrossChunkParserState?.()
       // Why: parity with the hidden skip path — a marker landing while a
       // restore is in flight means the in-flight snapshot may predate the
@@ -2301,12 +2190,7 @@ export function connectPanePty(
       if (!isHiddenDeliveryGateManagedPty(ptyId) || !canUseHiddenOutputSnapshot(ptyId)) {
         return
       }
-      const shouldHide =
-        !disposed &&
-        !shouldWritePtyOutputForeground(deps.isVisibleRef.current) &&
-        // Why: codex startup probes need the live xterm to answer renderer
-        // queries for 10s — never gate delivery while the window is active.
-        !isHiddenStartupRendererQueryWindowActive()
+      const shouldHide = !disposed && !shouldWritePtyOutputForeground(deps.isVisibleRef.current)
       const isFirstSyncForPty = hiddenDeliverySyncedPtyId !== ptyId
       hiddenDeliverySyncedPtyId = ptyId
       if (shouldHide) {
@@ -2333,26 +2217,6 @@ export function connectPanePty(
       modelRestoreSubscribedPtyId = null
     }
 
-    function respondToSkippedMode2031Subscribe(data: string): void {
-      // Why: gate-managed PTYs answer 2031 from main's '2031-subscribe' fact
-      // (sole responder); scanning skipped chunks here too would answer the
-      // same subscribe twice.
-      if (isHiddenDeliveryGateManagedPty(transport.getPtyId())) {
-        return
-      }
-      const scan = scanMode2031Sequences(hiddenMode2031ScanTail, data)
-      hiddenMode2031ScanTail = scan.tail
-      if (!scan.subscribe) {
-        return
-      }
-      const settings = useAppStore.getState().settings
-      const mode = resolveTerminalColorSchemeMode(settings, getSystemPrefersDark())
-      // Why: hidden snapshot-backed panes skip xterm.write for PTY bytes. Answer
-      // mode 2031 out-of-band so TUIs still render the snapshot with the same
-      // theme-dependent styling they would have used in a visible pane.
-      transport.sendInput(mode2031SequenceFor(mode))
-      recordHiddenMode2031Reply()
-    }
     function beforeTerminalOutputWrite(): void {
       recordTerminalOutput(pane.terminal)
     }
@@ -2453,10 +2317,6 @@ export function connectPanePty(
       if (foreground) {
         resetHiddenOutputRestoreIfPtyChanged()
       }
-      const parseHiddenStartupOutput =
-        !foreground &&
-        canUseHiddenOutputSnapshot(transport.getPtyId()) &&
-        isHiddenStartupRendererQueryWindowActive()
       const synchronizedOutputStarted =
         shouldProtectNativeWindowsSynchronizedOutput &&
         foreground &&
@@ -2478,17 +2338,16 @@ export function connectPanePty(
       const nativeWindowsCursorRestore =
         shouldProtectNativeWindowsSynchronizedOutput && foreground && containsCursorRestore(data)
       synchronizedForegroundOutputActive = nextSynchronizedForegroundOutputActive
-      if (hiddenMode2031ScanTail) {
-        respondToSkippedMode2031Subscribe(data)
-      }
       writeTerminalOutput(pane.terminal, data, {
-        foreground: foreground || parseHiddenStartupOutput,
+        foreground,
         beforeWrite: beforeTerminalOutputWrite,
+        // Why: hidden bytes ride the bounded background queue; on overflow the
+        // scheduler swaps the backlog for this restore latch and the reveal
+        // repaints from the model snapshot (the pre-grammar fallback).
         onBackgroundBacklogDropped: markHiddenOutputRestoreNeeded,
-        latencySensitive:
-          !foreground || parseHiddenStartupOutput ? true : isLatencySensitiveForegroundOutput(data),
+        latencySensitive: !foreground ? true : isLatencySensitiveForegroundOutput(data),
         forceForegroundRefresh:
-          (foreground || parseHiddenStartupOutput) &&
+          foreground &&
           (synchronizedForegroundOutput ||
             nativeWindowsCursorRestore ||
             shouldForceForegroundRenderRefresh(data)),
@@ -2522,15 +2381,6 @@ export function connectPanePty(
       if (shouldWritePtyOutputForeground(deps.isVisibleRef.current)) {
         requestHiddenOutputRestoreIfNeeded()
       }
-    }
-
-    function skipHiddenRendererOutput(data: string): void {
-      respondToSkippedMode2031Subscribe(data)
-      markHiddenOutputRestoreNeeded()
-      if (hiddenOutputRestoreInFlight) {
-        hiddenOutputRestoreFreshSnapshotNeeded = true
-      }
-      recordHiddenRendererSkip(data.length)
     }
 
     function queueLiveChunkDuringRestore(data: string, meta?: PtyDataMeta): void {
@@ -3019,8 +2869,7 @@ export function connectPanePty(
       // output the user is watching. Throttle only when the pane or whole
       // Electron document is hidden.
       const foreground = shouldWritePtyOutputForeground(deps.isVisibleRef.current)
-      // Why: latch the hidden-delivery gate from the byte path too — covers
-      // the startup-query-window expiring without a visibility event and a
+      // Why: latch the hidden-delivery gate from the byte path too — covers a
       // PTY id arriving after the initial sync. No-op when state is current.
       if (!foreground) {
         syncHiddenRendererPtyDelivery()
@@ -3048,58 +2897,7 @@ export function connectPanePty(
       meta = reconciliation.meta
       const restoreAppliesToCurrentPty =
         hiddenOutputRestorePtyId !== null && transport.getPtyId() === hiddenOutputRestorePtyId
-      const dataPtyId = transport.getPtyId()
-      if (synchronizedHiddenOutputPtyId !== dataPtyId) {
-        // Why: DEC 2026 state is per PTY stream; a restarted/reattached PTY
-        // must not inherit synchronized classification from the old shell.
-        synchronizedHiddenOutputPtyId = dataPtyId
-        synchronizedHiddenOutputActive = false
-        synchronizedHiddenOutputScanTail = ''
-      }
-      const hiddenSynchronizedScanData = synchronizedHiddenOutputScanTail + data
-      const synchronizedOutputStarted = containsSynchronizedOutputStart(hiddenSynchronizedScanData)
-      const synchronizedOutputEnded = containsSynchronizedOutputEnd(hiddenSynchronizedScanData)
-      // Why: if a DEC 2026 marker spans chunks, xterm may already hold the
-      // first bytes of that escape. Complete that boundary live, then skip.
-      const splitSynchronizedBoundary =
-        !foreground &&
-        (containsSequenceAcrossBoundary(
-          synchronizedHiddenOutputScanTail,
-          data,
-          SYNCHRONIZED_OUTPUT_START_SEQUENCE
-        ) ||
-          containsSequenceAcrossBoundary(
-            synchronizedHiddenOutputScanTail,
-            data,
-            SYNCHRONIZED_OUTPUT_END_SEQUENCE
-          ))
-      const synchronizedHiddenOutput =
-        !foreground &&
-        (synchronizedHiddenOutputActive || synchronizedOutputStarted || synchronizedOutputEnded)
-      const hiddenStartupRendererQueryWindowActive = isHiddenStartupRendererQueryWindowActive()
-      const shouldSkipHiddenOutput = shouldSkipHiddenRendererOutput({
-        foreground,
-        canRestoreHiddenOutput: canUseHiddenOutputSnapshot(transport.getPtyId()),
-        startupRendererQueryWindowActive: hiddenStartupRendererQueryWindowActive,
-        synchronizedOutputActive: synchronizedHiddenOutput,
-        allowSynchronizedModelRestore: true,
-        data
-      })
-      if (shouldSkipHiddenOutput && !splitSynchronizedBoundary) {
-        skipHiddenRendererOutput(data)
-      } else if (synchronizedHiddenOutput) {
-        if (!foreground) {
-          recordHiddenRendererLiveOutput(
-            data.length,
-            splitSynchronizedBoundary
-              ? 'split-boundary'
-              : hiddenStartupRendererQueryWindowActive
-                ? 'startup-window'
-                : 'synchronized'
-          )
-        }
-        writePtyOutputToXterm(data, foreground)
-      } else if (
+      if (
         (hiddenOutputRestoreNeeded || hiddenOutputRestoreInFlight) &&
         restoreAppliesToCurrentPty
       ) {
@@ -3110,32 +2908,15 @@ export function connectPanePty(
           hiddenOutputRestoreNeeded = true
           hiddenOutputRestoreFreshSnapshotNeeded = true
         }
+        // Why: hidden chunks with a restore already latched are dropped here —
+        // the model snapshot fetched on reveal covers their bytes.
       } else {
-        if (!foreground) {
-          recordHiddenRendererLiveOutput(
-            data.length,
-            hiddenStartupRendererQueryWindowActive ? 'startup-window' : 'non-synchronized'
-          )
-        }
+        // Why: gate-managed hidden panes normally receive no bytes (main
+        // drops after model ingestion). Any hidden chunk that still arrives
+        // (kill switch off, interest-held delivery) rides the bounded
+        // background scheduler queue; overflow latches the model restore.
+        // There is no per-chunk content grammar anymore.
         writePtyOutputToXterm(data, foreground)
-      }
-      if (!foreground) {
-        synchronizedHiddenOutputActive = shouldSynchronizedOutputRemainActive(
-          hiddenSynchronizedScanData,
-          synchronizedHiddenOutputActive
-        )
-        synchronizedHiddenOutputScanTail = updateSynchronizedOutputScanTail(
-          hiddenSynchronizedScanData
-        )
-      } else {
-        // Why: a DEC 2026 end consumed while visible must still clear hidden
-        // synchronized state, or later hidden plain output is misclassified
-        // under the permissive synchronized model grammar.
-        synchronizedHiddenOutputActive = shouldSynchronizedOutputRemainActive(
-          hiddenSynchronizedScanData,
-          synchronizedHiddenOutputActive
-        )
-        synchronizedHiddenOutputScanTail = ''
       }
 
       schedulePendingStartupCommandDelivery()

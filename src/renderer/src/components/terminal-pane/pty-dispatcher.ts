@@ -317,8 +317,7 @@ export type PtyTransport = {
     /** Hidden-at-spawn declaration (terminal-query-authority.md): no visible
      *  view will consume this PTY's bytes, so main marks it hidden BEFORE the
      *  first byte and the gate + model responder own spawn-time queries.
-     *  Never set while the codex startup window would run, and ignored by
-     *  remote-runtime transports (their PTYs are not gate-markable). */
+     *  Ignored by remote-runtime transports (not gate-markable). */
     initiallyHidden?: boolean
     callbacks: {
       onConnect?: () => void

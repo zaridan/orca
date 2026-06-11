@@ -22,11 +22,11 @@ type HiddenTuiWindow = Window & {
   __terminalPtyDataInjection?: {
     inject: (paneKey: string, data: string, meta?: { seq?: number; rawLength?: number }) => boolean
   }
+  // Why: only the mode-2031 fact-reply counter survives Phase 6 — the
+  // hidden-skip counters were deleted with the renderer skip grammar.
   __terminalPtyOutputDebug?: {
     reset: () => void
     snapshot: () => {
-      hiddenRendererSkipCount: number
-      hiddenRendererSkippedChars: number
       hiddenRendererMode2031ReplyCount: number
     }
   }
