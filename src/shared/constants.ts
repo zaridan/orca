@@ -211,6 +211,7 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     terminalDividerColorDark: '#3f3f46',
     terminalUseSeparateLightTheme: true,
     terminalThemeLight: 'Builtin Tango Light',
+    terminalCustomThemes: [],
     terminalDividerColorLight: '#d4d4d8',
     terminalInactivePaneOpacity: 0.8,
     terminalActivePaneOpacity: 1,
@@ -390,7 +391,8 @@ export function getDefaultPersistedState(homedir: string): PersistedState {
     legacyPaneKeyAliasEntries: [],
     automations: [],
     automationRuns: [],
-    onboarding: getDefaultOnboardingState()
+    onboarding: getDefaultOnboardingState(),
+    featureInteractionTelemetryBuckets: {}
   }
 }
 

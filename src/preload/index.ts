@@ -44,6 +44,10 @@ import type {
   WorktreeDefaultTabsLaunch,
   WorktreeRemoteBranchConflictEvent
 } from '../shared/types'
+import type {
+  WarpThemeImportPreview,
+  WarpThemeImportSource
+} from '../shared/terminal-custom-themes'
 import type { GitHistoryOptions, GitHistoryResult } from '../shared/git-history'
 import type { ShellOpenLocalPathResult } from '../shared/shell-open-types'
 import type { SkillDiscoveryResult, SkillDiscoveryTarget } from '../shared/skills'
@@ -455,6 +459,11 @@ const api = {
     addRemote: (args) => ipcRenderer.invoke('repos:addRemote', args),
 
     create: (args) => ipcRenderer.invoke('repos:create', args),
+
+    isGitAvailable: (): Promise<boolean> => ipcRenderer.invoke('repos:isGitAvailable'),
+
+    getDefaultCreateProjectParent: (): Promise<string> =>
+      ipcRenderer.invoke('repos:getDefaultCreateProjectParent'),
 
     remove: (args) => ipcRenderer.invoke('repos:remove', args),
 
@@ -1501,6 +1510,9 @@ const api = {
 
     previewGhosttyImport: (): Promise<GhosttyImportPreview> =>
       ipcRenderer.invoke('settings:previewGhosttyImport'),
+
+    previewWarpThemeImport: (source: WarpThemeImportSource): Promise<WarpThemeImportPreview> =>
+      ipcRenderer.invoke('settings:previewWarpThemeImport', source),
 
     onChanged: (callback: (updates: Record<string, unknown>) => void): (() => void) => {
       const listener = (

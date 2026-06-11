@@ -247,12 +247,15 @@ function getSettingsTargetFromSectionId(sectionId: string): {
 }
 
 export default function WorktreeJumpPalette(): React.JSX.Element | null {
-  const { i18n } = useTranslation()
+  // Why: subscribe this palette to language changes; translated memo contents
+  // recompute on the rerender without using i18n.language as a fake dependency.
+  useTranslation()
   const visible = useAppStore((s) => s.activeModal === 'worktree-palette')
   const closeModal = useAppStore((s) => s.closeModal)
   const openModal = useAppStore((s) => s.openModal)
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
   const openSettingsTarget = useAppStore((s) => s.openSettingsTarget)
+  const recordFeatureInteraction = useAppStore((s) => s.recordFeatureInteraction)
   const worktreesByRepo = useAppStore((s) => s.worktreesByRepo)
   const allWorktrees = useAllWorktrees()
   const repos = useAppStore((s) => s.repos)
@@ -581,10 +584,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
     () => buildCmdJSettingsResults(settingsSections),
     [settingsSections]
   )
-  const actionResults = useMemo(
-    () => buildCmdJActionResults(getCmdJQuickActions()),
-    [i18n.language]
-  )
+  const actionResults = useMemo(() => buildCmdJActionResults(getCmdJQuickActions()), [])
 
   const prefetchCreateWorkspaceBaseForComposer = useCallback((initialRepoId?: string): void => {
     const state = useAppStore.getState()
@@ -782,7 +782,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
       appendPaletteListEntries(entries, visibleOpenTabItems)
     }
     return entries
-  }, [hasQuery, paletteSections, showCreateAction, worktreeItems.length, i18n.language])
+  }, [hasQuery, paletteSections, showCreateAction, worktreeItems.length])
 
   const selectionItemIds = useMemo(
     () => getWorktreePaletteSelectionItemIds(listEntries),
@@ -800,6 +800,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
 
   useEffect(() => {
     if (visible && !wasVisibleRef.current) {
+      recordFeatureInteraction('cmd-j')
       createLookupGuard.invalidate()
       activeGroupSnapshotRef.current = captureCmdJActiveGroupSnapshot(
         useAppStore.getState(),
@@ -846,6 +847,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
     activeWorktreeId,
     browserTabsByWorktree,
     createLookupGuard,
+    recordFeatureInteraction,
     visible
   ])
 
@@ -954,12 +956,13 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
         return
       }
       activateAndRevealWorktree(worktreeId)
+      recordFeatureInteraction('cmd-j-workspace-open')
       skipRestoreFocusRef.current = true
       closeModal()
       setSelectedItemId('')
       focusFallbackSurface()
     },
-    [closeModal, focusFallbackSurface]
+    [closeModal, focusFallbackSurface, recordFeatureInteraction]
   )
 
   const handleSelectBrowserPage = useCallback(
@@ -990,6 +993,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
       const state = useAppStore.getState()
       state.setActiveBrowserTab(workspace.id)
       state.setActiveBrowserPage(workspace.id, pageId)
+      recordFeatureInteraction('cmd-j-browser-page-open')
       skipRestoreFocusRef.current = true
       closeModal()
       setSelectedItemId('')
@@ -998,7 +1002,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
         target: isBlankBrowserUrl(page.url) ? 'address-bar' : 'webview'
       })
     },
-    [closeModal, requestBrowserFocus]
+    [closeModal, recordFeatureInteraction, requestBrowserFocus]
   )
 
   const handleSelectSimulatorTab = useCallback(
@@ -1047,8 +1051,9 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
       setSelectedItemId('')
       openSettingsTarget(target)
       openSettingsPage()
+      recordFeatureInteraction('cmd-j-settings-open')
     },
-    [closeModal, openSettingsPage, openSettingsTarget]
+    [closeModal, openSettingsPage, openSettingsTarget, recordFeatureInteraction]
   )
 
   const handleSelectQuickAction = useCallback(
@@ -1060,10 +1065,16 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
       void action.run(ctx).then((result) => {
         if (result.status === 'unavailable') {
           toast.error(getUnavailableQuickActionMessage(action.title, result.reason))
+          return
         }
+        if (action.id === 'create-workspace') {
+          recordFeatureInteraction('cmd-j-create-workspace')
+          return
+        }
+        recordFeatureInteraction('cmd-j-quick-action')
       })
     },
-    [buildQuickActionContext, closeModal]
+    [buildQuickActionContext, closeModal, recordFeatureInteraction]
   )
 
   const handleSelectItem = useCallback(
@@ -1100,6 +1111,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
         typeof data.initialRepoId === 'string' ? data.initialRepoId : undefined
       )
       closeModal()
+      recordFeatureInteraction('cmd-j-create-workspace')
       // Why: defer opening so Radix fully unmounts the palette's dialog before
       // the composer modal mounts, avoiding focus churn between the two.
       queueMicrotask(() =>
@@ -1123,6 +1135,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
       if (activeMatch) {
         closeModal()
         activateAndRevealWorktree(activeMatch.id)
+        recordFeatureInteraction('cmd-j-workspace-open')
         return
       }
 
@@ -1142,6 +1155,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
       // composer once the lookup returns.
       const lookupToken = createLookupGuard.start()
       preserveCreateLookupOnCloseRef.current = true
+      recordFeatureInteraction('cmd-j-create-workspace')
       closeModal()
       void window.api.gh
         .workItemByOwnerRepo({
@@ -1200,6 +1214,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
       if (activeMatch) {
         closeModal()
         activateAndRevealWorktree(activeMatch.id)
+        recordFeatureInteraction('cmd-j-workspace-open')
         return
       }
 
@@ -1214,6 +1229,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
       prefetchCreateWorkspaceBaseForComposer(repoForLookup.id)
       const lookupToken = createLookupGuard.start()
       preserveCreateLookupOnCloseRef.current = true
+      recordFeatureInteraction('cmd-j-create-workspace')
       closeModal()
       void window.api.gh
         .workItem({ repoPath: repoForLookup.path, repoId: repoForLookup.id, number: ghNumber })
@@ -1264,6 +1280,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
     createWorktreeName,
     openModal,
     prefetchCreateWorkspaceBaseForComposer,
+    recordFeatureInteraction,
     repoMap
   ])
 

@@ -7,6 +7,7 @@ import {
   RESET_TERMINAL_CURSOR_STYLE
 } from './layout-serialization'
 import type * as UseNotificationDispatchModule from './use-notification-dispatch'
+import { getEagerPtyBufferHandle } from './pty-dispatcher'
 import { makePaneKey } from '../../../../shared/stable-pane-id'
 import type { TerminalLayoutSnapshot } from '../../../../shared/types'
 
@@ -208,6 +209,18 @@ vi.mock('./remote-runtime-pty-transport', () => ({
     }
   )
 }))
+
+// Why: the adopt-vs-reattach decision consults the eager-PTY buffer registry to
+// tell a still-live locally-spawned PTY (attach + replay) from a daemon session
+// to re-connect. Keep the real module but stub the lookup so tests can simulate
+// a live eager buffer without standing up the real IPC dispatcher.
+vi.mock('./pty-dispatcher', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>()
+  return {
+    ...actual,
+    getEagerPtyBufferHandle: vi.fn(() => undefined)
+  }
+})
 
 function createMockTransport(initialPtyId: string | null = null): MockTransport {
   let ptyId = initialPtyId
@@ -2552,6 +2565,96 @@ describe('connectPanePty', () => {
     expect(transport.attach).not.toHaveBeenCalled()
     await Promise.resolve()
     expect(deps.syncPanePtyLayoutBinding).toHaveBeenCalledWith(2, 'leaf-pty-2')
+  })
+
+  it('adopts a still-live background PTY via attach instead of reattaching when an eager buffer exists', async () => {
+    // Why: background automation tabs spawn the agent PTY eagerly and register an
+    // eager buffer, then never mount until opened. On first mount the restored
+    // ptyId equals the tab ptyId, so without this guard the pane mis-routes into
+    // the daemon-reattach branch (connect) and spawns a fresh shell, orphaning the
+    // live agent PTY. A live eager buffer means "attach + replay", not "reattach".
+    const eagerPtyId = 'auto-eager-pty'
+    vi.mocked(getEagerPtyBufferHandle).mockImplementation((ptyId: string) =>
+      ptyId === eagerPtyId ? { flush: () => '', dispose: () => {} } : undefined
+    )
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport()
+    transportFactoryQueue.push(transport)
+    mockStoreState = {
+      ...mockStoreState,
+      tabsByWorktree: { 'wt-1': [{ id: 'tab-1', ptyId: eagerPtyId }] },
+      ptyIdsByTabId: { 'tab-1': [eagerPtyId] },
+      terminalLayoutsByTabId: {
+        'tab-1': {
+          root: { type: 'leaf', leafId: LEAF_1 },
+          activeLeafId: LEAF_1,
+          expandedLeafId: null,
+          ptyIdsByLeafId: { [LEAF_1]: eagerPtyId }
+        }
+      }
+    } as StoreState
+    const deps = createDeps({
+      restoredLeafId: LEAF_1,
+      restoredPtyIdByLeafId: { [LEAF_1]: eagerPtyId }
+    })
+
+    connectPanePty(createPane(1) as never, createManager(1) as never, deps as never)
+    await flushAsyncTicks()
+
+    expect(transport.attach).toHaveBeenCalledWith(
+      expect.objectContaining({ existingPtyId: eagerPtyId })
+    )
+    expect(transport.connect).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: eagerPtyId })
+    )
+    const { hasPtySerializer } = await import('./pty-buffer-serializer')
+    expect(hasPtySerializer(eagerPtyId)).toBe(true)
+  })
+
+  it('does not adopt another tab live eager PTY from a stale restored leaf binding', async () => {
+    // Why: restored leaf bindings can outlive tab ownership. A global eager
+    // buffer only proves the PTY is alive; ptyIdsByTabId proves this tab owns it.
+    const otherTabPtyId = 'other-tab-eager-pty'
+    vi.mocked(getEagerPtyBufferHandle).mockImplementation((ptyId: string) =>
+      ptyId === otherTabPtyId ? { flush: () => '', dispose: () => {} } : undefined
+    )
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport()
+    transport.connect.mockImplementation(async (opts: { sessionId?: string }) => {
+      if (opts.sessionId) {
+        return { id: opts.sessionId }
+      }
+      return 'fresh-pty'
+    })
+    transportFactoryQueue.push(transport)
+    mockStoreState = {
+      ...mockStoreState,
+      tabsByWorktree: {
+        'wt-1': [
+          { id: 'tab-1', ptyId: 'tab-pty' },
+          { id: 'tab-2', ptyId: otherTabPtyId }
+        ]
+      },
+      ptyIdsByTabId: {
+        'tab-1': ['tab-pty'],
+        'tab-2': [otherTabPtyId]
+      }
+    } as StoreState
+    const deps = createDeps({
+      restoredLeafId: LEAF_1,
+      restoredPtyIdByLeafId: { [LEAF_1]: otherTabPtyId }
+    })
+
+    connectPanePty(createPane(1) as never, createManager(1) as never, deps as never)
+    await flushAsyncTicks()
+
+    expect(transport.attach).not.toHaveBeenCalledWith(
+      expect.objectContaining({ existingPtyId: otherTabPtyId })
+    )
+    expect(transport.connect).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: otherTabPtyId })
+    )
+    expect(deps.updateTabPtyId).not.toHaveBeenCalledWith('tab-1', otherTabPtyId)
   })
 
   it('spawns a fresh PTY when a restored daemon split session cannot reattach', async () => {

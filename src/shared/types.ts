@@ -14,7 +14,10 @@ import type { GitLabProjectSettings } from './gitlab-types'
 import type { TaskProvider } from './task-providers'
 import type { FeatureTipId } from './feature-tips'
 import type { ContextualTourId } from './contextual-tours'
-import type { FeatureInteractionState } from './feature-interactions'
+import type {
+  FeatureInteractionState,
+  FeatureInteractionTelemetryBucketState
+} from './feature-interactions'
 import type { GitBranchChangeStatus } from './git-status-types'
 import type { KeybindingOverrides, TerminalShortcutPolicy } from './keybindings'
 import type { RepoIcon } from './repo-icon'
@@ -26,6 +29,7 @@ import type {
 import type { AgentKind, LaunchSource, RequestKind } from './telemetry-events'
 import type { SleepingAgentSessionRecord } from './agent-session-resume'
 import type { ClaudeAgentTeamsMode } from './claude-agent-teams-tmux-compat'
+import type { TerminalCustomTheme } from './terminal-custom-themes'
 import type { UiLanguage } from './ui-language'
 
 // Re-exported for backward compat with renderer call sites that import
@@ -1160,6 +1164,9 @@ export type LinearConnectionStatus = {
   workspaces?: LinearWorkspace[]
   activeWorkspaceId?: string | null
   selectedWorkspaceId?: LinearWorkspaceSelection | null
+  // Set when a stored token file exists but could not be decrypted, so the
+  // UI can explain reads failing while the connection still looks saved.
+  credentialError?: string
 }
 
 export type LinearIssue = {
@@ -2039,6 +2046,7 @@ export type GlobalSettings = {
   terminalCursorStyleDefaultedToBlock?: boolean
   terminalCursorBlink: boolean
   terminalThemeDark: string
+  terminalCustomThemes?: TerminalCustomTheme[]
   terminalDividerColorDark: string
   terminalUseSeparateLightTheme: boolean
   terminalThemeLight: string
@@ -2875,6 +2883,8 @@ export type PersistedState = {
   automations: Automation[]
   automationRuns: AutomationRun[]
   onboarding: OnboardingState
+  /** Main-owned telemetry de-dupe marker; never exposed through PersistedUIState. */
+  featureInteractionTelemetryBuckets?: FeatureInteractionTelemetryBucketState
 }
 
 // ─── Filesystem ─────────────────────────────────────────────
@@ -2985,6 +2995,7 @@ export type SearchFileResult = {
   filePath: string
   relativePath: string
   matches: SearchMatch[]
+  matchCount?: number
 }
 
 export type SearchResult = {

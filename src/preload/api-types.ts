@@ -145,6 +145,10 @@ import type {
   WorkspaceSessionPatch,
   WorkspaceSessionState
 } from '../shared/types'
+import type {
+  WarpThemeImportPreview,
+  WarpThemeImportSource
+} from '../shared/terminal-custom-themes'
 import type { SetupScriptImportCandidate } from '../shared/setup-script-imports'
 import type { GitHistoryOptions, GitHistoryResult } from '../shared/git-history'
 import type { PublicKnownRuntimeEnvironment } from '../shared/runtime-environments'
@@ -760,6 +764,8 @@ export type PreloadApi = {
       name: string
       kind: 'git' | 'folder'
     }) => Promise<{ repo: Repo } | { error: string }>
+    isGitAvailable: () => Promise<boolean>
+    getDefaultCreateProjectParent: () => Promise<string>
     onCloneProgress: (callback: (data: { phase: string; percent: number }) => void) => () => void
     getGitUsername: (args: { repoId: string }) => Promise<string>
     getBaseRefDefault: (args: { repoId: string }) => Promise<BaseRefDefaultResult>
@@ -1616,6 +1622,7 @@ export type PreloadApi = {
     set: (args: Partial<GlobalSettings>) => Promise<GlobalSettings>
     listFonts: () => Promise<string[]>
     previewGhosttyImport: () => Promise<GhosttyImportPreview>
+    previewWarpThemeImport: (source: WarpThemeImportSource) => Promise<WarpThemeImportPreview>
     /** Subscribe to out-of-band settings updates (e.g. the View > Appearance
      *  menu toggles) so the renderer can stay in sync with main's persisted
      *  state without round-tripping through settings:get. */

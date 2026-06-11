@@ -100,6 +100,24 @@ function createGhosttyStub() {
   }
 }
 
+function createWarpThemesStub() {
+  return {
+    open: false,
+    preview: null,
+    loading: false,
+    desktopOnly: false,
+    applyError: null,
+    importSignal: 0,
+    selectedThemeIds: new Set<string>(),
+    handleClick: vi.fn(),
+    handlePreviewSource: vi.fn(),
+    handleToggleTheme: vi.fn(),
+    handleToggleAll: vi.fn(),
+    handleApply: vi.fn(),
+    handleOpenChange: vi.fn()
+  }
+}
+
 async function renderAppearancePane(
   settings: GlobalSettings,
   updateSettings: (updates: Partial<GlobalSettings>) => void = vi.fn()
@@ -120,6 +138,7 @@ async function renderAppearancePane(
           terminalFontSuggestions={[]}
           systemPrefersDark={false}
           ghostty={createGhosttyStub() as never}
+          warpThemes={createWarpThemesStub() as never}
         />
       </I18nextProvider>
     )
@@ -143,7 +162,7 @@ describe('AppearancePane', () => {
     mocks.state.settingsSearchQuery = 'automations'
   })
 
-  it('renders the language dropdown with system, english, chinese, korean, and japanese options', async () => {
+  it('renders the language dropdown with system, english, chinese, korean, japanese, and spanish options', async () => {
     mocks.state.settingsSearchQuery = 'language'
     const updateSettings = vi.fn()
     const settings = {
@@ -166,6 +185,7 @@ describe('AppearancePane', () => {
     expect(container.textContent).toContain('中文（简体）')
     expect(container.textContent).toContain('한국어')
     expect(container.textContent).toContain('日本語')
+    expect(container.textContent).toContain('Español')
 
     await act(async () => {
       chineseOption?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
