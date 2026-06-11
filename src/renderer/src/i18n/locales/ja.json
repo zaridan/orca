@@ -8160,6 +8160,7 @@
             "scanningSessions": "Scanning sessions",
             "scopeAriaLabel": "Session History scope: {{value0}}",
             "currentWorkspaceLower": "current workspace",
+            "currentWorktreeLower": "current worktree",
             "allSessionsLower": "all sessions",
             "thisScope": "This",
             "allScope": "All",
@@ -8178,6 +8179,7 @@
             "resetView": "Reset view",
             "hideEmptySessions": "Hide empty sessions",
             "workspaceScope": "Workspace",
+            "worktreeScope": "Worktree",
             "globalScope": "Global"
           },
           "AiVaultSessionDetails": {
@@ -8191,6 +8193,7 @@
             "usageValue": "{{value0}} msgs{{value1}}",
             "tokenSuffix": " · {{value0}} tok",
             "session": "Session",
+            "copyDetailValue": "Copy {{value0}}",
             "latestLog": "Latest log",
             "noReadablePreview": "No readable message preview in this transcript.",
             "resumeCommand": "Resume command",

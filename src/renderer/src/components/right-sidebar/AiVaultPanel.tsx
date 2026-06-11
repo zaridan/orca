@@ -1,16 +1,10 @@
-import { useVirtualizer } from '@tanstack/react-virtual'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { CLIENT_PLATFORM } from '@/lib/new-workspace'
 import { launchAiVaultSessionInNewTab } from '@/lib/launch-ai-vault-session'
 import { useAppStore } from '@/store'
 import { useActiveWorktree, useRepoById } from '@/store/selectors'
-import {
-  agentLabel,
-  filterAiVaultSessions,
-  groupAiVaultSessions,
-  type AiVaultSessionGroup
-} from './ai-vault-session-filters'
+import { agentLabel, filterAiVaultSessions, groupAiVaultSessions } from './ai-vault-session-filters'
 import {
   AI_VAULT_AGENTS,
   buildAiVaultResumeCommand,
@@ -21,26 +15,16 @@ import {
   type AiVaultSession,
   type AiVaultSort
 } from '../../../../shared/ai-vault-types'
-import { EmptyState, SessionLoadingState, VaultGroupHeader } from './AiVaultPanelControls'
-import { VaultSessionRow } from './AiVaultSessionRow'
-import { findSessionRepo } from './ai-vault-session-repo-match'
-import type { Repo } from '../../../../shared/types'
 import { translate } from '@/i18n/i18n'
 import { AiVaultPanelHeader } from './AiVaultPanelHeader'
+import { AiVaultSessionVirtualList } from './AiVaultSessionVirtualList'
 
 const SESSION_LIMIT = 500
-const VAULT_ROW_OVERSCAN = 8
-
-type AiVaultListRow =
-  | { type: 'group'; group: AiVaultSessionGroup }
-  | { type: 'session'; groupKey: string; session: AiVaultSession }
 
 export default function AiVaultPanel(): React.JSX.Element {
   const activeWorktree = useActiveWorktree()
   const activeRepo = useRepoById(activeWorktree?.repoId ?? null)
   const agentCmdOverrides = useAppStore((s) => s.settings?.agentCmdOverrides ?? {})
-  const repos = useAppStore((s) => s.repos)
-  const worktreesByRepo = useAppStore((s) => s.worktreesByRepo)
   const [query, setQuery] = useState('')
   const [scope, setScope] = useState<AiVaultScope>('workspace')
   const [sort, setSort] = useState<AiVaultSort>('updated')
@@ -55,7 +39,6 @@ export default function AiVaultPanel(): React.JSX.Element {
   const refreshIdRef = useRef(0)
   const refreshInFlightRef = useRef(false)
   const mountedRef = useRef(true)
-  const listScrollRef = useRef<HTMLDivElement>(null)
 
   const isRemoteWorktree = Boolean(activeRepo?.connectionId)
   const activeWorktreePath = activeWorktree?.path ?? null
@@ -134,44 +117,6 @@ export default function AiVaultPanel(): React.JSX.Element {
     () => groupAiVaultSessions(filteredSessions, group),
     [filteredSessions, group]
   )
-
-  const vaultRows = useMemo(() => {
-    const rows: AiVaultListRow[] = []
-    for (const sessionGroup of groups) {
-      rows.push({ type: 'group', group: sessionGroup })
-      if (!collapsedGroups.has(sessionGroup.key)) {
-        for (const session of sessionGroup.sessions) {
-          rows.push({ type: 'session', groupKey: sessionGroup.key, session })
-        }
-      }
-    }
-    return rows
-  }, [collapsedGroups, groups])
-
-  const virtualizer = useVirtualizer({
-    count: vaultRows.length,
-    getScrollElement: () => listScrollRef.current,
-    estimateSize: (index) => (vaultRows[index]?.type === 'group' ? 28 : 64),
-    overscan: VAULT_ROW_OVERSCAN,
-    getItemKey: (index) => {
-      const row = vaultRows[index]
-      if (!row) {
-        return `missing:${index}`
-      }
-      return row.type === 'group' ? `group:${row.group.key}` : `session:${row.session.id}`
-    }
-  })
-
-  const sessionRepoById = useMemo(() => {
-    const matches = new Map<string, Repo>()
-    for (const session of sessions) {
-      const repo = findSessionRepo(session.cwd, repos, worktreesByRepo)
-      if (repo) {
-        matches.set(session.id, repo)
-      }
-    }
-    return matches
-  }, [repos, sessions, worktreesByRepo])
 
   const buildResumeCommand = useCallback(
     (session: AiVaultSession): string =>
@@ -323,93 +268,38 @@ export default function AiVaultPanel(): React.JSX.Element {
         </div>
       ) : null}
 
-      <div ref={listScrollRef} className="min-h-0 flex-1 overflow-y-auto scrollbar-sleek">
-        {loading && sessions.length === 0 ? <SessionLoadingState /> : null}
-
-        {!loading && sessions.length === 0 && !error ? (
-          <EmptyState
-            title={translate(
-              'auto.components.right.sidebar.AiVaultPanel.noAgentSessionsFound',
-              'No agent sessions found'
-            )}
-          />
-        ) : null}
-
-        {sessions.length > 0 && filteredSessions.length === 0 ? (
-          <EmptyState
-            title={translate(
-              'auto.components.right.sidebar.AiVaultPanel.noSessionsMatchFilters',
-              'No sessions match the current filters'
-            )}
-          />
-        ) : null}
-
-        {vaultRows.length > 0 ? (
-          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-            {virtualizer.getVirtualItems().map((virtualRow) => {
-              const row = vaultRows[virtualRow.index]
-              if (!row) {
-                return null
-              }
-              return (
-                <div
-                  key={virtualRow.key}
-                  ref={virtualizer.measureElement}
-                  data-index={virtualRow.index}
-                  className="absolute left-0 top-0 w-full"
-                  style={{ transform: `translateY(${virtualRow.start}px)` }}
-                >
-                  {row.type === 'group' ? (
-                    <VaultGroupHeader
-                      group={row.group}
-                      collapsed={collapsedGroups.has(row.group.key)}
-                      onToggle={() => toggleGroup(row.group.key)}
-                    />
-                  ) : (
-                    <VaultSessionRow
-                      session={row.session}
-                      repo={sessionRepoById.get(row.session.id) ?? null}
-                      resumeCommand={buildResumeCommand(row.session)}
-                      resumeDisabled={!activeWorktree || isRemoteWorktree}
-                      onResume={() => handleResume(row.session)}
-                      onCopyResume={() => void copyResumeCommand(row.session)}
-                      onCopyId={() =>
-                        void copyText(
-                          row.session.sessionId,
-                          translate(
-                            'auto.components.right.sidebar.AiVaultPanel.sessionId',
-                            'Session ID'
-                          )
-                        )
-                      }
-                      onCopyPath={() =>
-                        void copyText(
-                          row.session.filePath,
-                          translate(
-                            'auto.components.right.sidebar.AiVaultPanel.logPath',
-                            'Log path'
-                          )
-                        )
-                      }
-                      onOpenLog={() => void window.api.shell.openFilePath(row.session.filePath)}
-                      onRevealLog={() => void window.api.shell.openPath(row.session.filePath)}
-                      onOpenCwd={
-                        row.session.cwd
-                          ? () => {
-                              if (row.session.cwd) {
-                                void window.api.shell.openPath(row.session.cwd)
-                              }
-                            }
-                          : undefined
-                      }
-                    />
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        ) : null}
-      </div>
+      <AiVaultSessionVirtualList
+        groups={groups}
+        collapsedGroups={collapsedGroups}
+        loading={loading}
+        sessionsCount={sessions.length}
+        filteredSessionsCount={filteredSessions.length}
+        error={error}
+        resumeDisabled={!activeWorktree || isRemoteWorktree}
+        buildResumeCommand={buildResumeCommand}
+        onToggleGroup={toggleGroup}
+        onResume={handleResume}
+        onCopyResume={(session) => void copyResumeCommand(session)}
+        onCopyId={(session) =>
+          void copyText(
+            session.sessionId,
+            translate('auto.components.right.sidebar.AiVaultPanel.sessionId', 'Session ID')
+          )
+        }
+        onCopyPath={(session) =>
+          void copyText(
+            session.filePath,
+            translate('auto.components.right.sidebar.AiVaultPanel.logPath', 'Log path')
+          )
+        }
+        onOpenLog={(session) => void window.api.shell.openFilePath(session.filePath)}
+        onRevealLog={(session) => void window.api.shell.openPath(session.filePath)}
+        onOpenCwd={(session) => {
+          if (session.cwd) {
+            void window.api.shell.openPath(session.cwd)
+          }
+        }}
+      />
     </div>
   )
 }

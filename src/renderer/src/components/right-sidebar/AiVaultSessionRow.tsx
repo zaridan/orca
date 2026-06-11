@@ -17,13 +17,11 @@ import {
   writeAiVaultSessionDragData
 } from '@/lib/ai-vault-session-drag'
 import type { AiVaultSession } from '../../../../shared/ai-vault-types'
-import type { Repo } from '../../../../shared/types'
-import { agentLabel, folderLabel } from './ai-vault-session-filters'
+import { agentLabel } from './ai-vault-session-filters'
 import { translate } from '@/i18n/i18n'
 import {
   formatTokenCount,
   MetaDot,
-  RepoBadge,
   SessionActionsMenu,
   SessionDetailsHoverCard,
   SessionTime
@@ -31,7 +29,6 @@ import {
 
 export function VaultSessionRow({
   session,
-  repo,
   resumeCommand,
   resumeDisabled,
   onResume,
@@ -43,7 +40,6 @@ export function VaultSessionRow({
   onOpenCwd
 }: {
   session: AiVaultSession
-  repo: Repo | null
   resumeCommand: string
   resumeDisabled: boolean
   onResume: () => void
@@ -93,10 +89,7 @@ export function VaultSessionRow({
                 <div className="truncate text-[13px] font-medium leading-5 text-foreground">
                   {session.title}
                 </div>
-                <SessionMetadata session={session} repo={repo} />
-                <div className="mt-1 truncate font-mono text-[11px] leading-4 text-muted-foreground/75">
-                  {folderLabel(session.cwd)}
-                </div>
+                <SessionMetadata session={session} />
               </div>
               <SessionTime
                 value={updatedAt}
@@ -183,30 +176,17 @@ export function VaultSessionRow({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      <SessionDetailsHoverCard session={session} repo={repo} resumeCommand={resumeCommand} />
+      <SessionDetailsHoverCard session={session} resumeCommand={resumeCommand} />
     </HoverCard>
   )
 }
 
-function SessionMetadata({
-  session,
-  repo
-}: {
-  session: AiVaultSession
-  repo: Repo | null
-}): React.JSX.Element {
+function SessionMetadata({ session }: { session: AiVaultSession }): React.JSX.Element {
   return (
     <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
       <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
         <AgentIcon agent={session.agent} size={14} />
       </span>
-      {repo ? (
-        <RepoBadge repo={repo} />
-      ) : (
-        <span className="max-w-[7rem] truncate font-mono text-[10.5px] text-muted-foreground/85">
-          {folderLabel(session.cwd)}
-        </span>
-      )}
       {session.model ? (
         <>
           <MetaDot />

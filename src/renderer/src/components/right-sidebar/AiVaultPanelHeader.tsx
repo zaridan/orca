@@ -1,4 +1,4 @@
-import { Grid2x2, LoaderCircle, RefreshCw, Search, X } from 'lucide-react'
+import { LoaderCircle, RefreshCw, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { translate } from '@/i18n/i18n'
 import {
@@ -57,7 +57,6 @@ export function AiVaultPanelHeader({
   return (
     <div className="shrink-0 border-b border-sidebar-border px-2.5 py-2">
       <div className="flex items-center gap-1.5">
-        <Grid2x2 className="size-4 text-muted-foreground" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-semibold text-foreground">
             {translate(
@@ -107,12 +106,12 @@ export function AiVaultPanelHeader({
             onClick={onRefresh}
             disabled={loading}
             aria-busy={loading}
-            className="size-7"
+            className="size-6"
           >
             {loading ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
+              <LoaderCircle className="size-3 animate-spin" />
             ) : (
-              <RefreshCw className="size-3.5" />
+              <RefreshCw className="size-3" />
             )}
           </Button>
         </div>

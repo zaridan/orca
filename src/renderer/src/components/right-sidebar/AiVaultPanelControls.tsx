@@ -5,7 +5,6 @@ import {
   ChevronRight,
   Clock3,
   FolderOpen,
-  Globe2,
   ListFilter,
   LoaderCircle
 } from 'lucide-react'
@@ -21,7 +20,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { AgentIcon } from '@/lib/agent-catalog'
 import { cn } from '@/lib/utils'
@@ -35,8 +33,10 @@ import {
 import { agentLabel, type AiVaultSessionGroup } from './ai-vault-session-filters'
 import { translate } from '@/i18n/i18n'
 
+const VAULT_HEADER_CONTROL_CLASS = 'size-6 shrink-0'
+
 const VAULT_SCOPE_TOGGLE_ITEM_CLASS =
-  'size-7 min-w-7 border border-transparent bg-transparent p-0 text-foreground shadow-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground aria-[checked=true]:border-foreground/20 aria-[checked=true]:bg-foreground/10 aria-[checked=true]:text-foreground aria-[checked=true]:shadow-xs aria-[checked=true]:hover:bg-foreground/15 aria-[checked=true]:hover:text-foreground data-[state=on]:border-foreground/20 data-[state=on]:bg-foreground/10 data-[state=on]:text-foreground data-[state=on]:shadow-xs data-[state=on]:hover:bg-foreground/15 data-[state=on]:hover:text-foreground'
+  'h-6 min-h-6 min-w-0 border border-transparent bg-transparent px-1.5 text-[10px] font-medium leading-none text-foreground shadow-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground aria-[checked=true]:border-foreground/20 aria-[checked=true]:bg-foreground/10 aria-[checked=true]:text-foreground aria-[checked=true]:shadow-xs aria-[checked=true]:hover:bg-foreground/15 aria-[checked=true]:hover:text-foreground data-[state=on]:border-foreground/20 data-[state=on]:bg-foreground/10 data-[state=on]:text-foreground data-[state=on]:shadow-xs data-[state=on]:hover:bg-foreground/15 data-[state=on]:hover:text-foreground'
 
 export function VaultGroupHeader({
   group,
@@ -50,12 +50,18 @@ export function VaultGroupHeader({
   return (
     <button
       type="button"
-      className="flex h-7 w-full items-center gap-1.5 border-y border-sidebar-border bg-sidebar-accent/25 px-2.5 text-left text-[11px] font-semibold text-sidebar-foreground hover:bg-sidebar-accent/45"
+      className="flex h-8 w-full items-center gap-2 border-y border-sidebar-border bg-sidebar-accent/60 px-3 text-left text-xs font-semibold text-foreground transition-colors hover:bg-sidebar-accent"
       onClick={onToggle}
+      aria-expanded={!collapsed}
     >
-      <ChevronRight className={cn('size-3 transition-transform', !collapsed && 'rotate-90')} />
+      <ChevronRight
+        className={cn(
+          'size-3.5 shrink-0 text-foreground/80 transition-transform',
+          !collapsed && 'rotate-90'
+        )}
+      />
       <span className="min-w-0 flex-1 truncate">{group.label}</span>
-      <span className="rounded bg-sidebar-accent px-1.5 py-0.5 text-[10px] leading-none text-sidebar-accent-foreground">
+      <span className="rounded-md border border-sidebar-border bg-background px-2 py-0.5 text-[11px] font-semibold tabular-nums leading-none text-foreground shadow-xs">
         {group.sessions.length}
       </span>
     </button>
@@ -99,14 +105,11 @@ export function VaultScopeSwitch({
   workspaceAvailable: boolean
   onScopeChange: (scope: AiVaultScope) => void
 }): React.JSX.Element {
-  const workspaceLabel = translate(
-    'auto.components.right.sidebar.AiVaultPanelControls.workspaceScope',
-    'Workspace'
+  const worktreeLabel = translate(
+    'auto.components.right.sidebar.AiVaultPanelControls.worktreeScope',
+    'Worktree'
   )
-  const globalLabel = translate(
-    'auto.components.right.sidebar.AiVaultPanelControls.globalScope',
-    'Global'
-  )
+  const allLabel = translate('auto.components.right.sidebar.AiVaultPanelControls.allScope', 'All')
 
   return (
     <ToggleGroup
@@ -118,7 +121,7 @@ export function VaultScopeSwitch({
         }
       }}
       variant="outline"
-      className="shrink-0 rounded-md border border-sidebar-border bg-sidebar-accent/35 shadow-xs"
+      className="h-6 shrink-0 rounded-md border border-sidebar-border bg-sidebar-accent/35 shadow-xs"
       aria-label={translate(
         'auto.components.right.sidebar.AiVaultPanelControls.scopeAriaLabel',
         'Session History scope: {{value0}}',
@@ -126,8 +129,8 @@ export function VaultScopeSwitch({
           value0:
             scope === 'workspace'
               ? translate(
-                  'auto.components.right.sidebar.AiVaultPanelControls.currentWorkspaceLower',
-                  'current workspace'
+                  'auto.components.right.sidebar.AiVaultPanelControls.currentWorktreeLower',
+                  'current worktree'
                 )
               : translate(
                   'auto.components.right.sidebar.AiVaultPanelControls.allSessionsLower',
@@ -136,35 +139,16 @@ export function VaultScopeSwitch({
         }
       )}
     >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <ToggleGroupItem
-            value="all"
-            aria-label={globalLabel}
-            className={VAULT_SCOPE_TOGGLE_ITEM_CLASS}
-          >
-            <Globe2 className="size-3.5" />
-          </ToggleGroupItem>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" sideOffset={4}>
-          {globalLabel}
-        </TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <ToggleGroupItem
-            value="workspace"
-            disabled={!workspaceAvailable}
-            aria-label={workspaceLabel}
-            className={VAULT_SCOPE_TOGGLE_ITEM_CLASS}
-          >
-            <FolderOpen className="size-3.5" />
-          </ToggleGroupItem>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" sideOffset={4}>
-          {workspaceLabel}
-        </TooltipContent>
-      </Tooltip>
+      <ToggleGroupItem value="all" className={VAULT_SCOPE_TOGGLE_ITEM_CLASS}>
+        {allLabel}
+      </ToggleGroupItem>
+      <ToggleGroupItem
+        value="workspace"
+        disabled={!workspaceAvailable}
+        className={VAULT_SCOPE_TOGGLE_ITEM_CLASS}
+      >
+        {worktreeLabel}
+      </ToggleGroupItem>
     </ToggleGroup>
   )
 }
@@ -199,13 +183,16 @@ export function VaultViewMenu({
           type="button"
           variant="ghost"
           size="icon-xs"
-          className="relative size-7 text-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          className={cn(
+            VAULT_HEADER_CONTROL_CLASS,
+            'relative text-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+          )}
           aria-label={translate(
             'auto.components.right.sidebar.AiVaultPanelControls.viewOptionsAriaLabel',
             'Session History view options'
           )}
         >
-          <ListFilter className="size-3.5" />
+          <ListFilter className="size-3" />
           <span className="sr-only">
             {translate(
               'auto.components.right.sidebar.AiVaultPanelControls.viewOptions',

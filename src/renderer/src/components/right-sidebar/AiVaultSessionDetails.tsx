@@ -1,7 +1,10 @@
 import type React from 'react'
+import { useCallback } from 'react'
 import { Copy, FileJson, FolderOpen, MoreHorizontal, Play } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { HoverCardContent } from '@/components/ui/hover-card'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,17 +15,14 @@ import {
 import { AgentIcon } from '@/lib/agent-catalog'
 import { cn } from '@/lib/utils'
 import type { AiVaultSession } from '../../../../shared/ai-vault-types'
-import type { Repo } from '../../../../shared/types'
 import { agentLabel } from './ai-vault-session-filters'
 import { translate } from '@/i18n/i18n'
 
 export function SessionDetailsHoverCard({
   session,
-  repo,
   resumeCommand
 }: {
   session: AiVaultSession
-  repo: Repo | null
   resumeCommand: string
 }): React.JSX.Element {
   const updatedAt = session.updatedAt ?? session.modifiedAt
@@ -43,92 +43,77 @@ export function SessionDetailsHoverCard({
             <div className="line-clamp-2 text-[13px] font-medium leading-5 text-popover-foreground">
               {session.title}
             </div>
-            <div className="mt-1 flex min-w-0 items-center gap-1.5">
-              <span className="text-[11px] text-muted-foreground">{agentLabel(session.agent)}</span>
-              {repo ? (
-                <>
-                  <MetaDot />
-                  <RepoBadge repo={repo} />
-                </>
-              ) : null}
+            <div className="mt-1 text-[11px] text-muted-foreground">
+              {agentLabel(session.agent)}
             </div>
           </div>
         </div>
 
-        <div className="mt-3 space-y-1.5 text-[11px] leading-4">
-          <DetailLine
-            label={translate(
-              'auto.components.right.sidebar.AiVaultSessionDetails.updated',
-              'Updated'
-            )}
-            value={formatDateTime(updatedAt)}
-          />
-          <DetailLine
-            label={translate(
-              'auto.components.right.sidebar.AiVaultSessionDetails.created',
-              'Created'
-            )}
-            value={formatDateTime(session.createdAt)}
-          />
-          <DetailLine
-            label={translate(
-              'auto.components.right.sidebar.AiVaultSessionDetails.workingDir',
-              'Working dir'
-            )}
-            value={
-              session.cwd ??
-              translate(
-                'auto.components.right.sidebar.AiVaultSessionDetails.unknownLocation',
-                'Unknown location'
-              )
-            }
-            mono
-          />
-          {session.branch ? (
+        <TooltipProvider delayDuration={300}>
+          <div className="mt-3 space-y-1.5 text-[11px] leading-4">
             <DetailLine
               label={translate(
-                'auto.components.right.sidebar.AiVaultSessionDetails.branch',
-                'Branch'
+                'auto.components.right.sidebar.AiVaultSessionDetails.updated',
+                'Updated'
               )}
-              value={session.branch}
+              value={formatDateTime(updatedAt)}
             />
-          ) : null}
-          {session.model ? (
             <DetailLine
               label={translate(
-                'auto.components.right.sidebar.AiVaultSessionDetails.model',
-                'Model'
+                'auto.components.right.sidebar.AiVaultSessionDetails.created',
+                'Created'
               )}
-              value={session.model}
+              value={formatDateTime(session.createdAt)}
             />
-          ) : null}
-          <DetailLine
-            label={translate('auto.components.right.sidebar.AiVaultSessionDetails.usage', 'Usage')}
-            value={translate(
-              'auto.components.right.sidebar.AiVaultSessionDetails.usageValue',
-              '{{value0}} msgs{{value1}}',
-              {
-                value0: session.messageCount,
-                value1:
-                  session.totalTokens > 0
-                    ? translate(
-                        'auto.components.right.sidebar.AiVaultSessionDetails.tokenSuffix',
-                        ' · {{value0}} tok',
-                        { value0: formatTokenCount(session.totalTokens) }
-                      )
-                    : ''
-              }
-            )}
-          />
-          <DetailLine
-            label={translate(
-              'auto.components.right.sidebar.AiVaultSessionDetails.session',
-              'Session'
-            )}
-            value={session.sessionId}
-            mono
-          />
-        </div>
+            {session.branch ? (
+              <DetailLine
+                label={translate(
+                  'auto.components.right.sidebar.AiVaultSessionDetails.branch',
+                  'Branch'
+                )}
+                value={session.branch}
+              />
+            ) : null}
+            {session.model ? (
+              <DetailLine
+                label={translate(
+                  'auto.components.right.sidebar.AiVaultSessionDetails.model',
+                  'Model'
+                )}
+                value={session.model}
+              />
+            ) : null}
+            <DetailLine
+              label={translate(
+                'auto.components.right.sidebar.AiVaultSessionDetails.usage',
+                'Usage'
+              )}
+              value={translate(
+                'auto.components.right.sidebar.AiVaultSessionDetails.usageValue',
+                '{{value0}} msgs{{value1}}',
+                {
+                  value0: session.messageCount,
+                  value1:
+                    session.totalTokens > 0
+                      ? translate(
+                          'auto.components.right.sidebar.AiVaultSessionDetails.tokenSuffix',
+                          ' · {{value0}} tok',
+                          { value0: formatTokenCount(session.totalTokens) }
+                        )
+                      : ''
+                }
+              )}
+            />
+            <DetailLine
+              label={translate(
+                'auto.components.right.sidebar.AiVaultSessionDetails.session',
+                'Session'
+              )}
+              value={session.sessionId}
+              mono
+            />
+          </div>
+        </TooltipProvider>
 
         <div className="mt-3 border-t border-border/60 pt-2">
           <div className="mb-1.5 text-[11px] font-semibold text-muted-foreground">
@@ -185,27 +170,46 @@ function DetailLine({
   value: string
   mono?: boolean
 }): React.JSX.Element {
+  const handleCopy = useCallback(() => {
+    void window.api.ui.writeClipboardText(value).then(() => {
+      toast.success(
+        translate('auto.components.right.sidebar.AiVaultPanel.valueCopied', '{{value0}} copied', {
+          value0: label
+        })
+      )
+    })
+  }, [label, value])
+
   return (
     <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
       <span className="text-muted-foreground">{label}</span>
-      <span className={cn('min-w-0 truncate text-popover-foreground/90', mono && 'font-mono')}>
-        {value}
-      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={handleCopy}
+            className={cn(
+              'min-w-0 truncate text-left text-popover-foreground/90 transition-colors hover:text-popover-foreground',
+              mono && 'font-mono'
+            )}
+            aria-label={translate(
+              'auto.components.right.sidebar.AiVaultSessionDetails.copyDetailValue',
+              'Copy {{value0}}',
+              { value0: label }
+            )}
+          >
+            {value}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent
+          side="top"
+          sideOffset={4}
+          className="pointer-events-none max-w-[min(20rem,calc(100vw-2rem))] break-all"
+        >
+          {value}
+        </TooltipContent>
+      </Tooltip>
     </div>
-  )
-}
-
-export function RepoBadge({ repo }: { repo: Repo }): React.JSX.Element {
-  return (
-    <span className="flex h-[16px] max-w-[7rem] shrink-0 items-center gap-1.5 rounded-[4px] border border-border bg-accent px-1.5 leading-none dark:border-border/60 dark:bg-accent/50">
-      <span
-        className="size-1.5 shrink-0 rounded-full"
-        style={{ backgroundColor: repo.badgeColor }}
-      />
-      <span className="min-w-0 truncate text-[10px] font-semibold lowercase text-foreground">
-        {repo.displayName}
-      </span>
-    </span>
   )
 }
 
