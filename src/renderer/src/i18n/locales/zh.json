@@ -7441,6 +7441,9 @@
             "71026ca2cb": "刷新中…",
             "889cdfba04": "创建 {{value0}}",
             "98f4c37b33": "推送并创建 {{value0}}",
+            "b6ce28da5b": "{{value0}} #{{value1}} 已打开",
+            "cf9e69f3be": "{{value0}} 已打开",
+            "192e686e57": "打开于 {{value0}}",
             "6633c7a1fb": "发布分支",
             "fdb27637f2": "出版…",
             "e56c42122e": "destructive",
@@ -7467,6 +7470,9 @@
             "a154fe55e6": "推送并创建 {{value0}}",
             "21c7a1daa0": "{{value0}} 已打开",
             "db9cee18f7": "创建 {{value0}}"
+          },
+          "CreateHostedReviewComposer": {
+            "741ff8a0d2": "推送并创建 {{value0}}"
           },
           "CreatePullRequestGenerateButton": {
             "4012459f8a": "用 AI 生成",

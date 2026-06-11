@@ -7441,6 +7441,9 @@
             "71026ca2cb": "更新中…",
             "889cdfba04": "{{value0}} を作成する",
             "98f4c37b33": "プッシュして{{value0}}を作成",
+            "b6ce28da5b": "{{value0}} #{{value1}} はすでに開いています",
+            "cf9e69f3be": "{{value0}} はすでに開いています",
+            "192e686e57": "{{value0}} で開く",
             "6633c7a1fb": "ブランチを公開",
             "fdb27637f2": "公開中…",
             "e56c42122e": "破壊的な",
@@ -7467,6 +7470,9 @@
             "a154fe55e6": "プッシュして{{value0}}を作成",
             "21c7a1daa0": "{{value0}} はすでに開いています",
             "db9cee18f7": "{{value0}} を作成"
+          },
+          "CreateHostedReviewComposer": {
+            "741ff8a0d2": "プッシュして{{value0}}を作成"
           },
           "CreatePullRequestGenerateButton": {
             "4012459f8a": "AIで生成",

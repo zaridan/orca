@@ -7441,6 +7441,9 @@
             "71026ca2cb": "Refreshing…",
             "889cdfba04": "Create {{value0}}",
             "98f4c37b33": "Push & Create {{value0}}",
+            "b6ce28da5b": "{{value0}} #{{value1}} is already open",
+            "cf9e69f3be": "{{value0}} is already open",
+            "192e686e57": "Open on {{value0}}",
             "6633c7a1fb": "Publish Branch",
             "fdb27637f2": "Publishing…",
             "e56c42122e": "destructive",
@@ -7467,6 +7470,9 @@
             "a154fe55e6": "Push & Create {{value0}}",
             "21c7a1daa0": "{{value0}} is already open",
             "db9cee18f7": "Create {{value0}}"
+          },
+          "CreateHostedReviewComposer": {
+            "741ff8a0d2": "Push & Create {{value0}}"
           },
           "CreatePullRequestGenerateButton": {
             "4012459f8a": "Generate with AI",

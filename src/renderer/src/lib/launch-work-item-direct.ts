@@ -11,7 +11,13 @@ import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { getWorkspaceIntentName, getWorkspaceSeedName } from '@/lib/new-workspace'
 import { getLaunchableWorkItemDraftContent } from '@/lib/linked-work-item-context'
 import { isOrcaCliAvailableForLaunch } from '@/lib/orca-cli-launch-availability'
-import { agentLaunchCommandErrorMessage, gitLabIssueNumber, resolvePrHeadErrorMessage, unavailableAgentErrorMessage, workspaceActivationErrorMessage } from '@/lib/launch-work-item-direct-messages'
+import {
+  agentLaunchCommandErrorMessage,
+  gitLabIssueNumber,
+  resolvePrHeadErrorMessage,
+  unavailableAgentErrorMessage,
+  workspaceActivationErrorMessage
+} from '@/lib/launch-work-item-direct-messages'
 import { ensureHooksConfirmed } from '@/lib/ensure-hooks-confirmed'
 import { getConnectionId } from '@/lib/connection-context'
 import type {

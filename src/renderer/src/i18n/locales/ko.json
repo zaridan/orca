@@ -7441,6 +7441,9 @@
             "71026ca2cb": "새로고침 중…",
             "889cdfba04": "{{value0}} 만들기",
             "98f4c37b33": "푸시 및 생성 {{value0}}",
+            "b6ce28da5b": "{{value0}} #{{value1}}이(가) 이미 열려 있습니다",
+            "cf9e69f3be": "{{value0}}이(가) 이미 열려 있습니다",
+            "192e686e57": "{{value0}}에서 열기",
             "6633c7a1fb": "게시 브랜치",
             "fdb27637f2": "출판…",
             "e56c42122e": "파괴적인",
@@ -7467,6 +7470,9 @@
             "a154fe55e6": "푸시 및 생성 {{value0}}",
             "21c7a1daa0": "{{value0}}이(가) 이미 열려 있습니다",
             "db9cee18f7": "{{value0}} 만들기"
+          },
+          "CreateHostedReviewComposer": {
+            "741ff8a0d2": "푸시 및 생성 {{value0}}"
           },
           "CreatePullRequestGenerateButton": {
             "4012459f8a": "AI로 생성",
