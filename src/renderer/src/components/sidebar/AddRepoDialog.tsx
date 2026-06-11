@@ -320,6 +320,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
           isCloning={isCloning}
           sshTargets={sshTargets}
           selectedTargetId={selectedTargetId}
+          selectedSshTargetId={selectedSshTargetId}
           lockSshTargetSelection={selectedParsedHost?.kind === 'ssh'}
           remotePath={remotePath}
           remoteError={remoteError}

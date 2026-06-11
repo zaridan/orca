@@ -156,6 +156,17 @@ describe('AddRepoDialogStepContent nested imports', () => {
     expect(html).toContain('aria-label="Browse server filesystem"')
   })
 
+  it('offers SSH browsing for selected-host clone destinations', () => {
+    const html = renderStepContent({
+      step: 'clone',
+      selectedSshTargetId: 'openclaw-2'
+    })
+
+    expect(html).toContain('Clone from URL')
+    expect(html).toContain('aria-label="Browse server filesystem"')
+    expect(html).not.toContain('aria-label="Choose folder"')
+  })
+
   it('hides the SSH target chooser after a host was already selected', () => {
     const html = renderStepContent({
       step: 'remote',
