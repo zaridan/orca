@@ -7803,7 +7803,10 @@
             "3e8f21954f": "error",
             "74168d7ada": "idle",
             "1d47db9bf0": "No hay agents habilitados",
-            "c7ff8cef11": "Detectando agents..."
+            "c7ff8cef11": "Detectando agents...",
+            "b0da3a4d3e": "La receta de lanzamiento ya está guardada",
+            "bff4795a6d": "Cambia el agente, los argumentos o la plantilla del prompt para actualizar la receta guardada.",
+            "5c75b24735": "Personaliza lo que recibe el agente antes de que Orca lo inicie."
           },
           "SourceControlTextGenerationDialog": {
             "c5b7fa7cb6": "Guardar como valor predeterminado global",

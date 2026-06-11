@@ -7803,7 +7803,10 @@
             "6cefcdfba1": "You can change it later in Source Control AI settings.",
             "c29f9cf266": "Save this prompt and don't show this review next time",
             "d8f40128ee": "{basePrompt} is Orca's default prompt.",
-            "ea4788705e": "Cancel"
+            "ea4788705e": "Cancel",
+            "b0da3a4d3e": "실행 레시피가 이미 저장되었습니다",
+            "bff4795a6d": "저장된 레시피를 업데이트하려면 agent, 인수 또는 프롬프트 템플릿을 변경하세요.",
+            "5c75b24735": "Orca가 시작하기 전에 agent가 받을 내용을 사용자 지정합니다."
           },
           "SourceControlTextGenerationDialog": {
             "c5b7fa7cb6": "전역 기본값으로 저장",

@@ -7803,7 +7803,10 @@
             "6cefcdfba1": "You can change it later in Source Control AI settings.",
             "c29f9cf266": "Save this prompt and don't show this review next time",
             "d8f40128ee": "{basePrompt} is Orca's default prompt.",
-            "ea4788705e": "Cancel"
+            "ea4788705e": "Cancel",
+            "b0da3a4d3e": "启动配方已保存",
+            "bff4795a6d": "更改 Agent、参数或提示词模板以更新已保存的配方。",
+            "5c75b24735": "自定义 Orca 启动 Agent 前发送给它的内容。"
           },
           "SourceControlTextGenerationDialog": {
             "c5b7fa7cb6": "保存为全局默认值",

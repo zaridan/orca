@@ -7803,7 +7803,10 @@
             "3e8f21954f": "error",
             "74168d7ada": "idle",
             "1d47db9bf0": "No enabled agents",
-            "c7ff8cef11": "Detecting agents..."
+            "c7ff8cef11": "Detecting agents...",
+            "b0da3a4d3e": "Launch recipe already saved",
+            "bff4795a6d": "Change the agent, arguments, or prompt template to update the saved recipe.",
+            "5c75b24735": "Customize what the agent receives before Orca starts it."
           },
           "SourceControlTextGenerationDialog": {
             "c5b7fa7cb6": "Save as global default",
