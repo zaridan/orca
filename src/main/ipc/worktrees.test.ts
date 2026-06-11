@@ -228,6 +228,7 @@ describe('registerWorktreeHandlers', () => {
     getWorktreeMeta: vi.fn(),
     getAllWorktreeMeta: vi.fn(),
     setWorktreeMeta: vi.fn(),
+    getProjectHostSetups: vi.fn(),
     removeWorktreeMeta: vi.fn(),
     getAllWorktreeLineage: vi.fn(),
     removeWorktreeLineage: vi.fn()
@@ -292,6 +293,7 @@ describe('registerWorktreeHandlers', () => {
       store.getWorktreeMeta,
       store.getAllWorktreeMeta,
       store.setWorktreeMeta,
+      store.getProjectHostSetups,
       store.removeWorktreeMeta,
       store.getAllWorktreeLineage,
       store.removeWorktreeLineage,
@@ -338,6 +340,20 @@ describe('registerWorktreeHandlers', () => {
     store.getWorktreeMeta.mockReturnValue(undefined)
     store.getAllWorktreeMeta.mockReturnValue({})
     store.setWorktreeMeta.mockReturnValue({})
+    store.getProjectHostSetups.mockReturnValue([
+      {
+        id: 'repo-1',
+        projectId: 'repo:repo-1',
+        hostId: 'local',
+        repoId: 'repo-1',
+        path: '/workspace/repo',
+        displayName: 'repo',
+        setupState: 'ready',
+        setupMethod: 'legacy-repo',
+        createdAt: 0,
+        updatedAt: 0
+      }
+    ])
     store.getAllWorktreeLineage.mockReturnValue({})
     getGitUsernameMock.mockReturnValue('')
     getDefaultBaseRefMock.mockReturnValue('origin/main')
@@ -3387,7 +3403,12 @@ describe('registerWorktreeHandlers', () => {
       }
     ])
     store.getWorktreeMeta.mockReturnValue(undefined)
-    const stampedMeta = { lastActivityAt: 1_700_000_000_000 }
+    const stampedMeta = {
+      projectId: 'repo:repo-1',
+      hostId: 'local',
+      projectHostSetupId: 'repo-1',
+      lastActivityAt: 1_700_000_000_000
+    }
     store.setWorktreeMeta.mockReturnValue(stampedMeta)
 
     const listed = (await handlers['worktrees:list'](null, { repoId: 'repo-1' })) as {
@@ -3397,7 +3418,12 @@ describe('registerWorktreeHandlers', () => {
 
     expect(store.setWorktreeMeta).toHaveBeenCalledWith(
       'repo-1::/workspace/discovered-wt',
-      expect.objectContaining({ lastActivityAt: expect.any(Number) })
+      expect.objectContaining({
+        lastActivityAt: expect.any(Number),
+        projectId: 'repo:repo-1',
+        hostId: 'local',
+        projectHostSetupId: 'repo-1'
+      })
     )
     expect(listed[0]).toMatchObject({
       id: 'repo-1::/workspace/discovered-wt',
@@ -3405,9 +3431,10 @@ describe('registerWorktreeHandlers', () => {
     })
   })
 
-  it('does not re-stamp lastActivityAt when a worktree already has persisted meta', async () => {
+  it('backfills project-host ownership without re-stamping lastActivityAt for existing meta', async () => {
     // Why: only the *first* discovery should stamp. Re-stamping on every list
-    // would overwrite real activity and reshuffle the sidebar on refresh.
+    // would overwrite real activity and reshuffle the sidebar on refresh. Host
+    // ownership can still be filled because it is derived from the repo setup.
     listWorktreesMock.mockResolvedValue([
       {
         path: '/workspace/existing-wt',
@@ -3429,14 +3456,64 @@ describe('registerWorktreeHandlers', () => {
       sortOrder: 0,
       lastActivityAt: 42
     })
+    store.setWorktreeMeta.mockReturnValue({
+      instanceId: 'existing-instance',
+      projectId: 'repo:repo-1',
+      hostId: 'local',
+      projectHostSetupId: 'repo-1',
+      lastActivityAt: 42
+    })
 
     const listed = (await handlers['worktrees:list'](null, { repoId: 'repo-1' })) as {
       id: string
       lastActivityAt: number
+      projectId?: string
+      hostId?: string
+      projectHostSetupId?: string
     }[]
 
-    expect(store.setWorktreeMeta).not.toHaveBeenCalled()
+    expect(store.setWorktreeMeta).toHaveBeenCalledWith('repo-1::/workspace/existing-wt', {
+      projectId: 'repo:repo-1',
+      hostId: 'local',
+      projectHostSetupId: 'repo-1'
+    })
     expect(listed[0].lastActivityAt).toBe(42)
+    expect(listed[0]).toMatchObject({
+      projectId: 'repo:repo-1',
+      hostId: 'local',
+      projectHostSetupId: 'repo-1'
+    })
+  })
+
+  it('does not rewrite discovery metadata when instance and project-host ownership already exist', async () => {
+    listWorktreesMock.mockResolvedValue([
+      {
+        path: '/workspace/existing-wt',
+        head: 'abc123',
+        branch: 'refs/heads/feature',
+        isBare: false,
+        isMainWorktree: false
+      }
+    ])
+    store.getWorktreeMeta.mockReturnValue({
+      instanceId: 'existing-instance',
+      projectId: 'repo:repo-1',
+      hostId: 'local',
+      projectHostSetupId: 'repo-1',
+      displayName: '',
+      comment: '',
+      linkedIssue: null,
+      linkedPR: null,
+      isArchived: false,
+      isUnread: false,
+      isPinned: false,
+      sortOrder: 0,
+      lastActivityAt: 42
+    })
+
+    await handlers['worktrees:list'](null, { repoId: 'repo-1' })
+
+    expect(store.setWorktreeMeta).not.toHaveBeenCalled()
   })
 
   it('backfills instanceId on discovery for persisted metadata from older profiles', async () => {
@@ -3462,6 +3539,9 @@ describe('registerWorktreeHandlers', () => {
     })
     store.setWorktreeMeta.mockReturnValue({
       instanceId: 'new-instance',
+      projectId: 'repo:repo-1',
+      hostId: 'local',
+      projectHostSetupId: 'repo-1',
       lastActivityAt: 42
     })
 
@@ -3472,9 +3552,19 @@ describe('registerWorktreeHandlers', () => {
 
     expect(store.setWorktreeMeta).toHaveBeenCalledWith(
       'repo-1::/workspace/existing-wt',
-      expect.objectContaining({ instanceId: expect.any(String) })
+      expect.objectContaining({
+        instanceId: expect.any(String),
+        projectId: 'repo:repo-1',
+        hostId: 'local',
+        projectHostSetupId: 'repo-1'
+      })
     )
-    expect(listed[0].instanceId).toBe('new-instance')
+    expect(listed[0]).toMatchObject({
+      instanceId: 'new-instance',
+      projectId: 'repo:repo-1',
+      hostId: 'local',
+      projectHostSetupId: 'repo-1'
+    })
   })
 
   it('stamps lastActivityAt on first discovery for folder-mode repos', async () => {
@@ -3500,13 +3590,23 @@ describe('registerWorktreeHandlers', () => {
       kind: 'folder'
     })
     store.getWorktreeMeta.mockReturnValue(undefined)
-    store.setWorktreeMeta.mockReturnValue({ lastActivityAt: 1_700_000_000_000 })
+    store.setWorktreeMeta.mockReturnValue({
+      projectId: 'repo:repo-1',
+      hostId: 'local',
+      projectHostSetupId: 'repo-1',
+      lastActivityAt: 1_700_000_000_000
+    })
 
     await handlers['worktrees:list'](null, { repoId: 'repo-1' })
 
     expect(store.setWorktreeMeta).toHaveBeenCalledWith(
       'repo-1::/workspace/folder',
-      expect.objectContaining({ lastActivityAt: expect.any(Number) })
+      expect.objectContaining({
+        lastActivityAt: expect.any(Number),
+        projectId: 'repo:repo-1',
+        hostId: 'local',
+        projectHostSetupId: 'repo-1'
+      })
     )
   })
 

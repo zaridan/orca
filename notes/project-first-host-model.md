@@ -732,6 +732,10 @@ Landed so far:
   fields to `Worktree`/`WorktreeMeta`, threaded them through worktree merge
   paths, and stamped them for new local, SSH, folder, and runtime-created
   workspaces when project-host setup data is available.
+- Added discovery-time backfill for existing git and folder workspaces that
+  already have metadata but are missing `projectId`, `hostId`, or
+  `projectHostSetupId`. The backfill only fills missing ownership fields during
+  authoritative workspace listing and preserves existing ownership when present.
 - Added first-class setup-on-existing-folder plumbing through local IPC,
   preload, runtime RPC, runtime service, and the renderer repo slice. The new
   `projectHostSetup.setupExistingFolder` path returns `{ project, setup, repo }`
@@ -773,10 +777,11 @@ Important limitation:
 - This is not the full migration yet. `Repo` remains the source of truth for the
   compatibility records, and workspace creation still maps the resolved
   project-host setup back into the existing repo-centric `createWorktree` API.
-  Existing workspaces without the new ownership metadata still infer host/project
-  through their repo compatibility record. Settings now expose setup-specific
-  host panes and existing-folder setup, but still use repo compatibility records
-  underneath.
+  Existing workspaces can now backfill project/setup/host ownership when Orca
+  rediscovers them under an authoritative repo, but untouched metadata-only rows
+  and older runtimes still need the repo compatibility fallback. Settings now
+  expose setup-specific host panes and existing-folder setup, but still use repo
+  compatibility records underneath.
 - SSH clone setup is implemented through the relay git provider, but it does
   not yet have local-clone parity for progress events. Abort now propagates to
   the relay `git.exec` request, and failed/aborted SSH clones clean up only
@@ -794,9 +799,8 @@ Remaining end-to-end work:
   scopes
 - validate the default project-first sidebar view in Electron and continue
   refining disconnected-host affordances
-- backfill explicit workspace project/setup/host ownership for existing
-  metadata-only workspaces where safe, while keeping repo compatibility fallback
-  for older servers and profiles
+- broaden workspace ownership migration beyond discovery-time backfill while
+  keeping repo compatibility fallback for older servers and profiles
 - audit runtime routing, cache keys, request cancellation, and stale-response
   handling for host/setup-local ownership
 - add project-first CLI/API commands with compatibility aliases for existing

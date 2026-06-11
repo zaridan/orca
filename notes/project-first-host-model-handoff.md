@@ -396,6 +396,8 @@ Already partially landed:
 - project-host-aware workspace creation target resolver
 - optional workspace metadata for `projectId`, `hostId`, and
   `projectHostSetupId`
+- discovery-time backfill for missing workspace `projectId`, `hostId`, and
+  `projectHostSetupId` on existing git and folder workspaces
 - setup-existing-folder API plumbing through local IPC/preload/runtime paths
 - project settings existing-folder setup form for known local, SSH, and active
   runtime hosts
