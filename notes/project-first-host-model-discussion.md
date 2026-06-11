@@ -356,8 +356,9 @@ Needs:
 
 Current branch status: partially implemented. Ready project-host setups can be
 selected from the composer `Run on` menu, and known hosts that still need setup
-now appear as disabled rows instead of being invisible. Inline setup actions for
-those rows are still missing.
+now appear as setup-target rows instead of being invisible. The composer can
+import an existing folder for those hosts and then switch to the new ready
+setup. Inline clone/provision actions for those rows are still missing.
 
 ### 5. Project Setup Flow
 
@@ -513,13 +514,15 @@ Already partially landed:
 - CLI commands for listing projects/setups and creating worktrees by
   project/setup
 - composer `Run on` selector when a project has multiple ready setups
-- disabled `Run on` rows for known hosts where the selected project is not set
-  up yet
+- setup-target `Run on` rows for known hosts where the selected project is not
+  set up yet
+- inline `Run on` import-existing-folder setup for known hosts where the
+  selected project is not set up yet
 
 Not complete yet:
 
 - clone/provision flows
-- inline setup actions from the composer `Run on` menu
+- inline clone/provision actions from the composer `Run on` menu
 - bulk setup flows and setup for hosts that are not already known to the client
 - full project settings split into global and host-specific ownership
 - host settings/capability UI aligned with project setup

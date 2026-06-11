@@ -28,7 +28,7 @@ export type ProjectHostSetupOption =
 
 export type ReadyProjectHostSetupOption = Extract<ProjectHostSetupOption, { kind: 'ready' }>
 
-type NeedsSetupProjectHostOption = Extract<ProjectHostSetupOption, { kind: 'needs-setup' }>
+export type NeedsSetupProjectHostOption = Extract<ProjectHostSetupOption, { kind: 'needs-setup' }>
 
 type BuildReadySetupOptionsInput = {
   projectId: string

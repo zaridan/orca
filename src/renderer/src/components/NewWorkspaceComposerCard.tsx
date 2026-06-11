@@ -13,6 +13,14 @@ import {
   Settings2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import RepoCombobox from '@/components/repo/RepoCombobox'
 import AgentCombobox from '@/components/agent/AgentCombobox'
@@ -36,7 +44,10 @@ import SmartWorkspaceNameField, {
 } from '@/components/new-workspace/SmartWorkspaceNameField'
 import ProjectHostSetupCombobox from '@/components/new-workspace/ProjectHostSetupCombobox'
 import type { SetupConfig } from '@/lib/new-workspace'
-import type { ProjectHostSetupOption } from '@/lib/project-host-setup-options'
+import type {
+  NeedsSetupProjectHostOption,
+  ProjectHostSetupOption
+} from '@/lib/project-host-setup-options'
 import type { WorkspaceCreateErrorDisplay } from '@/lib/workspace-create-error-format'
 import type { SshConnectionStatus } from '../../../shared/ssh-types'
 import { translate } from '@/i18n/i18n'
@@ -58,6 +69,11 @@ type NewWorkspaceComposerCardProps = {
   projectHostSetupOptions: ProjectHostSetupOption[]
   selectedProjectHostSetupId: string | null
   onProjectHostSetupChange: (setupId: string) => void
+  onProjectHostExistingFolderSetup: (
+    option: NeedsSetupProjectHostOption,
+    path: string,
+    kind: 'git' | 'folder'
+  ) => Promise<boolean>
   primaryActionLabel: string
   name: string
   onNameValueChange: (value: string) => void
@@ -241,6 +257,7 @@ export default function NewWorkspaceComposerCard({
   projectHostSetupOptions,
   selectedProjectHostSetupId,
   onProjectHostSetupChange,
+  onProjectHostExistingFolderSetup,
   primaryActionLabel,
   name,
   onNameValueChange,
@@ -279,6 +296,12 @@ export default function NewWorkspaceComposerCard({
   onSparseSelectPreset
 }: NewWorkspaceComposerCardProps): React.JSX.Element {
   const { isFileDragOver, dragHandlers } = useComposerFileDragOver()
+  const [pendingSetupHostOptionId, setPendingSetupHostOptionId] = React.useState<string | null>(
+    null
+  )
+  const [pendingSetupPath, setPendingSetupPath] = React.useState('')
+  const [pendingSetupKind, setPendingSetupKind] = React.useState<'git' | 'folder'>('git')
+  const [pendingSetupImporting, setPendingSetupImporting] = React.useState(false)
   const openModal = useAppStore((s) => s.openModal)
   const activeModal = useAppStore((s) => s.activeModal)
   const defaultTuiAgent = useAppStore((s) => s.settings?.defaultTuiAgent ?? null)
@@ -380,6 +403,44 @@ export default function NewWorkspaceComposerCard({
     openModal('add-repo')
   }, [openModal])
   const projectDescriptionId = React.useId()
+  const pendingSetupHostOption = React.useMemo(
+    () =>
+      projectHostSetupOptions.find(
+        (option): option is NeedsSetupProjectHostOption =>
+          option.kind === 'needs-setup' && option.id === pendingSetupHostOptionId
+      ) ?? null,
+    [pendingSetupHostOptionId, projectHostSetupOptions]
+  )
+  const handleProjectHostSetupChange = React.useCallback(
+    (setupId: string): void => {
+      setPendingSetupHostOptionId(null)
+      onProjectHostSetupChange(setupId)
+    },
+    [onProjectHostSetupChange]
+  )
+  const handleNeedsSetupHostSelect = React.useCallback((option: NeedsSetupProjectHostOption) => {
+    setPendingSetupHostOptionId(option.id)
+  }, [])
+  const handleImportExistingFolder = React.useCallback(async (): Promise<void> => {
+    if (!pendingSetupHostOption || !pendingSetupPath.trim()) {
+      return
+    }
+    setPendingSetupImporting(true)
+    try {
+      const imported = await onProjectHostExistingFolderSetup(
+        pendingSetupHostOption,
+        pendingSetupPath.trim(),
+        pendingSetupKind
+      )
+      if (imported) {
+        setPendingSetupHostOptionId(null)
+        setPendingSetupPath('')
+        setPendingSetupKind('git')
+      }
+    } finally {
+      setPendingSetupImporting(false)
+    }
+  }, [onProjectHostExistingFolderSetup, pendingSetupHostOption, pendingSetupKind, pendingSetupPath])
   useContextualTour(
     'workspace-creation',
     eligibleRepos.length > 0 && Boolean(repoId),
@@ -473,8 +534,78 @@ export default function NewWorkspaceComposerCard({
               <ProjectHostSetupCombobox
                 options={projectHostSetupOptions}
                 value={selectedProjectHostSetupId}
-                onValueChange={onProjectHostSetupChange}
+                onValueChange={handleProjectHostSetupChange}
+                onNeedsSetupHostSelect={handleNeedsSetupHostSelect}
               />
+              {pendingSetupHostOption ? (
+                <div className="space-y-2 rounded-md border border-border bg-muted/20 p-2.5">
+                  <div className="text-xs font-medium text-foreground">
+                    {translate(
+                      'auto.components.NewWorkspaceComposerCard.setupHostExistingFolderTitle',
+                      'Import existing folder on {{value0}}',
+                      { value0: pendingSetupHostOption.label }
+                    )}
+                  </div>
+                  <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_7rem]">
+                    <Input
+                      value={pendingSetupPath}
+                      onChange={(event) => setPendingSetupPath(event.target.value)}
+                      placeholder={translate(
+                        'auto.components.NewWorkspaceComposerCard.setupHostExistingFolderPlaceholder',
+                        '/path/to/project/on/host'
+                      )}
+                      className="h-8 min-w-0 text-xs"
+                    />
+                    <Select
+                      value={pendingSetupKind}
+                      onValueChange={(value) => setPendingSetupKind(value as 'git' | 'folder')}
+                    >
+                      <SelectTrigger className="h-8 min-w-0 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="git">
+                          {translate(
+                            'auto.components.NewWorkspaceComposerCard.setupKindGit',
+                            'Git repo'
+                          )}
+                        </SelectItem>
+                        <SelectItem value="folder">
+                          {translate(
+                            'auto.components.NewWorkspaceComposerCard.setupKindFolder',
+                            'Folder'
+                          )}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="min-w-0 text-[11px] text-muted-foreground">
+                      {translate(
+                        'auto.components.NewWorkspaceComposerCard.setupHostExistingFolderHelp',
+                        'Link a checkout that already exists there, then create this workspace on that host.'
+                      )}
+                    </p>
+                    <Button
+                      type="button"
+                      size="xs"
+                      disabled={!pendingSetupPath.trim() || pendingSetupImporting}
+                      onClick={() => void handleImportExistingFolder()}
+                      className="shrink-0"
+                    >
+                      {pendingSetupImporting
+                        ? translate(
+                            'auto.components.NewWorkspaceComposerCard.importingHostSetup',
+                            'Importing...'
+                          )
+                        : translate(
+                            'auto.components.NewWorkspaceComposerCard.importHostSetup',
+                            'Import'
+                          )}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
           {selectedRepoRequiresConnection && selectedRepoConnectionId ? (

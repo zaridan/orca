@@ -747,6 +747,9 @@ Landed so far:
   disabled "project not set up on this host" rows, not only as invisible missing
   options. Ready setups remain selectable and still resolve through the
   compatibility repo path.
+- Added an inline composer action for those not-yet-set-up hosts to import an
+  existing folder on that host. After import, the composer switches to the new
+  ready setup so workspace creation can continue on that host.
 - Added tests for local repos, SSH repos, same-provider multi-host grouping,
   no-identity same-name non-grouping, selector cache behavior, persistence
   backfill, repo mutation synchronization, renderer hydration, and runtime RPC
@@ -768,7 +771,7 @@ Important limitation:
 
 Remaining end-to-end work:
 
-- add inline clone/import actions for `Run on` hosts where the project is not
+- add inline clone/provision actions for `Run on` hosts where the project is not
   set up yet
 - broaden setup-on-host flows beyond known local, SSH, and active runtime hosts
 - add clone/provision setup-on-host flows

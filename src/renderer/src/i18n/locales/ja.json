@@ -993,7 +993,14 @@
         "7711ad5122": "ローカルセットアップコマンド",
         "e5db1b0419": "組み合わせセットアップコマンド",
         "runOn": "実行先",
-        "addProjectBeforeWorkspace": "ワークスペースを作成する前にプロジェクトを追加します。"
+        "addProjectBeforeWorkspace": "ワークスペースを作成する前にプロジェクトを追加します。",
+        "setupHostExistingFolderTitle": "Import existing folder on {{value0}}",
+        "setupHostExistingFolderPlaceholder": "/path/to/project/on/host",
+        "setupKindGit": "Git repo",
+        "setupKindFolder": "Folder",
+        "setupHostExistingFolderHelp": "Link a checkout that already exists there, then create this workspace on that host.",
+        "importingHostSetup": "Importing...",
+        "importHostSetup": "Import"
       },
       "NewWorkspaceComposerModal": {
         "fa90f739a5": "ワークスペースを作成する前に、プロジェクト、ワークスペース名、およびエージェントを選択します。"

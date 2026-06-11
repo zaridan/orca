@@ -993,7 +993,14 @@
         "7711ad5122": "Local setup command",
         "e5db1b0419": "Combined setup command",
         "runOn": "Run on",
-        "addProjectBeforeWorkspace": "Add a project before creating a workspace."
+        "addProjectBeforeWorkspace": "Add a project before creating a workspace.",
+        "setupHostExistingFolderTitle": "Import existing folder on {{value0}}",
+        "setupHostExistingFolderPlaceholder": "/path/to/project/on/host",
+        "setupKindGit": "Git repo",
+        "setupKindFolder": "Folder",
+        "setupHostExistingFolderHelp": "Link a checkout that already exists there, then create this workspace on that host.",
+        "importingHostSetup": "Importing...",
+        "importHostSetup": "Import"
       },
       "NewWorkspaceComposerModal": {
         "fa90f739a5": "Choose the project, workspace name, and agent before creating the workspace."

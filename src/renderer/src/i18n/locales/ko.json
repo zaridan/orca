@@ -993,7 +993,14 @@
         "7711ad5122": "로컬 설정 명령",
         "e5db1b0419": "결합된 설정 명령",
         "runOn": "실행 위치",
-        "addProjectBeforeWorkspace": "워크스페이스를 만들기 전에 프로젝트를 추가하세요."
+        "addProjectBeforeWorkspace": "워크스페이스를 만들기 전에 프로젝트를 추가하세요.",
+        "setupHostExistingFolderTitle": "Import existing folder on {{value0}}",
+        "setupHostExistingFolderPlaceholder": "/path/to/project/on/host",
+        "setupKindGit": "Git repo",
+        "setupKindFolder": "Folder",
+        "setupHostExistingFolderHelp": "Link a checkout that already exists there, then create this workspace on that host.",
+        "importingHostSetup": "Importing...",
+        "importHostSetup": "Import"
       },
       "NewWorkspaceComposerModal": {
         "fa90f739a5": "워크스페이스를 생성하기 전에 프로젝트, 워크스페이스 이름, 에이전트를 선택하세요."

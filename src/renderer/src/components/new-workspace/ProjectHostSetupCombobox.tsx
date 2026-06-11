@@ -4,19 +4,24 @@ import { Button } from '@/components/ui/button'
 import { Command, CommandEmpty, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
-import type { ProjectHostSetupOption } from '@/lib/project-host-setup-options'
+import type {
+  NeedsSetupProjectHostOption,
+  ProjectHostSetupOption
+} from '@/lib/project-host-setup-options'
 import { translate } from '@/i18n/i18n'
 
 type ProjectHostSetupComboboxProps = {
   options: readonly ProjectHostSetupOption[]
   value: string | null
   onValueChange: (setupId: string) => void
+  onNeedsSetupHostSelect?: (option: NeedsSetupProjectHostOption) => void
 }
 
 export default function ProjectHostSetupCombobox({
   options,
   value,
-  onValueChange
+  onValueChange,
+  onNeedsSetupHostSelect
 }: ProjectHostSetupComboboxProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false)
   const readyOptions = options.filter((option) => option.kind === 'ready')
@@ -24,13 +29,22 @@ export default function ProjectHostSetupCombobox({
 
   const handleSelect = React.useCallback(
     (setupId: string): void => {
-      if (!readyOptions.some((option) => option.id === setupId)) {
+      const option = options.find((candidate) => candidate.id === setupId)
+      if (!option) {
+        return
+      }
+      if (option.kind === 'needs-setup') {
+        onNeedsSetupHostSelect?.(option)
+        setOpen(false)
+        return
+      }
+      if (!readyOptions.some((candidate) => candidate.id === setupId)) {
         return
       }
       onValueChange(setupId)
       setOpen(false)
     },
-    [onValueChange, readyOptions]
+    [onNeedsSetupHostSelect, onValueChange, options, readyOptions]
   )
 
   return (
@@ -76,7 +90,6 @@ export default function ProjectHostSetupCombobox({
                 key={option.id}
                 value={option.id}
                 onSelect={() => handleSelect(option.id)}
-                disabled={option.kind !== 'ready'}
                 className="items-center gap-2 px-3 py-2"
               >
                 <Check

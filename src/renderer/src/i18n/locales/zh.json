@@ -993,7 +993,14 @@
         "7711ad5122": "本地设置命令",
         "e5db1b0419": "组合设置命令",
         "runOn": "运行位置",
-        "addProjectBeforeWorkspace": "在创建工作区之前添加项目。"
+        "addProjectBeforeWorkspace": "在创建工作区之前添加项目。",
+        "setupHostExistingFolderTitle": "Import existing folder on {{value0}}",
+        "setupHostExistingFolderPlaceholder": "/path/to/project/on/host",
+        "setupKindGit": "Git repo",
+        "setupKindFolder": "Folder",
+        "setupHostExistingFolderHelp": "Link a checkout that already exists there, then create this workspace on that host.",
+        "importingHostSetup": "Importing...",
+        "importHostSetup": "Import"
       },
       "NewWorkspaceComposerModal": {
         "fa90f739a5": "创建工作区之前选择项目、工作区名称和代理。"
