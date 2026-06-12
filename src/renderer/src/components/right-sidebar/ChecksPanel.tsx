@@ -42,6 +42,10 @@ import {
   PRCommentsList,
   PRTriageStrip
 } from './checks-panel-content'
+import {
+  clearPRCommentsListSelection,
+  type PRCommentsListSelectionClearRequest
+} from './pr-comments-list-selection'
 import { ENTRY_REFRESH_GRACE_MS, shouldEntryRefresh } from './checks-entry-refresh'
 import type {
   GitLabDiscussionResolveResult,
@@ -432,6 +436,8 @@ export default function ChecksPanel(): React.JSX.Element {
   const [agentComposerState, setAgentComposerState] = useState<ChecksAgentComposerState | null>(
     null
   )
+  const [commentSelectionClearRequest, setCommentSelectionClearRequest] =
+    useState<PRCommentsListSelectionClearRequest | null>(null)
   const [hostedReviewCreationSnapshot, setHostedReviewCreationSnapshot] =
     useState<HostedReviewCreationSnapshot | null>(null)
   const [gitStatusSnapshot, setGitStatusSnapshot] = useState<ChecksPanelGitStatusSnapshot | null>(
@@ -3307,10 +3313,10 @@ export default function ChecksPanel(): React.JSX.Element {
       <PRCommentsList
         comments={comments}
         commentsLoading={commentsLoading}
-        reviewKind={reviewShortLabel}
         commentsDisabled={!canTargetPRComments}
         commentsDisabledReason={commentsDisabledReason}
         selectionContextKey={stateRequestKey}
+        selectionClearRequest={commentSelectionClearRequest}
         resolveCommentsWithAIDisabled={Boolean(resolveCommentsWithAIDisabledReason)}
         resolveCommentsWithAIDisabledReason={resolveCommentsWithAIDisabledReason}
         onAddComment={pr ? handleAddPRComment : undefined}
@@ -3374,6 +3380,14 @@ export default function ChecksPanel(): React.JSX.Element {
         onLaunched={() => {
           const launchedState = agentComposerState
           if (launchedState?.actionId === 'resolveComments' && launchedState.commentResolution) {
+            const { reviewContextKey } = launchedState.commentResolution
+            // Why: once the selected comments are sent to the agent, the queue
+            // is spent even if the host later rejects thread resolution.
+            clearPRCommentsListSelection(reviewContextKey)
+            setCommentSelectionClearRequest((prev) => ({
+              contextKey: reviewContextKey,
+              token: (prev?.token ?? 0) + 1
+            }))
             void resolveSelectedThreadsAfterLaunch(launchedState.commentResolution).catch((err) => {
               console.warn('Failed to resolve selected review comments after AI launch:', err)
               toast.error(

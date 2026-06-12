@@ -25,9 +25,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { ClaudeUsageLoadingState } from './ClaudeUsageLoadingState'
 import { CodexUsageDailyChart } from './CodexUsageDailyChart'
 import { ShareUsageButton } from './ShareUsageButton'
+import { CodexUsageRecentSessionsTable } from './CodexUsageRecentSessionsTable'
 import { StatCard } from './StatCard'
 import { UsageBreakdownSection } from './UsageBreakdownSection'
-import { UsageSessionsTable } from './UsageSessionsTable'
 import { formatCost, formatTokens, formatUpdatedAt } from './usage-formatters'
 import { translate } from '@/i18n/i18n'
 
@@ -328,34 +328,7 @@ export function CodexUsagePane(): React.JSX.Element {
             />
           </div>
 
-          <section className="rounded-lg border border-border/60 bg-card/40 p-4">
-            <div className="mb-3">
-              <h4 className="text-sm font-semibold text-foreground">
-                {translate('auto.components.stats.CodexUsagePane.0cb0983c07', 'Recent sessions')}
-              </h4>
-              <p className="text-xs text-muted-foreground">
-                {translate(
-                  'auto.components.stats.CodexUsagePane.0bd8655475',
-                  'Most recent local Codex sessions in this scope.'
-                )}
-              </p>
-            </div>
-            <UsageSessionsTable
-              sessions={recentSessions.map((row) => ({
-                sessionId: row.sessionId,
-                lastActiveAt: row.lastActiveAt,
-                projectLabel: row.projectLabel,
-                model: row.model,
-                events: row.events,
-                inputTokens: row.inputTokens,
-                outputTokens: row.outputTokens,
-                totalTokens: row.totalTokens,
-                hasInferredPricing: row.hasInferredPricing
-              }))}
-              eventsColumn="events"
-              tokensColumn="total"
-            />
-          </section>
+          <CodexUsageRecentSessionsTable recentSessions={recentSessions} />
         </>
       )}
     </div>

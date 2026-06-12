@@ -5219,7 +5219,7 @@ export function CommitArea({
           id="commit-area-remote-error"
           role="alert"
           aria-live="polite"
-          className="mt-1 text-[11px] text-destructive"
+          className="mt-1 min-w-0 text-[11px] leading-4 break-words text-destructive [overflow-wrap:anywhere]"
         >
           {remoteActionError}
         </p>

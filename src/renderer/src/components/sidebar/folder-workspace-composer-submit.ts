@@ -4,8 +4,8 @@ import {
   type LinkedWorkItemSummary
 } from '@/lib/new-workspace'
 import { getLinkedWorkItemPromptContext } from '@/lib/linked-work-item-context'
-import { buildAgentStartupPlan } from '@/lib/tui-agent-startup'
 import { isOrcaCliAvailableForLaunch } from '@/lib/orca-cli-launch-availability'
+import { buildAgentStartupPlan } from '@/lib/tui-agent-startup'
 import { tuiAgentToAgentKind } from '@/lib/telemetry'
 import { activateAndRevealFolderWorkspace } from '@/lib/worktree-activation'
 import { isWorkItemLookupText } from '@/lib/work-item-lookup-text'
@@ -32,7 +32,7 @@ type SubmitFolderWorkspaceCreateParams = {
   quickAgent: TuiAgent | null
   autoRenameBranchFromWork: boolean | undefined
   agentCmdOverrides: Record<string, string> | undefined
-  isRemote: boolean
+  isRemote?: boolean
   createFolderWorkspace: (input: FolderWorkspaceCreateInput) => Promise<FolderWorkspace | null>
   onOpenChange: (open: boolean) => void
 }
@@ -56,8 +56,28 @@ export async function submitFolderWorkspaceCreate({
     nameIsAutoManaged && linkedName
       ? linkedName
       : name.trim() || linkedName || `${projectGroup.name} workspace`
+  // Why: only suggest `orca linear` when the launched terminal can actually
+  // resolve the CLI; SSH launches get the relay shim, local launches may not.
+  const linearCliAvailable = linkedWorkItem?.linearIdentifier
+    ? await isOrcaCliAvailableForLaunch({ remote: isRemote ?? projectGroup.connectionId != null })
+    : false
+  const linkedPromptContext = getLinkedWorkItemPromptContext(linkedWorkItem, {
+    cliAvailable: linearCliAvailable
+  })
+  const startupPrompt = buildAgentPromptWithContext(
+    note,
+    [],
+    linkedPromptContext.linkedUrls,
+    linkedPromptContext.linkedContextBlocks
+  )
+  // Why: the pending badge should only appear when the submitted prompt can
+  // actually produce the first agent message that names the workspace.
   const pendingFirstAgentMessageRename =
-    autoRenameBranchFromWork === true && !name.trim() && !linkedWorkItem && Boolean(quickAgent)
+    autoRenameBranchFromWork === true &&
+    !name.trim() &&
+    !linkedWorkItem &&
+    Boolean(quickAgent) &&
+    startupPrompt.trim().length > 0
 
   const workspace = await createFolderWorkspace({
     projectGroupId: projectGroup.id,
@@ -70,20 +90,6 @@ export async function submitFolderWorkspaceCreate({
     return
   }
 
-  // Why: only suggest `orca linear` when the launched terminal can actually
-  // resolve the CLI; SSH launches get the relay shim, local launches may not.
-  const linearCliAvailable = linkedWorkItem?.linearIdentifier
-    ? await isOrcaCliAvailableForLaunch({ remote: isRemote })
-    : false
-  const linkedPromptContext = getLinkedWorkItemPromptContext(linkedWorkItem, {
-    cliAvailable: linearCliAvailable
-  })
-  const startupPrompt = buildAgentPromptWithContext(
-    note,
-    [],
-    linkedPromptContext.linkedUrls,
-    linkedPromptContext.linkedContextBlocks
-  )
   const startupPlan = quickAgent
     ? buildAgentStartupPlan({
         agent: quickAgent,
@@ -105,6 +111,12 @@ export async function submitFolderWorkspaceCreate({
           }
         }
       : undefined
-  activateAndRevealFolderWorkspace(workspace.id, startup ? { startup } : undefined)
   onOpenChange(false)
+  try {
+    activateAndRevealFolderWorkspace(workspace.id, startup ? { startup } : undefined)
+  } catch (error) {
+    // Why: creation already succeeded. Do not leave the completed create modal
+    // open if the follow-up reveal/startup path hits a transient issue.
+    console.error('Failed to activate folder workspace after create:', error)
+  }
 }

@@ -26,9 +26,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { ClaudeUsageDailyChart } from './ClaudeUsageDailyChart'
 import { ClaudeUsageLoadingState } from './ClaudeUsageLoadingState'
 import { ShareUsageButton } from './ShareUsageButton'
+import { ClaudeUsageRecentSessionsTable } from './ClaudeUsageRecentSessionsTable'
 import { StatCard } from './StatCard'
 import { UsageBreakdownSection } from './UsageBreakdownSection'
-import { UsageSessionsTable } from './UsageSessionsTable'
 import { formatCost, formatTokens, formatUpdatedAt } from './usage-formatters'
 import { translate } from '@/i18n/i18n'
 
@@ -346,33 +346,7 @@ export function ClaudeUsagePane(): React.JSX.Element {
             />
           </div>
 
-          <section className="rounded-lg border border-border/60 bg-card/40 p-4">
-            <div className="mb-3">
-              <h4 className="text-sm font-semibold text-foreground">
-                {translate('auto.components.stats.ClaudeUsagePane.7e76c84153', 'Recent sessions')}
-              </h4>
-              <p className="text-xs text-muted-foreground">
-                {translate('auto.components.stats.ClaudeUsagePane.abfc4a4943', 'Cache reuse rate:')}{' '}
-                {summary?.cacheReuseRate !== null && summary?.cacheReuseRate !== undefined
-                  ? `${Math.round(summary.cacheReuseRate * 100)}%`
-                  : translate('auto.components.stats.ClaudeUsagePane.7765a4c3e1', 'n/a')}
-              </p>
-            </div>
-            <UsageSessionsTable
-              sessions={recentSessions.map((row) => ({
-                sessionId: row.sessionId,
-                lastActiveAt: row.lastActiveAt,
-                projectLabel: row.projectLabel,
-                model: row.model,
-                turns: row.turns,
-                inputTokens: row.inputTokens,
-                outputTokens: row.outputTokens,
-                cacheTokens: row.cacheReadTokens + row.cacheWriteTokens
-              }))}
-              eventsColumn="turns"
-              tokensColumn="cache"
-            />
-          </section>
+          <ClaudeUsageRecentSessionsTable recentSessions={recentSessions} summary={summary} />
         </>
       )}
     </div>

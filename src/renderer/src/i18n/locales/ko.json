@@ -1665,7 +1665,9 @@
               "331ebe1170": "GitHub 병합 대기열에 이 PR을 추가하세요.",
               "b169f943e1": "준비되면 병합",
               "62703b1dc4": "이 PR에 대해 GitHub 자동 병합이 활성화되었습니다.",
-              "48d75ae118": "자동 병합 비활성화"
+              "48d75ae118": "자동 병합 비활성화",
+              "a5b66afb58": "검사 통과",
+              "fbd4f57f0a": "검사를 통과했습니다. 병합 전에 병합 가능 여부를 다시 확인합니다."
             }
           }
         },
@@ -2158,7 +2160,8 @@
             "c44659e09f": "모바일 원격 조작",
             "7cffad954c": "접기",
             "3eed73394f": "키보드가 일시중지되었습니다.",
-            "faa367dc74": "이 terminal은 모바일 앱에 맞게 크기가 조정됩니다."
+            "faa367dc74": "이 terminal은 모바일 앱에 맞게 크기가 조정됩니다.",
+            "54f7d6f69d": "모든 terminal 크기 조정"
           },
           "TerminalAgentSessionForkDialog": {
             "17fc841e59": "컨텍스트 복사",
@@ -3100,7 +3103,6 @@
           "2f8298f3c3": "스캔 중지",
           "c157f31a95": "그룹으로 가져오기",
           "40199ef7b3": "그룹 이름",
-          "b20bb7c24f": "이러한 repos를 하나의 그룹에 함께 유지합니다. 마이크로서비스와 같은 관련 repos 에 가장 적합합니다.",
           "787412361a": "그룹 이름은 무엇입니까?",
           "5f857ba8e6": "~에",
           "4df0d08cc5": "발견됨",
@@ -3109,11 +3111,10 @@
           "cf9d382ca1": "수입",
           "220dd32d83": "스캐닝...",
           "fb33359f69": "이 폴더가 모노레포인가요?",
-          "d75170194e": "이 프로젝트들이 함께 속한다면 이것을 선택하세요. Orca가 그룹으로 묶고 상위 폴더에서 작업할 수 있게 합니다.",
-          "39d51212cc": "모노레포 이름",
-          "e907ec8935": "모노레포 이름이란 무엇인가요?",
+          "d75170194e": "모노레포이거나 함께 속한 프로젝트라면 그룹으로 가져오세요. Orca가 그룹으로 묶고 상위 폴더에서 작업할 수 있게 합니다.",
+          "39d51212cc": "그룹 이름",
           "aa0247680d": "아니요, 별도로 가져오기",
-          "a0bc4d1f8e": "예, 모노레포로 가져오기",
+          "a0bc4d1f8e": "그룹으로 가져오기",
           "8401a7a0d0": "저장소 1개",
           "d4f1df62ef": "저장소 {{value0}}개",
           "b4263a2ac4": "{{value1}}에서 {{value0}}을(를) 찾았습니다.",
@@ -3632,7 +3633,7 @@
           "c1f4a31623": "{{value0}}개 하위 워크스페이스 표시",
           "e97297cb75": "{{value0}}개 하위 워크스페이스 숨기기",
           "0cd15956d4": "{{value0}}개 하위 워크스페이스 숨기기",
-          "bd37a57ac8": "Create workspace for {{value0}}",
+          "bd37a57ac8": "{{value0}}에 대한 워크스페이스 만들기",
           "b667b59632": "Some projects could not be removed from Orca",
           "f94466bc39": "{{value0}} of {{value1}} contained project{{value2}} remained after deleting the group.",
           "groupDeleteFailed": "Failed to delete group",
@@ -3864,8 +3865,7 @@
           "connectFailed": "Failed to connect to project.",
           "noRepos": "Add a Git project under this folder to attach GitHub or GitLab tasks.",
           "title": "Create Folder Workspace",
-          "createStart": "Create & Start Agent",
-          "create": "Create Workspace",
+          "create": "워크스페이스 만들기",
           "sourceProject": "Task Source",
           "chooseSourceProject": "Choose task source"
         }
@@ -8040,7 +8040,7 @@
                 "ae8a04ef17": "충돌 파일 세부정보를 사용할 수 없습니다.",
                 "73d0675356": "충돌 세부정보 새로고침 중…",
                 "5dc3af25c0": "댓글 선택",
-                "d7a2f9c401": "해결되지 않은 {{value0}} 댓글 보내기",
+                "d7a2f9c401": "해결되지 않은 항목 모두 보내기",
                 "d91f2a6c39": "대기 중인 댓글 {{value0}}개 보내기",
                 "a6de3e5a20": "대기 중인 댓글 지우기",
                 "49ea0937e4": "댓글을 해결 목록에 추가",

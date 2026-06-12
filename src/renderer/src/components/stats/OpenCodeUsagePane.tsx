@@ -27,9 +27,9 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { ClaudeUsageLoadingState } from './ClaudeUsageLoadingState'
 import { CodexUsageDailyChart } from './CodexUsageDailyChart'
+import { OpenCodeUsageRecentSessionsTable } from './OpenCodeUsageRecentSessionsTable'
 import { StatCard } from './StatCard'
 import { UsageBreakdownSection } from './UsageBreakdownSection'
-import { UsageSessionsTable } from './UsageSessionsTable'
 import { formatCost, formatTokens, formatUpdatedAt } from './usage-formatters'
 import { translate } from '@/i18n/i18n'
 
@@ -351,33 +351,7 @@ export function OpenCodeUsagePane(): React.JSX.Element {
             />
           </div>
 
-          <section className="rounded-lg border border-border/60 bg-card/40 p-4">
-            <div className="mb-3">
-              <h4 className="text-sm font-semibold text-foreground">
-                {translate('auto.components.stats.OpenCodeUsagePane.4799177b1c', 'Recent sessions')}
-              </h4>
-              <p className="text-xs text-muted-foreground">
-                {translate(
-                  'auto.components.stats.OpenCodeUsagePane.81817a641a',
-                  'Most recent local OpenCode sessions in this scope.'
-                )}
-              </p>
-            </div>
-            <UsageSessionsTable
-              sessions={recentSessions.map((row) => ({
-                sessionId: row.sessionId,
-                lastActiveAt: row.lastActiveAt,
-                projectLabel: row.projectLabel,
-                model: row.model,
-                events: row.events,
-                inputTokens: row.inputTokens,
-                outputTokens: row.outputTokens,
-                totalTokens: row.totalTokens
-              }))}
-              eventsColumn="events"
-              tokensColumn="total"
-            />
-          </section>
+          <OpenCodeUsageRecentSessionsTable recentSessions={recentSessions} />
         </>
       )}
     </div>
