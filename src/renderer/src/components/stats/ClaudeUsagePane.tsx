@@ -23,12 +23,10 @@ import {
   DropdownMenuTrigger
 } from '../ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
-import { ClaudeUsageDailyChart } from './ClaudeUsageDailyChart'
+import { ClaudeUsageDetails } from './ClaudeUsageDetails'
 import { ClaudeUsageLoadingState } from './ClaudeUsageLoadingState'
 import { ShareUsageButton } from './ShareUsageButton'
-import { ClaudeUsageRecentSessionsTable } from './ClaudeUsageRecentSessionsTable'
 import { StatCard } from './StatCard'
-import { UsageBreakdownSection } from './UsageBreakdownSection'
 import { formatCost, formatTokens, formatUpdatedAt } from './usage-formatters'
 import { translate } from '@/i18n/i18n'
 
@@ -36,18 +34,30 @@ const RANGE_OPTIONS: ClaudeUsageRange[] = ['7d', '30d', '90d', 'all']
 const SCOPE_OPTIONS: { value: ClaudeUsageScope; label: string }[] = [
   {
     value: 'orca',
-    label: translate('auto.components.stats.ClaudeUsagePane.4f8368c272', 'Orca worktrees only')
+    get label() {
+      return translate('auto.components.stats.ClaudeUsagePane.4f8368c272', 'Orca worktrees only')
+    }
   },
   {
     value: 'all',
-    label: translate('auto.components.stats.ClaudeUsagePane.5ce4842c2c', 'All local Claude usage')
+    get label() {
+      return translate('auto.components.stats.ClaudeUsagePane.5ce4842c2c', 'All local Claude usage')
+    }
   }
 ]
 const RANGE_LABELS: Record<ClaudeUsageRange, string> = {
-  '7d': 'Last 7 days',
-  '30d': 'Last 30 days',
-  '90d': 'Last 90 days',
-  all: 'All time'
+  get '7d'() {
+    return translate('auto.components.stats.ClaudeUsagePane.rangeLast7Days', 'Last 7 days')
+  },
+  get '30d'() {
+    return translate('auto.components.stats.ClaudeUsagePane.rangeLast30Days', 'Last 30 days')
+  },
+  get '90d'() {
+    return translate('auto.components.stats.ClaudeUsagePane.rangeLast90Days', 'Last 90 days')
+  },
+  get all() {
+    return translate('auto.components.stats.ClaudeUsagePane.rangeAllTime', 'All time')
+  }
 }
 
 export function ClaudeUsagePane(): React.JSX.Element {
@@ -312,41 +322,13 @@ export function ClaudeUsagePane(): React.JSX.Element {
             )}
           </p>
 
-          <ClaudeUsageDailyChart daily={daily} />
-
-          <div className="grid gap-4 xl:grid-cols-2">
-            <UsageBreakdownSection
-              title={translate('auto.components.stats.ClaudeUsagePane.0f394c24e3', 'By model')}
-              topLabel={translate('auto.components.stats.ClaudeUsagePane.c3fdbc5474', 'Top model:')}
-              topValue={summary?.topModel}
-              rows={modelBreakdown.map((row) => ({
-                key: row.key,
-                label: row.label,
-                tokens: row.inputTokens + row.outputTokens,
-                sessions: row.sessions,
-                eventsOrTurns: row.turns
-              }))}
-              eventsOrTurns="turns"
-            />
-            <UsageBreakdownSection
-              title={translate('auto.components.stats.ClaudeUsagePane.7dc9e5613b', 'By project')}
-              topLabel={translate(
-                'auto.components.stats.ClaudeUsagePane.f97435845c',
-                'Top project:'
-              )}
-              topValue={summary?.topProject}
-              rows={projectBreakdown.map((row) => ({
-                key: row.key,
-                label: row.label,
-                tokens: row.inputTokens + row.outputTokens,
-                sessions: row.sessions,
-                eventsOrTurns: row.turns
-              }))}
-              eventsOrTurns="turns"
-            />
-          </div>
-
-          <ClaudeUsageRecentSessionsTable recentSessions={recentSessions} summary={summary} />
+          <ClaudeUsageDetails
+            daily={daily}
+            modelBreakdown={modelBreakdown}
+            projectBreakdown={projectBreakdown}
+            recentSessions={recentSessions}
+            summary={summary}
+          />
         </>
       )}
     </div>

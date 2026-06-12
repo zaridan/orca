@@ -464,39 +464,32 @@
           }
         }
       },
-      "folder": {
-        "workspace": {
-          "path": {
-            "status": {
-              "title": {
-                "missing": "폴더를 찾을 수 없습니다",
-                "not": {
-                  "directory": "경로가 폴더가 아닙니다"
-                },
-                "ambiguous": {
-                  "connection": "연결을 확인할 수 없습니다"
-                },
-                "unavailable": "폴더를 확인할 수 없습니다"
-              },
-              "description": {
-                "missing": "Orca가 {{value0}}을(를) 찾을 수 없습니다. 이 폴더 워크스페이스를 제거하고 다시 가져오세요.",
-                "not": {
-                  "directory": "{{value0}}이(가) 존재하지만 폴더가 아닙니다."
-                },
-                "ambiguous": {
-                  "connection": "Orca가 이 폴더 범위를 소유한 SSH 연결을 확인할 수 없습니다."
-                },
-                "unavailable": "Orca가 지금 이 폴더를 확인할 수 없습니다. 런타임 또는 SSH 연결을 확인한 후 다시 시도하세요."
-              },
-              "create": {
-                "description": {
-                  "missing": "Orca가 {{value0}}을(를) 찾을 수 없습니다. 폴더를 제거하고 다시 가져오세요."
-                },
-                "title": {
-                  "failed": "폴더 워크스페이스를 만들지 못했습니다"
-                }
-              }
-            }
+      "folderWorkspacePathStatus": {
+        "title": {
+          "missing": "폴더를 찾을 수 없습니다",
+          "notDirectory": "경로가 폴더가 아닙니다",
+          "ambiguousConnection": "연결을 확인할 수 없습니다",
+          "unavailable": "폴더를 확인할 수 없습니다"
+        },
+        "description": {
+          "missing": "Orca가 {{path}}을(를) 찾을 수 없습니다. 이 폴더 워크스페이스를 제거하고 다시 가져오세요.",
+          "notDirectory": "{{path}}이(가) 존재하지만 폴더가 아닙니다.",
+          "ambiguousConnection": "Orca가 이 폴더 범위를 소유한 SSH 연결을 확인할 수 없습니다.",
+          "unavailable": "Orca가 지금 이 폴더를 확인할 수 없습니다. 런타임 또는 SSH 연결을 확인한 후 다시 시도하세요."
+        },
+        "createError": {
+          "title": {
+            "missing": "폴더를 찾을 수 없습니다",
+            "notDirectory": "경로가 폴더가 아닙니다",
+            "ambiguousConnection": "연결을 확인할 수 없습니다",
+            "unavailable": "폴더를 확인할 수 없습니다",
+            "generic": "폴더 워크스페이스를 만들지 못했습니다"
+          },
+          "description": {
+            "missing": "Orca가 {{path}}을(를) 찾을 수 없습니다. 폴더를 제거하고 다시 가져오세요.",
+            "notDirectory": "{{path}}이(가) 존재하지만 폴더가 아닙니다.",
+            "ambiguousConnection": "Orca가 이 폴더 범위를 소유한 SSH 연결을 확인할 수 없습니다.",
+            "unavailable": "Orca가 지금 이 폴더를 확인할 수 없습니다. 런타임 또는 SSH 연결을 확인한 후 다시 시도하세요."
           }
         }
       }
@@ -1036,7 +1029,15 @@
         "f660aa1454": "연결 중",
         "7711ad5122": "로컬 설정 명령",
         "e5db1b0419": "결합된 설정 명령",
-        "addProjectBeforeWorkspace": "워크스페이스를 만들기 전에 프로젝트를 추가하세요."
+        "addProjectBeforeWorkspace": "워크스페이스를 만들기 전에 프로젝트를 추가하세요.",
+        "sshNotConnected": "SSH not connected",
+        "connectingSsh": "Connecting SSH...",
+        "sshAuthenticationFailed": "SSH authentication failed",
+        "preparingSshConnection": "Preparing SSH connection...",
+        "connected": "Connected",
+        "reconnectingSsh": "Reconnecting SSH...",
+        "sshReconnectionFailed": "SSH reconnection failed",
+        "notConnected": "Not connected"
       },
       "NewWorkspaceComposerModal": {
         "fa90f739a5": "워크스페이스를 생성하기 전에 프로젝트, 워크스페이스 이름, agent를 선택하세요."
@@ -1811,7 +1812,11 @@
           "015b4e607d": "취소",
           "e3bd59143c": "끼워 넣다",
           "f24783f470": "https://...",
-          "ec6310b731": "http:// 또는 https:// 이미지 URL을 사용하세요."
+          "ec6310b731": "http:// 또는 https:// 이미지 URL을 사용하세요.",
+          "b7e4a1c902": "Paste, drop, or click to add files",
+          "8f1c2d4e6a": "Nothing to preview",
+          "c91f0a2b14": "Write",
+          "d82b1e3f05": "Preview"
         },
         "IssueSourceSelector": {
           "d6aeb2012b": "다음에서 이슈 표시",
@@ -1884,6 +1889,47 @@
                 "bb227706a6": "나머지"
               }
             }
+          }
+        },
+        "CloseReasonDropdown": {
+          "e1f2a3b4c5": "Choose close reason"
+        },
+        "GitHubIssueCommentComposer": {
+          "082515176a": "Failed to add comment",
+          "9f88657c4e": "Issue closed",
+          "e9b7cb7d17": "Failed to close issue",
+          "bd3b4492a0": "Issue reopened",
+          "f2a8c1d903": "Failed to reopen issue",
+          "a1b2c3d4e5": "Add a comment",
+          "c5c117270e": "Add your comment here, be kind",
+          "f6a7b8c9d0": "Close issue",
+          "b1c2d3e4f5": "Reopen issue",
+          "0a73f59e85": "Send comment",
+          "bf43425540": "Comment"
+        },
+        "GitHubWorkItemAssigneePopoverContent": {
+          "cddd9b04a7": "Loading assignees",
+          "a00830d3f7": "No users",
+          "4f8b6f2c1d": "Filter assignees..."
+        },
+        "GitHubWorkItemLabelPopoverContent": {
+          "2aa9acdf34": "Edit labels on GitHub",
+          "cddd9b04a7": "Loading labels",
+          "de26e2eb06": "No labels",
+          "8b0d52ee3a": "Filter labels..."
+        },
+        "githubIssueCloseReasons": {
+          "completed": {
+            "label": "Close as completed",
+            "description": "Done, closed, fixed, resolved"
+          },
+          "notPlanned": {
+            "label": "Close as not planned",
+            "description": "Won't fix, can't repro, stale"
+          },
+          "duplicate": {
+            "label": "Close as duplicate",
+            "description": "Duplicate of another issue"
           }
         }
       },
@@ -2787,7 +2833,11 @@
           "4f8368c272": "Orca 작업 트리만 해당",
           "cfe2282ffa": "알려지지 않은",
           "7765a4c3e1": "해당 없음",
-          "2d41fd45c6": "• 마지막 스캔 오류: {{value0}}"
+          "2d41fd45c6": "• 마지막 스캔 오류: {{value0}}",
+          "rangeLast7Days": "Last 7 days",
+          "rangeLast30Days": "Last 30 days",
+          "rangeLast90Days": "Last 90 days",
+          "rangeAllTime": "All time"
         },
         "CodexUsageDailyChart": {
           "1e6f62d7e3": "추리",
@@ -2836,7 +2886,11 @@
           "bf6cf2d4dd": "알려지지 않은",
           "ae255c3dba": "해당 없음",
           "247c93ca92": "• 추론된 가격",
-          "8a6655f7a2": "• 마지막 스캔 오류: {{value0}}"
+          "8a6655f7a2": "• 마지막 스캔 오류: {{value0}}",
+          "rangeLast7Days": "Last 7 days",
+          "rangeLast30Days": "Last 30 days",
+          "rangeLast90Days": "Last 90 days",
+          "rangeAllTime": "All time"
         },
         "OpenCodeUsagePane": {
           "349f7c3f5c": "총",
@@ -2875,7 +2929,11 @@
           "e04c58327c": "Orca 작업 트리만 해당",
           "362231082f": "알려지지 않은",
           "8095a63426": "해당 없음",
-          "6cc7782458": "• 마지막 스캔 오류: {{value0}}"
+          "6cc7782458": "• 마지막 스캔 오류: {{value0}}",
+          "rangeLast7Days": "Last 7 days",
+          "rangeLast30Days": "Last 30 days",
+          "rangeLast90Days": "Last 90 days",
+          "rangeAllTime": "All time"
         },
         "ShareUsageButton": {
           "7d6b25323d": "X에 공유",
@@ -2996,20 +3054,20 @@
           }
         },
         "UsageBreakdownSection": {
-          "7765a4c3e1": "해당 없음",
-          "247c93ca92": "• 추론된 가격"
+          "7765a4c3e1": "n/a",
+          "247c93ca92": "• inferred pricing"
         },
         "UsageSessionsTable": {
-          "1afc25eb06": "턴",
-          "0f03975d59": "이벤트",
-          "21ea00bfa8": "캐시",
-          "e0b988599d": "총",
-          "01476891c7": "마지막 활동",
-          "c17bed0416": "프로젝트",
-          "f6a2c8d019": "모델",
-          "faf3444859": "입력",
-          "a8b7487ff7": "출력",
-          "cfe2282ffa": "알려지지 않은"
+          "1afc25eb06": "Turns",
+          "0f03975d59": "Events",
+          "21ea00bfa8": "Cache",
+          "e0b988599d": "Total",
+          "01476891c7": "Last active",
+          "c17bed0416": "Project",
+          "f6a2c8d019": "Model",
+          "faf3444859": "Input",
+          "a8b7487ff7": "Output",
+          "cfe2282ffa": "Unknown"
         }
       },
       "sparse": {
@@ -3095,7 +3153,15 @@
           "fe1e616c5b": "Git이 설치되어 있지 않아 일반 폴더가 기본값입니다.",
           "c234df77f7": "만들기 전에 서버 상위 폴더를 선택하거나 입력하세요.",
           "3a13f6e88b": "위치가 선택되지 않음",
-          "6ed14c0281": "서버 폴더가 선택되지 않음"
+          "6ed14c0281": "서버 폴더가 선택되지 않음",
+          "createProjectTitle": "프로젝트 생성",
+          "createProjectDescription": "로컬 Git 저장소와 첫 번째 작업 공간을 만듭니다.",
+          "projectNameLabel": "프로젝트 이름",
+          "createsGitRepoHelp": "Git 저장소:",
+          "parentFolderLabel": "상위 폴더",
+          "browseParentFolder": "찾아보기",
+          "gitRequiredError": "프로젝트를 만들려면 Git이 필요합니다.",
+          "createAction": "생성"
         },
         "AddRepoNestedImportStep": {
           "496f68cf8c": "저장소를 스캔하는 중입니다. 중지하려면 클릭하세요.",
@@ -3472,7 +3538,11 @@
           "376bed88e5": "원격 호스트 연결에 오류가 발생했습니다.",
           "4afcca1d24": "다시 연결",
           "11552bf786": "SSH 연결 끊김",
-          "cb5938ae79": "다시 연결하는 중..."
+          "cb5938ae79": "다시 연결하는 중...",
+          "disconnected": "This remote repository is not connected.",
+          "reconnecting": "Reconnecting to the remote host...",
+          "reconnectionFailed": "Reconnection to the remote host failed.",
+          "authFailed": "Authentication to the remote host failed."
         },
         "SshTargetRow": {
           "4677394048": "연결 중…",
@@ -3696,7 +3766,9 @@
                   "a6c20dca96": "SSH 대상에서 프로젝트 열기",
                   "3d162cc76f": "원격 프로젝트",
                   "fb4fc5380e": "로컬 프로젝트, Git repo 또는 repos가 많은 폴더",
-                  "2281fdc8c7": "폴더 찾아보기"
+                  "2281fdc8c7": "폴더 찾아보기",
+                  "createProjectTitle": "프로젝트 생성",
+                  "createGitProjectDescription": "로컬 Git 저장소 생성"
                 }
               }
             }
@@ -7527,7 +7599,6 @@
             "5788d1059d": "리뷰 스레드를 업데이트할 수 없습니다. GitHub API 예산을 확인하세요.",
             "07871c0589": "다른 PR 연결",
             "7202f4a40a": "PR 연결 해제",
-            "a9d7c128e4": "{{value0}} 연결 해제",
             "7f4489f370": "새로고침",
             "5c88c6db07": "{{value0}}에 영업 시작",
             "7fad8509fe": "AI로 고치다",
@@ -7542,14 +7613,15 @@
             "e56c42122e": "파괴적인",
             "786e3c143f": "삭제",
             "653c105ecc": "더 많은 PR 작업",
-            "b4f3ec62a1": "더 많은 {{value0}} 작업",
             "f316a8ca2b": "선택한 해결되지 않은 댓글이 없습니다.",
             "d00ebdc402": "AI로 {{value0}} 댓글 해결",
             "ed3f79c031": "agent를 시작하기 전에 prompt를 검토하세요. 선택한 스레드는 시작 후 해결됨으로 표시됩니다.",
             "f273f2271c": "agent를 시작했습니다. {{value0}}개 해결됨으로 표시, {{value1}}개 건너뜀, {{value2}}개 실패.",
             "aa95b81a3a": "agent를 시작했습니다. {{value0}}개 해결됨으로 표시, {{value1}}개 건너뜀, {{value2}}개 실패.",
             "495b2f8c4b": "agent를 시작했지만 선택한 댓글을 해결됨으로 표시할 수 없습니다.",
-            "3c3ad3a1d2": "agent를 시작했습니다. 호스트에서 해결됨으로 표시할 수 있는 선택된 댓글이 없습니다."
+            "3c3ad3a1d2": "agent를 시작했습니다. 호스트에서 해결됨으로 표시할 수 있는 선택된 댓글이 없습니다.",
+            "b4f3ec62a1": "More {{value0}} actions",
+            "a9d7c128e4": "unlink {{value0}}"
           },
           "CreatePullRequestDialog": {
             "2bc1b4345e": "취소",
@@ -8933,7 +9005,11 @@
             "3c4adfd821": "로그인 경쟁 조건 수정",
             "56a0271428": "격리된 워크스페이스",
             "ef737dcee1": "GitHub 및 Linear 작업",
-            "ac51c061e2": "codex"
+            "ac51c061e2": "codex",
+            "47f16ecf34": "Ship several things at once. Each workspace keeps its branch, terminal, and agent activity together.",
+            "70aa182266": "Hand off a goal and walk away. A coordinator agent fans out and ships parallel PRs.",
+            "f10c14dd9d": "Skip the tab-switching. Pick from your GitHub or Linear backlog and start a workspace in one click.",
+            "5d6ee181b6": "Open any workspace to return to its terminal, then split panes for tests, logs, and agents."
           },
           "FeatureWallBody": {
             "25ec5356d6": "설정"
@@ -9006,7 +9082,9 @@
             "6e3f5223c5": "탐침",
             "ab2901bce6": "검사",
             "d7f80060ca": "소스 제어",
-            "8e715588e4": "검색"
+            "8e715588e4": "검색",
+            "a6c8b9e32f": "Checks passed",
+            "f4d5e1a7b2": "3 checks"
           },
           "ReviewShipAnimatedVisual": {
             "4d99496b8c": "PR 작성",

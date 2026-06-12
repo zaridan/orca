@@ -464,39 +464,32 @@
           }
         }
       },
-      "folder": {
-        "workspace": {
-          "path": {
-            "status": {
-              "title": {
-                "missing": "未找到文件夹",
-                "not": {
-                  "directory": "路径不是文件夹"
-                },
-                "ambiguous": {
-                  "connection": "无法确定连接"
-                },
-                "unavailable": "无法检查文件夹"
-              },
-              "description": {
-                "missing": "Orca 找不到 {{value0}}。请移除并重新导入此文件夹工作区。",
-                "not": {
-                  "directory": "{{value0}} 存在，但它不是文件夹。"
-                },
-                "ambiguous": {
-                  "connection": "Orca 无法判断哪个 SSH 连接拥有此文件夹范围。"
-                },
-                "unavailable": "Orca 现在无法验证此文件夹。请检查运行时或 SSH 连接，然后重试。"
-              },
-              "create": {
-                "description": {
-                  "missing": "Orca 找不到 {{value0}}。请移除并重新导入该文件夹。"
-                },
-                "title": {
-                  "failed": "创建文件夹工作区失败"
-                }
-              }
-            }
+      "folderWorkspacePathStatus": {
+        "title": {
+          "missing": "未找到文件夹",
+          "notDirectory": "路径不是文件夹",
+          "ambiguousConnection": "无法确定连接",
+          "unavailable": "无法检查文件夹"
+        },
+        "description": {
+          "missing": "Orca 找不到 {{path}}。请移除并重新导入此文件夹工作区。",
+          "notDirectory": "{{path}} 存在，但它不是文件夹。",
+          "ambiguousConnection": "Orca 无法判断哪个 SSH 连接拥有此文件夹范围。",
+          "unavailable": "Orca 现在无法验证此文件夹。请检查运行时或 SSH 连接，然后重试。"
+        },
+        "createError": {
+          "title": {
+            "missing": "未找到文件夹",
+            "notDirectory": "路径不是文件夹",
+            "ambiguousConnection": "无法确定连接",
+            "unavailable": "无法检查文件夹",
+            "generic": "创建文件夹工作区失败"
+          },
+          "description": {
+            "missing": "Orca 找不到 {{path}}。请移除并重新导入该文件夹。",
+            "notDirectory": "{{path}} 存在，但它不是文件夹。",
+            "ambiguousConnection": "Orca 无法判断哪个 SSH 连接拥有此文件夹范围。",
+            "unavailable": "Orca 现在无法验证此文件夹。请检查运行时或 SSH 连接，然后重试。"
           }
         }
       }
@@ -1036,7 +1029,15 @@
         "f660aa1454": "连接中",
         "7711ad5122": "本地设置命令",
         "e5db1b0419": "组合设置命令",
-        "addProjectBeforeWorkspace": "在创建工作区之前添加项目。"
+        "addProjectBeforeWorkspace": "在创建工作区之前添加项目。",
+        "sshNotConnected": "SSH not connected",
+        "connectingSsh": "Connecting SSH...",
+        "sshAuthenticationFailed": "SSH authentication failed",
+        "preparingSshConnection": "Preparing SSH connection...",
+        "connected": "Connected",
+        "reconnectingSsh": "Reconnecting SSH...",
+        "sshReconnectionFailed": "SSH reconnection failed",
+        "notConnected": "Not connected"
       },
       "NewWorkspaceComposerModal": {
         "fa90f739a5": "创建工作区之前选择项目、工作区名称和 Agent。"
@@ -1811,7 +1812,11 @@
           "015b4e607d": "取消",
           "e3bd59143c": "插入",
           "f24783f470": "https://...",
-          "ec6310b731": "使用 http:// 或 https:// 图片 URL。"
+          "ec6310b731": "使用 http:// 或 https:// 图片 URL。",
+          "b7e4a1c902": "Paste, drop, or click to add files",
+          "8f1c2d4e6a": "Nothing to preview",
+          "c91f0a2b14": "Write",
+          "d82b1e3f05": "Preview"
         },
         "IssueSourceSelector": {
           "d6aeb2012b": "显示议题来自",
@@ -1884,6 +1889,47 @@
                 "bb227706a6": "休息"
               }
             }
+          }
+        },
+        "CloseReasonDropdown": {
+          "e1f2a3b4c5": "Choose close reason"
+        },
+        "GitHubIssueCommentComposer": {
+          "082515176a": "Failed to add comment",
+          "9f88657c4e": "Issue closed",
+          "e9b7cb7d17": "Failed to close issue",
+          "bd3b4492a0": "Issue reopened",
+          "f2a8c1d903": "Failed to reopen issue",
+          "a1b2c3d4e5": "Add a comment",
+          "c5c117270e": "Add your comment here, be kind",
+          "f6a7b8c9d0": "Close issue",
+          "b1c2d3e4f5": "Reopen issue",
+          "0a73f59e85": "Send comment",
+          "bf43425540": "Comment"
+        },
+        "GitHubWorkItemAssigneePopoverContent": {
+          "cddd9b04a7": "Loading assignees",
+          "a00830d3f7": "No users",
+          "4f8b6f2c1d": "Filter assignees..."
+        },
+        "GitHubWorkItemLabelPopoverContent": {
+          "2aa9acdf34": "Edit labels on GitHub",
+          "cddd9b04a7": "Loading labels",
+          "de26e2eb06": "No labels",
+          "8b0d52ee3a": "Filter labels..."
+        },
+        "githubIssueCloseReasons": {
+          "completed": {
+            "label": "Close as completed",
+            "description": "Done, closed, fixed, resolved"
+          },
+          "notPlanned": {
+            "label": "Close as not planned",
+            "description": "Won't fix, can't repro, stale"
+          },
+          "duplicate": {
+            "label": "Close as duplicate",
+            "description": "Duplicate of another issue"
           }
         }
       },
@@ -2787,7 +2833,11 @@
           "4f8368c272": "仅 Orca 工作树",
           "cfe2282ffa": "未知",
           "7765a4c3e1": "不适用",
-          "2d41fd45c6": "• 上次扫描错误：{{value0}}"
+          "2d41fd45c6": "• 上次扫描错误：{{value0}}",
+          "rangeLast7Days": "Last 7 days",
+          "rangeLast30Days": "Last 30 days",
+          "rangeLast90Days": "Last 90 days",
+          "rangeAllTime": "All time"
         },
         "CodexUsageDailyChart": {
           "1e6f62d7e3": "推理",
@@ -2836,7 +2886,11 @@
           "bf6cf2d4dd": "未知",
           "ae255c3dba": "不适用",
           "247c93ca92": "• 推断定价",
-          "8a6655f7a2": "• 上次扫描错误：{{value0}}"
+          "8a6655f7a2": "• 上次扫描错误：{{value0}}",
+          "rangeLast7Days": "Last 7 days",
+          "rangeLast30Days": "Last 30 days",
+          "rangeLast90Days": "Last 90 days",
+          "rangeAllTime": "All time"
         },
         "OpenCodeUsagePane": {
           "349f7c3f5c": "全部的",
@@ -2875,7 +2929,11 @@
           "e04c58327c": "仅 Orca 工作树",
           "362231082f": "未知",
           "8095a63426": "不适用",
-          "6cc7782458": "• 上次扫描错误：{{value0}}"
+          "6cc7782458": "• 上次扫描错误：{{value0}}",
+          "rangeLast7Days": "Last 7 days",
+          "rangeLast30Days": "Last 30 days",
+          "rangeLast90Days": "Last 90 days",
+          "rangeAllTime": "All time"
         },
         "ShareUsageButton": {
           "7d6b25323d": "分享到 X",
@@ -2996,20 +3054,20 @@
           }
         },
         "UsageBreakdownSection": {
-          "7765a4c3e1": "不适用",
-          "247c93ca92": "• 推断定价"
+          "7765a4c3e1": "n/a",
+          "247c93ca92": "• inferred pricing"
         },
         "UsageSessionsTable": {
-          "1afc25eb06": "轮次",
-          "0f03975d59": "事件",
-          "21ea00bfa8": "缓存",
-          "e0b988599d": "总计",
-          "01476891c7": "最后活跃",
-          "c17bed0416": "项目",
-          "f6a2c8d019": "模型",
-          "faf3444859": "输入",
-          "a8b7487ff7": "输出",
-          "cfe2282ffa": "未知"
+          "1afc25eb06": "Turns",
+          "0f03975d59": "Events",
+          "21ea00bfa8": "Cache",
+          "e0b988599d": "Total",
+          "01476891c7": "Last active",
+          "c17bed0416": "Project",
+          "f6a2c8d019": "Model",
+          "faf3444859": "Input",
+          "a8b7487ff7": "Output",
+          "cfe2282ffa": "Unknown"
         }
       },
       "sparse": {
@@ -3095,7 +3153,15 @@
           "fe1e616c5b": "未安装 Git，因此默认创建普通文件夹。",
           "c234df77f7": "创建前请选择或输入服务器父文件夹。",
           "3a13f6e88b": "未选择位置",
-          "6ed14c0281": "未选择服务器文件夹"
+          "6ed14c0281": "未选择服务器文件夹",
+          "createProjectTitle": "创建项目",
+          "createProjectDescription": "创建本地 Git 存储库和第一个工作区。",
+          "projectNameLabel": "项目名称",
+          "createsGitRepoHelp": "Git 存储库：",
+          "parentFolderLabel": "父文件夹",
+          "browseParentFolder": "浏览",
+          "gitRequiredError": "创建项目需要 Git。",
+          "createAction": "创建"
         },
         "AddRepoNestedImportStep": {
           "496f68cf8c": "扫描存储库。单击停止。",
@@ -3472,7 +3538,11 @@
           "376bed88e5": "与远程主机的连接遇到错误。",
           "4afcca1d24": "重新连接",
           "11552bf786": "SSH 已断开",
-          "cb5938ae79": "正在重新连接..."
+          "cb5938ae79": "正在重新连接...",
+          "disconnected": "This remote repository is not connected.",
+          "reconnecting": "Reconnecting to the remote host...",
+          "reconnectionFailed": "Reconnection to the remote host failed.",
+          "authFailed": "Authentication to the remote host failed."
         },
         "SshTargetRow": {
           "4677394048": "正在连接…",
@@ -3696,7 +3766,9 @@
                   "a6c20dca96": "从 SSH 目标打开项目",
                   "3d162cc76f": "远程项目",
                   "fb4fc5380e": "本地项目、Git repo 或包含多个 repos 的文件夹",
-                  "2281fdc8c7": "浏览文件夹"
+                  "2281fdc8c7": "浏览文件夹",
+                  "createProjectTitle": "创建项目",
+                  "createGitProjectDescription": "创建本地 Git 存储库"
                 }
               }
             }
@@ -7527,7 +7599,6 @@
             "5788d1059d": "无法更新评论主题。检查 GitHub API 预算。",
             "07871c0589": "链接另一个 PR",
             "7202f4a40a": "取消PR链接",
-            "a9d7c128e4": "取消 {{value0}} 链接",
             "7f4489f370": "刷新",
             "5c88c6db07": "打开于 {{value0}}",
             "7fad8509fe": "用 AI 修复",
@@ -7542,14 +7613,15 @@
             "e56c42122e": "destructive",
             "786e3c143f": "删除",
             "653c105ecc": "更多 PR 操作",
-            "b4f3ec62a1": "更多 {{value0}} 操作",
             "f316a8ca2b": "未选择未解决的评论。",
             "d00ebdc402": "使用 AI 解决 {{value0}} 评论",
             "ed3f79c031": "启动 agent 前请检查提示词。启动后，选中的线程会被标记为已解决。",
             "f273f2271c": "已启动 agent。已标记 {{value0}} 个为已解决，跳过 {{value1}} 个，失败 {{value2}} 个。",
             "aa95b81a3a": "已启动 agent。已标记 {{value0}} 个为已解决，跳过 {{value1}} 个，失败 {{value2}} 个。",
             "495b2f8c4b": "已启动 agent，但无法将选中的评论标记为已解决。",
-            "3c3ad3a1d2": "已启动 agent。选中的评论中没有可在托管平台上标记为已解决的评论。"
+            "3c3ad3a1d2": "已启动 agent。选中的评论中没有可在托管平台上标记为已解决的评论。",
+            "b4f3ec62a1": "More {{value0}} actions",
+            "a9d7c128e4": "unlink {{value0}}"
           },
           "CreatePullRequestDialog": {
             "2bc1b4345e": "取消",
@@ -8933,7 +9005,11 @@
             "3c4adfd821": "修复登录竞争条件",
             "56a0271428": "独立的工作区",
             "ef737dcee1": "GitHub 和 Linear 任务",
-            "ac51c061e2": "codex"
+            "ac51c061e2": "codex",
+            "47f16ecf34": "Ship several things at once. Each workspace keeps its branch, terminal, and agent activity together.",
+            "70aa182266": "Hand off a goal and walk away. A coordinator agent fans out and ships parallel PRs.",
+            "f10c14dd9d": "Skip the tab-switching. Pick from your GitHub or Linear backlog and start a workspace in one click.",
+            "5d6ee181b6": "Open any workspace to return to its terminal, then split panes for tests, logs, and agents."
           },
           "FeatureWallBody": {
             "25ec5356d6": "设置"
@@ -9006,7 +9082,9 @@
             "6e3f5223c5": "探险家",
             "ab2901bce6": "检查项",
             "d7f80060ca": "源代码控制",
-            "8e715588e4": "搜索"
+            "8e715588e4": "搜索",
+            "a6c8b9e32f": "Checks passed",
+            "f4d5e1a7b2": "3 checks"
           },
           "ReviewShipAnimatedVisual": {
             "4d99496b8c": "创建PR",

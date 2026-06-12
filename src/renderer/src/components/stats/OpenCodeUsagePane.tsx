@@ -26,10 +26,8 @@ import {
 } from '../ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { ClaudeUsageLoadingState } from './ClaudeUsageLoadingState'
-import { CodexUsageDailyChart } from './CodexUsageDailyChart'
-import { OpenCodeUsageRecentSessionsTable } from './OpenCodeUsageRecentSessionsTable'
+import { OpenCodeUsageDetails } from './OpenCodeUsageDetails'
 import { StatCard } from './StatCard'
-import { UsageBreakdownSection } from './UsageBreakdownSection'
 import { formatCost, formatTokens, formatUpdatedAt } from './usage-formatters'
 import { translate } from '@/i18n/i18n'
 
@@ -37,21 +35,33 @@ const RANGE_OPTIONS: OpenCodeUsageRange[] = ['7d', '30d', '90d', 'all']
 const SCOPE_OPTIONS: { value: OpenCodeUsageScope; label: string }[] = [
   {
     value: 'orca',
-    label: translate('auto.components.stats.OpenCodeUsagePane.e04c58327c', 'Orca worktrees only')
+    get label() {
+      return translate('auto.components.stats.OpenCodeUsagePane.e04c58327c', 'Orca worktrees only')
+    }
   },
   {
     value: 'all',
-    label: translate(
-      'auto.components.stats.OpenCodeUsagePane.144a6050e9',
-      'All local OpenCode usage'
-    )
+    get label() {
+      return translate(
+        'auto.components.stats.OpenCodeUsagePane.144a6050e9',
+        'All local OpenCode usage'
+      )
+    }
   }
 ]
 const RANGE_LABELS: Record<OpenCodeUsageRange, string> = {
-  '7d': 'Last 7 days',
-  '30d': 'Last 30 days',
-  '90d': 'Last 90 days',
-  all: 'All time'
+  get '7d'() {
+    return translate('auto.components.stats.OpenCodeUsagePane.rangeLast7Days', 'Last 7 days')
+  },
+  get '30d'() {
+    return translate('auto.components.stats.OpenCodeUsagePane.rangeLast30Days', 'Last 30 days')
+  },
+  get '90d'() {
+    return translate('auto.components.stats.OpenCodeUsagePane.rangeLast90Days', 'Last 90 days')
+  },
+  get all() {
+    return translate('auto.components.stats.OpenCodeUsagePane.rangeAllTime', 'All time')
+  }
 }
 
 export function OpenCodeUsagePane(): React.JSX.Element {
@@ -313,45 +323,13 @@ export function OpenCodeUsagePane(): React.JSX.Element {
             )}
           </p>
 
-          <CodexUsageDailyChart daily={daily} />
-
-          <div className="grid gap-4 xl:grid-cols-2">
-            <UsageBreakdownSection
-              title={translate('auto.components.stats.OpenCodeUsagePane.040c044d39', 'By model')}
-              topLabel={translate(
-                'auto.components.stats.OpenCodeUsagePane.a15206a63a',
-                'Top model:'
-              )}
-              topValue={summary?.topModel}
-              rows={modelBreakdown.map((row) => ({
-                key: row.key,
-                label: row.label,
-                tokens: row.totalTokens,
-                sessions: row.sessions,
-                eventsOrTurns: row.events,
-                estimatedCostUsd: row.estimatedCostUsd
-              }))}
-              eventsOrTurns="events"
-            />
-            <UsageBreakdownSection
-              title={translate('auto.components.stats.OpenCodeUsagePane.0f0a1684bb', 'By project')}
-              topLabel={translate(
-                'auto.components.stats.OpenCodeUsagePane.048ffe4d65',
-                'Top project:'
-              )}
-              topValue={summary?.topProject}
-              rows={projectBreakdown.map((row) => ({
-                key: row.key,
-                label: row.label,
-                tokens: row.totalTokens,
-                sessions: row.sessions,
-                eventsOrTurns: row.events
-              }))}
-              eventsOrTurns="events"
-            />
-          </div>
-
-          <OpenCodeUsageRecentSessionsTable recentSessions={recentSessions} />
+          <OpenCodeUsageDetails
+            daily={daily}
+            modelBreakdown={modelBreakdown}
+            projectBreakdown={projectBreakdown}
+            recentSessions={recentSessions}
+            summary={summary}
+          />
         </>
       )}
     </div>

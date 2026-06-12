@@ -464,39 +464,32 @@
           }
         }
       },
-      "folder": {
-        "workspace": {
-          "path": {
-            "status": {
-              "title": {
-                "missing": "フォルダーが見つかりません",
-                "not": {
-                  "directory": "パスはフォルダーではありません"
-                },
-                "ambiguous": {
-                  "connection": "接続を特定できません"
-                },
-                "unavailable": "フォルダーを確認できません"
-              },
-              "description": {
-                "missing": "Orca は {{value0}} を見つけられません。このフォルダーワークスペースを削除して再インポートしてください。",
-                "not": {
-                  "directory": "{{value0}} は存在しますが、フォルダーではありません。"
-                },
-                "ambiguous": {
-                  "connection": "Orca はこのフォルダースコープをどの SSH 接続が所有しているか判別できません。"
-                },
-                "unavailable": "Orca は現在このフォルダーを確認できません。ランタイムまたは SSH 接続を確認して再試行してください。"
-              },
-              "create": {
-                "description": {
-                  "missing": "Orca は {{value0}} を見つけられません。フォルダーを削除して再インポートしてください。"
-                },
-                "title": {
-                  "failed": "フォルダーワークスペースの作成に失敗しました"
-                }
-              }
-            }
+      "folderWorkspacePathStatus": {
+        "title": {
+          "missing": "フォルダーが見つかりません",
+          "notDirectory": "パスはフォルダーではありません",
+          "ambiguousConnection": "接続を特定できません",
+          "unavailable": "フォルダーを確認できません"
+        },
+        "description": {
+          "missing": "Orca は {{path}} を見つけられません。このフォルダーワークスペースを削除して再インポートしてください。",
+          "notDirectory": "{{path}} は存在しますが、フォルダーではありません。",
+          "ambiguousConnection": "Orca はこのフォルダースコープをどの SSH 接続が所有しているか判別できません。",
+          "unavailable": "Orca は現在このフォルダーを確認できません。ランタイムまたは SSH 接続を確認して再試行してください。"
+        },
+        "createError": {
+          "title": {
+            "missing": "フォルダーが見つかりません",
+            "notDirectory": "パスはフォルダーではありません",
+            "ambiguousConnection": "接続を特定できません",
+            "unavailable": "フォルダーを確認できません",
+            "generic": "フォルダーワークスペースの作成に失敗しました"
+          },
+          "description": {
+            "missing": "Orca は {{path}} を見つけられません。フォルダーを削除して再インポートしてください。",
+            "notDirectory": "{{path}} は存在しますが、フォルダーではありません。",
+            "ambiguousConnection": "Orca はこのフォルダースコープをどの SSH 接続が所有しているか判別できません。",
+            "unavailable": "Orca は現在このフォルダーを確認できません。ランタイムまたは SSH 接続を確認して再試行してください。"
           }
         }
       }
@@ -1036,7 +1029,15 @@
         "f660aa1454": "接続中",
         "7711ad5122": "ローカルセットアップコマンド",
         "e5db1b0419": "組み合わせセットアップコマンド",
-        "addProjectBeforeWorkspace": "ワークスペースを作成する前にプロジェクトを追加します。"
+        "addProjectBeforeWorkspace": "ワークスペースを作成する前にプロジェクトを追加します。",
+        "sshNotConnected": "SSH not connected",
+        "connectingSsh": "Connecting SSH...",
+        "sshAuthenticationFailed": "SSH authentication failed",
+        "preparingSshConnection": "Preparing SSH connection...",
+        "connected": "Connected",
+        "reconnectingSsh": "Reconnecting SSH...",
+        "sshReconnectionFailed": "SSH reconnection failed",
+        "notConnected": "Not connected"
       },
       "NewWorkspaceComposerModal": {
         "fa90f739a5": "ワークスペースを作成する前に、プロジェクト、ワークスペース名、および agent を選択します。"
@@ -1811,7 +1812,11 @@
           "015b4e607d": "キャンセル",
           "e3bd59143c": "入れる",
           "f24783f470": "https://...",
-          "ec6310b731": "http:// または https:// 画像 URL を使用します。"
+          "ec6310b731": "http:// または https:// 画像 URL を使用します。",
+          "b7e4a1c902": "Paste, drop, or click to add files",
+          "8f1c2d4e6a": "Nothing to preview",
+          "c91f0a2b14": "Write",
+          "d82b1e3f05": "Preview"
         },
         "IssueSourceSelector": {
           "d6aeb2012b": "からのイシューを表示しています",
@@ -1884,6 +1889,47 @@
                 "bb227706a6": "REST"
               }
             }
+          }
+        },
+        "CloseReasonDropdown": {
+          "e1f2a3b4c5": "Choose close reason"
+        },
+        "GitHubIssueCommentComposer": {
+          "082515176a": "Failed to add comment",
+          "9f88657c4e": "Issue closed",
+          "e9b7cb7d17": "Failed to close issue",
+          "bd3b4492a0": "Issue reopened",
+          "f2a8c1d903": "Failed to reopen issue",
+          "a1b2c3d4e5": "Add a comment",
+          "c5c117270e": "Add your comment here, be kind",
+          "f6a7b8c9d0": "Close issue",
+          "b1c2d3e4f5": "Reopen issue",
+          "0a73f59e85": "Send comment",
+          "bf43425540": "Comment"
+        },
+        "GitHubWorkItemAssigneePopoverContent": {
+          "cddd9b04a7": "Loading assignees",
+          "a00830d3f7": "No users",
+          "4f8b6f2c1d": "Filter assignees..."
+        },
+        "GitHubWorkItemLabelPopoverContent": {
+          "2aa9acdf34": "Edit labels on GitHub",
+          "cddd9b04a7": "Loading labels",
+          "de26e2eb06": "No labels",
+          "8b0d52ee3a": "Filter labels..."
+        },
+        "githubIssueCloseReasons": {
+          "completed": {
+            "label": "Close as completed",
+            "description": "Done, closed, fixed, resolved"
+          },
+          "notPlanned": {
+            "label": "Close as not planned",
+            "description": "Won't fix, can't repro, stale"
+          },
+          "duplicate": {
+            "label": "Close as duplicate",
+            "description": "Duplicate of another issue"
           }
         }
       },
@@ -2787,7 +2833,11 @@
           "4f8368c272": "Orca ワークツリーのみ",
           "cfe2282ffa": "未知",
           "7765a4c3e1": "該当なし",
-          "2d41fd45c6": "• 最終スキャン エラー: {{value0}}"
+          "2d41fd45c6": "• 最終スキャン エラー: {{value0}}",
+          "rangeLast7Days": "Last 7 days",
+          "rangeLast30Days": "Last 30 days",
+          "rangeLast90Days": "Last 90 days",
+          "rangeAllTime": "All time"
         },
         "CodexUsageDailyChart": {
           "1e6f62d7e3": "推論",
@@ -2836,7 +2886,11 @@
           "bf6cf2d4dd": "未知",
           "ae255c3dba": "該当なし",
           "247c93ca92": "• 推定価格",
-          "8a6655f7a2": "• 最終スキャン エラー: {{value0}}"
+          "8a6655f7a2": "• 最終スキャン エラー: {{value0}}",
+          "rangeLast7Days": "Last 7 days",
+          "rangeLast30Days": "Last 30 days",
+          "rangeLast90Days": "Last 90 days",
+          "rangeAllTime": "All time"
         },
         "OpenCodeUsagePane": {
           "349f7c3f5c": "合計",
@@ -2875,7 +2929,11 @@
           "e04c58327c": "Orca ワークツリーのみ",
           "362231082f": "未知",
           "8095a63426": "該当なし",
-          "6cc7782458": "• 最終スキャン エラー: {{value0}}"
+          "6cc7782458": "• 最終スキャン エラー: {{value0}}",
+          "rangeLast7Days": "Last 7 days",
+          "rangeLast30Days": "Last 30 days",
+          "rangeLast90Days": "Last 90 days",
+          "rangeAllTime": "All time"
         },
         "ShareUsageButton": {
           "7d6b25323d": "Xで共有する",
@@ -2996,20 +3054,20 @@
           }
         },
         "UsageBreakdownSection": {
-          "7765a4c3e1": "該当なし",
-          "247c93ca92": "• 推定価格"
+          "7765a4c3e1": "n/a",
+          "247c93ca92": "• inferred pricing"
         },
         "UsageSessionsTable": {
-          "1afc25eb06": "ターン",
-          "0f03975d59": "イベント",
-          "21ea00bfa8": "キャッシュ",
-          "e0b988599d": "合計",
-          "01476891c7": "最後にアクティブだった",
-          "c17bed0416": "プロジェクト",
-          "f6a2c8d019": "モデル",
-          "faf3444859": "入力",
-          "a8b7487ff7": "出力",
-          "cfe2282ffa": "未知"
+          "1afc25eb06": "Turns",
+          "0f03975d59": "Events",
+          "21ea00bfa8": "Cache",
+          "e0b988599d": "Total",
+          "01476891c7": "Last active",
+          "c17bed0416": "Project",
+          "f6a2c8d019": "Model",
+          "faf3444859": "Input",
+          "a8b7487ff7": "Output",
+          "cfe2282ffa": "Unknown"
         }
       },
       "sparse": {
@@ -3095,7 +3153,15 @@
           "fe1e616c5b": "Git がインストールされていないため、通常のフォルダが既定になります。",
           "c234df77f7": "作成する前に、サーバーの親フォルダを選択または入力してください。",
           "3a13f6e88b": "場所が選択されていません",
-          "6ed14c0281": "サーバーフォルダが選択されていません"
+          "6ed14c0281": "サーバーフォルダが選択されていません",
+          "createProjectTitle": "プロジェクトの作成",
+          "createProjectDescription": "ローカルの Git リポジトリと最初のワークスペースを作成します。",
+          "projectNameLabel": "プロジェクト名",
+          "createsGitRepoHelp": "Git リポジトリ：",
+          "parentFolderLabel": "親フォルダ",
+          "browseParentFolder": "参照",
+          "gitRequiredError": "プロジェクトを作成するには Git が必要です。",
+          "createAction": "作成"
         },
         "AddRepoNestedImportStep": {
           "496f68cf8c": "リポジトリをスキャンしています。クリックして停止します。",
@@ -3472,7 +3538,11 @@
           "376bed88e5": "リモート ホストへの接続でエラーが発生しました。",
           "4afcca1d24": "再接続",
           "11552bf786": "SSHが切断されました",
-          "cb5938ae79": "再接続中..."
+          "cb5938ae79": "再接続中...",
+          "disconnected": "This remote repository is not connected.",
+          "reconnecting": "Reconnecting to the remote host...",
+          "reconnectionFailed": "Reconnection to the remote host failed.",
+          "authFailed": "Authentication to the remote host failed."
         },
         "SshTargetRow": {
           "4677394048": "接続中…",
@@ -3696,7 +3766,9 @@
                   "a6c20dca96": "SSH ターゲットからプロジェクトを開く",
                   "3d162cc76f": "リモートプロジェクト",
                   "fb4fc5380e": "ローカルプロジェクト、Git repo、または多数の repos を含むフォルダー",
-                  "2281fdc8c7": "フォルダを参照する"
+                  "2281fdc8c7": "フォルダを参照する",
+                  "createProjectTitle": "プロジェクトの作成",
+                  "createGitProjectDescription": "ローカルの Git リポジトリを作成"
                 }
               }
             }
@@ -7527,7 +7599,6 @@
             "5788d1059d": "レビュー スレッドを更新できませんでした。 GitHub API の予算を確認してください。",
             "07871c0589": "別の PR をリンクする",
             "7202f4a40a": "PR のリンクを解除する",
-            "a9d7c128e4": "{{value0}} のリンクを解除する",
             "7f4489f370": "更新",
             "5c88c6db07": "{{value0}}にオープン",
             "7fad8509fe": "AI で修正する",
@@ -7542,14 +7613,15 @@
             "e56c42122e": "破壊的な",
             "786e3c143f": "削除",
             "653c105ecc": "その他の PR 操作",
-            "b4f3ec62a1": "その他の {{value0}} 操作",
             "f316a8ca2b": "未解決のコメントが選択されていません。",
             "d00ebdc402": "{{value0}} のコメントを AI で解決",
             "ed3f79c031": "agent を開始する前にプロンプトを確認してください。選択したスレッドは開始後に解決済みにマークされます。",
             "f273f2271c": "agent を開始しました。{{value0}} 件を解決済みにし、{{value1}} 件をスキップ、{{value2}} 件が失敗しました。",
             "aa95b81a3a": "agent を開始しました。{{value0}} 件を解決済みにし、{{value1}} 件をスキップ、{{value2}} 件が失敗しました。",
             "495b2f8c4b": "agent を開始しましたが、選択したコメントを解決済みにできませんでした。",
-            "3c3ad3a1d2": "agent を開始しました。選択したコメントにホスト上で解決済みにできるものはありません。"
+            "3c3ad3a1d2": "agent を開始しました。選択したコメントにホスト上で解決済みにできるものはありません。",
+            "b4f3ec62a1": "More {{value0}} actions",
+            "a9d7c128e4": "unlink {{value0}}"
           },
           "CreatePullRequestDialog": {
             "2bc1b4345e": "キャンセル",
@@ -8933,7 +9005,11 @@
             "3c4adfd821": "ログイン競合状態を修正",
             "56a0271428": "隔離されたワークスペース",
             "ef737dcee1": "GitHub とLinearタスク",
-            "ac51c061e2": "codex"
+            "ac51c061e2": "codex",
+            "47f16ecf34": "Ship several things at once. Each workspace keeps its branch, terminal, and agent activity together.",
+            "70aa182266": "Hand off a goal and walk away. A coordinator agent fans out and ships parallel PRs.",
+            "f10c14dd9d": "Skip the tab-switching. Pick from your GitHub or Linear backlog and start a workspace in one click.",
+            "5d6ee181b6": "Open any workspace to return to its terminal, then split panes for tests, logs, and agents."
           },
           "FeatureWallBody": {
             "25ec5356d6": "設定"
@@ -9006,7 +9082,9 @@
             "6e3f5223c5": "エクスプローラ",
             "ab2901bce6": "チェック",
             "d7f80060ca": "ソース管理",
-            "8e715588e4": "検索"
+            "8e715588e4": "検索",
+            "a6c8b9e32f": "Checks passed",
+            "f4d5e1a7b2": "3 checks"
           },
           "ReviewShipAnimatedVisual": {
             "4d99496b8c": "PRを作成する",
