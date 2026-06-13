@@ -252,7 +252,12 @@ export class SshConnection {
 
     for (let attempt = 0; attempt < INITIAL_RETRY_ATTEMPTS; attempt++) {
       try {
-        await this.attemptConnect()
+        // Why: EHOSTUNREACH/ENETUNREACH are transient (a momentary local
+        // network blip on wake/Wi-Fi reassociation) AND system-ssh-fallback
+        // eligible. Only let attemptConnect pin to system SSH on the final
+        // attempt; earlier ones must re-throw so this loop can re-attempt
+        // ssh2 on the recovered network instead of stranding the session.
+        await this.attemptConnect(attempt === INITIAL_RETRY_ATTEMPTS - 1)
         return
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err))
@@ -278,7 +283,7 @@ export class SshConnection {
     throw finalError
   }
 
-  private async attemptConnect(): Promise<void> {
+  private async attemptConnect(allowSystemSshFallback = true): Promise<void> {
     this.setState('connecting')
     this.proxyProcess?.kill()
     this.proxyProcess = null
@@ -319,7 +324,7 @@ export class SshConnection {
         throw err
       }
 
-      if (isSystemSshFallbackError(err)) {
+      if (allowSystemSshFallback && isSystemSshFallbackError(err)) {
         this.proxyProcess?.kill()
         this.proxyProcess = null
         try {

@@ -145,6 +145,7 @@ import {
   type SshConnectionCallbacks
 } from './ssh-connection'
 import { resolveWithSshG } from './ssh-config-parser'
+import { INITIAL_RETRY_ATTEMPTS } from './ssh-connection-utils'
 import { uploadDirectoryViaSystemSsh, writeFileViaSystemSsh } from './ssh-system-fallback'
 import { getRemoteHostPlatform } from './ssh-remote-platform'
 import type { SshTarget } from '../../shared/ssh-types'
@@ -714,7 +715,11 @@ describe('SshConnection', () => {
     )
   })
 
-  it('falls back to system SSH when ssh2 hits a local network policy reachability error', async () => {
+  it('falls back to system SSH when ssh2 persistently hits a local network policy reachability error', async () => {
+    // Why: a macOS per-app network policy that blocks the direct TCP socket
+    // fails ssh2 on EVERY attempt. The fallback must still kick in — but only
+    // after the transient-retry budget is spent, so a one-off blip does not
+    // pin the session (see the transient-recovery test below).
     connectBehavior = 'error'
     connectErrorMessage = 'connect EHOSTUNREACH 192.168.0.210:22 - Local (192.168.0.2:52112)'
     connectErrorCode = 'EHOSTUNREACH'
@@ -723,16 +728,56 @@ describe('SshConnection', () => {
       createCallbacks()
     )
 
-    await conn.connect()
+    vi.useFakeTimers()
+    try {
+      const connectPromise = conn.connect()
+      // Drain the chained ssh2 attempts and the transient-retry sleeps
+      // between them without waiting on real 2s delays.
+      await vi.runAllTimersAsync()
+      await connectPromise
+    } finally {
+      vi.useRealTimers()
+    }
 
     expect(conn.getState().status).toBe('connected')
     expect(conn.usesSystemSshTransport()).toBe(true)
-    expect(clientInstances).toHaveLength(1)
+    expect(clientInstances).toHaveLength(INITIAL_RETRY_ATTEMPTS)
     expect(spawnSystemSshCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({ host: '192.168.0.210' }),
       'echo ORCA-SYSTEM-SSH-OK',
       { wrapCommand: false }
     )
+  })
+
+  it('retries ssh2 instead of pinning system SSH when the first reachability error is transient', async () => {
+    // Why: EHOSTUNREACH/ENETUNREACH on a momentary local blip (laptop wake,
+    // Wi-Fi reassociation) must NOT pin the session to system SSH transport —
+    // doing so disables SFTP (download/upload/lstat) for the whole session.
+    // The first ssh2 error re-throws to connect()'s transient loop, which
+    // re-attempts ssh2 on the recovered network.
+    const blip = new Error(
+      'connect EHOSTUNREACH 192.168.0.210:22 - Local (192.168.0.2:52112)'
+    ) as NodeJS.ErrnoException
+    blip.code = 'EHOSTUNREACH'
+    connectSequence = [blip, 'ready']
+    const conn = new SshConnection(
+      createTarget({ host: '192.168.0.210', label: 'LAN Linux', username: 'hydra' }),
+      createCallbacks()
+    )
+
+    vi.useFakeTimers()
+    try {
+      const connectPromise = conn.connect()
+      await vi.runAllTimersAsync()
+      await connectPromise
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(conn.getState().status).toBe('connected')
+    expect(conn.usesSystemSshTransport()).toBe(false)
+    expect(clientInstances).toHaveLength(2)
+    expect(spawnSystemSshCommandMock).not.toHaveBeenCalled()
   })
 
   it('keeps the original ssh2 reachability error when the system SSH probe fails', async () => {
