@@ -1904,22 +1904,25 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setBranchNameOverride(undefined)
       setForkPushWarning(null)
       branchAutoNameRef.current = ''
-      const repoForItem = eligibleRepos.find((repo) => repo.id === item.repoId) ?? selectedRepo
+      // Why: provider items can come from a different source host than the
+      // selected run host. Resolve git refs against the run repo; keep item
+      // metadata/source context separate for provider identity.
+      const runRepo = selectedRepo ?? eligibleRepos.find((repo) => repo.id === item.repoId)
       applyLinkedWorkItem(item)
-      if (item.type !== 'pr' || !repoForItem) {
+      if (item.type !== 'pr' || !runRepo) {
         setPushTarget(undefined)
         return
       }
       setPushTarget(undefined)
       const itemRepoSettings = getSettingsForRepoRuntimeOwner(
-        { repos: [repoForItem], settings },
-        repoForItem.id
+        { repos: [runRepo], settings },
+        runRepo.id
       )
       const target = getActiveRuntimeTarget(itemRepoSettings)
       const resolvePrBase =
         target.kind === 'local'
           ? window.api.worktrees.resolvePrBase({
-              repoId: repoForItem.id,
+              repoId: runRepo.id,
               prNumber: item.number,
               ...(item.branchName ? { headRefName: item.branchName } : {}),
               ...(item.isCrossRepository !== undefined
@@ -1930,7 +1933,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
               target,
               'worktree.resolvePrBase',
               {
-                repo: repoForItem.id,
+                repo: runRepo.id,
                 prNumber: item.number,
                 ...(item.branchName ? { headRefName: item.branchName } : {}),
                 ...(item.isCrossRepository !== undefined
@@ -1982,13 +1985,15 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setBranchNameOverride(undefined)
       setForkPushWarning(null)
       branchAutoNameRef.current = ''
-      const repoForItem = eligibleRepos.find((repo) => repo.id === item.repoId) ?? selectedRepo
-      if (item.type !== 'mr' || !repoForItem) {
+      // Why: MR metadata can be sourced from one host/account while the
+      // workspace is created on another host for the same logical project.
+      const runRepo = selectedRepo ?? eligibleRepos.find((repo) => repo.id === item.repoId)
+      if (item.type !== 'mr' || !runRepo) {
         return
       }
       void window.api.worktrees
         .resolveMrBase({
-          repoId: repoForItem.id,
+          repoId: runRepo.id,
           mrIid: item.number,
           ...(item.branchName ? { sourceBranch: item.branchName } : {}),
           ...(item.isCrossRepository !== undefined
