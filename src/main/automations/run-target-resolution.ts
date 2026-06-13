@@ -1,5 +1,6 @@
 import type { Store } from '../persistence'
 import type { Automation } from '../../shared/automations-types'
+import { getAutomationLegacyRepoId } from '../../shared/automation-run-identity'
 import { getRepoExecutionHostId, parseExecutionHostId } from '../../shared/execution-host'
 import type { ProjectHostSetup, Repo } from '../../shared/types'
 import { splitWorktreeIdForFilesystem } from '../../shared/worktree-id'
@@ -15,7 +16,7 @@ function getLegacyPrecheckCwd(store: Store, automation: Automation): string | nu
       : null
     return parsed?.worktreePath ?? null
   }
-  return store.getRepo(automation.projectId)?.path ?? null
+  return store.getRepo(getAutomationLegacyRepoId(automation))?.path ?? null
 }
 
 export function resolveAutomationRunTarget(
@@ -24,7 +25,7 @@ export function resolveAutomationRunTarget(
 ): AutomationRunTargetResult {
   const context = automation.runContext ?? null
   if (!context) {
-    const repo = store.getRepo(automation.projectId)
+    const repo = store.getRepo(getAutomationLegacyRepoId(automation))
     const cwd = getLegacyPrecheckCwd(store, automation)
     if (!repo || !cwd) {
       return { ok: false, error: 'Automation run target is no longer available.' }

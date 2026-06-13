@@ -32,6 +32,7 @@ import {
   latestAutomationOccurrenceAtOrBefore,
   nextAutomationOccurrenceAfter
 } from '../shared/automation-schedules'
+import { getAutomationLegacyRepoId } from '../shared/automation-run-identity'
 import { normalizeAutomationPrecheck } from '../shared/automation-precheck'
 import type {
   PersistedState,
@@ -682,7 +683,7 @@ function backfillLegacyAutomationContexts(
   const contextsByAutomationId = new Map<string, Pick<Automation, 'runContext' | 'sourceContext'>>()
   const automations = (state.automations ?? []).map((automation) => {
     const contexts = getAutomationContextsForRepo(
-      state.repos.find((repo) => repo.id === automation.projectId),
+      state.repos.find((repo) => repo.id === getAutomationLegacyRepoId(automation)),
       state.projectHostSetups ?? []
     )
     const next: Automation = { ...automation }

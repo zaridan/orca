@@ -1,4 +1,5 @@
 import type { Automation, AutomationRun } from '../shared/automations-types'
+import { getAutomationLegacyRepoId } from '../shared/automation-run-identity'
 import { formatAutomationPrecheckTimeout } from '../shared/automation-precheck'
 import { formatAutomationSchedule } from '../shared/automation-schedules'
 import type { PublicKnownRuntimeEnvironment } from '../shared/runtime-environments'
@@ -186,9 +187,9 @@ export function formatAutomationShow(result: { automation: Automation }): string
         `projectHostSetupId: ${runContext.projectHostSetupId}`,
         `runRepoId: ${runContext.repoId}`,
         `runPath: ${runContext.path}`,
-        `legacyRepoId: ${automation.projectId}`
+        `legacyRepoId: ${getAutomationLegacyRepoId(automation)}`
       ]
-    : [`legacyRepoId: ${automation.projectId}`]
+    : [`legacyRepoId: ${getAutomationLegacyRepoId(automation)}`]
   return [
     `id: ${automation.id}`,
     `name: ${automation.name}`,

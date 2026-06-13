@@ -53,6 +53,7 @@ import type {
   AutomationRun,
   AutomationUpdateInput
 } from '../../../../shared/automations-types'
+import { getAutomationRunRepoId } from '../../../../shared/automation-run-identity'
 import { parseExecutionHostId } from '../../../../shared/execution-host'
 import { TASK_SOURCE_CONTEXT_RUNTIME_CAPABILITY } from '../../../../shared/protocol-version'
 import type { PreflightStatus } from '../../../../preload/api-types'
@@ -140,10 +141,6 @@ type SelectedExternalRunPage = {
 
 function getDefaultWorktree(worktrees: readonly Worktree[]): Worktree | null {
   return worktrees.find((worktree) => worktree.isMainWorktree) ?? worktrees[0] ?? null
-}
-
-function getAutomationRunRepoId(automation: Automation): string {
-  return automation.runContext?.repoId ?? automation.projectId
 }
 
 function getRepoBackedAutomationSourceContext(

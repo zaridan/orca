@@ -11,6 +11,7 @@ import type {
   AutomationDispatchResult,
   AutomationPrecheckResult
 } from '../../../shared/automations-types'
+import { getAutomationRunRepoId } from '../../../shared/automation-run-identity'
 import {
   didAutomationPrecheckPass,
   formatAutomationPrecheckFailure
@@ -57,7 +58,7 @@ export function useAutomationDispatchEvents(): void {
         activeTabId: state.activeTabId,
         activeTabType: state.activeTabType
       }
-      const runRepoId = automation.runContext?.repoId ?? automation.projectId
+      const runRepoId = getAutomationRunRepoId(automation)
       const repo = state.repos.find((entry) => entry.id === runRepoId)
       const automationWorktree = automation.workspaceId
         ? state.allWorktrees().find((entry) => entry.id === automation.workspaceId)
