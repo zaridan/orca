@@ -183,6 +183,12 @@
             <code>/home/orca/goldfish</code> as a Git worktree on branch <code>goldfish</code>,
             and Orca activated <code>repo-id::/home/orca/goldfish</code>.
           </li>
+          <li class="pass">
+            Added the local Orca worktree to the same dev profile, confirmed local
+            <code>gh</code> auth for <code>Jinwoo-H</code>, fetched 10 GitHub work items with
+            explicit <code>hostId: local</code> task source context, and verified the cache key used
+            a local GitHub source scope.
+          </li>
         </ul>
       </section>
 
@@ -308,6 +314,10 @@
         <figure>
           <img src="artifacts/host-context-electron-ssh-worktree-created.png" alt="SSH worktree created" />
           <figcaption>New Worktree from the SSH project created and activated a remote SSH worktree.</figcaption>
+        </figure>
+        <figure>
+          <img src="artifacts/host-context-electron-local-github-tasks-open.png" alt="Local GitHub Tasks source" />
+          <figcaption>Local project with local GitHub credentials rendered GitHub issues in Tasks.</figcaption>
         </figure>
       </section>
     </main>

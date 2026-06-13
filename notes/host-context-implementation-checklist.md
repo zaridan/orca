@@ -131,7 +131,7 @@ Done means: Local, SSH, remote server, and future cloud VMs share one Host model
 - [x] Unit-test source-context serialization, cache keys, and provider routing.
 - [x] Unit-test automation migration from repo-id/path-based records.
 - [x] Unit-test workspace creation selectors for logical project plus host setup.
-- [ ] Integration-test local project with local provider credentials.
+- [x] Integration-test local project with local provider credentials.
 - [x] Integration-test SSH project setup, clone/browse/create flows, and workspace creation.
 - [x] Integration-test project available on local and SSH hosts, then create workspaces on each host.
 - [x] Integration-test task source on Host A with workspace run on Host B.
@@ -278,3 +278,4 @@ Done means: reviewers and future agents can understand the vision, implementatio
 - [x] 2026-06-13: Removed the redundant locked SSH target row from the Add Project remote-path step after the host has already been selected, while preserving a compact reconnect action for disconnected locked hosts. Fresh Electron validation connected a Docker SSH target through Orca's relay IPC, added `/home/orca/host-context-e2e-local` via Add Project, and created a remote SSH worktree at `/home/orca/goldfish`; screenshots were added to the dark-background report. Verified with focused Add Project tests, targeted oxlint, and remote filesystem checks.
 - [x] 2026-06-13: Extended Tasks source availability reasons so missing provider auth, unavailable source tooling, and unsupported providers can surface as distinct source-host states instead of generic connection/version failures. The checklist row remains partial until runtime/provider preflight feeds these reasons end to end. Verified with focused source-summary tests and targeted oxlint.
 - [x] 2026-06-13: Fed desktop-owned GitHub/GitLab preflight into Tasks source availability for local and SSH project sources, so missing `gh`/`glab` or missing CLI auth disables the affected provider with source-tool/auth-specific copy. Runtime-owned sources intentionally skip desktop preflight and continue to rely on runtime capability/fetch ownership. Verified with provider availability tests, Tasks source summary tests, TaskPage source-boundary tests, targeted oxlint, and full `pnpm run typecheck`.
+- [x] 2026-06-13: Electron-verified a local project with local GitHub credentials: added the local Orca worktree to the running dev app, confirmed `gh` auth for `Jinwoo-H`, fetched 10 GitHub work items through explicit `TaskSourceContext { provider: github, hostId: local }`, verified the local source-scoped cache key, and captured the rendered Tasks page showing GitHub issues for the local project.
