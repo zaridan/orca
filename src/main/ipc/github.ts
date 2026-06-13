@@ -288,10 +288,21 @@ export function registerGitHubHandlers(store: Store, stats: StatsCollector): voi
     }
   )
 
-  ipcMain.handle('gh:issue', (_event, args: { repoPath: string; number: number }) => {
-    const repo = assertRegisteredRepo(args, store)
-    return getIssue(repo.path, args.number, repoConnectionId(repo))
-  })
+  ipcMain.handle(
+    'gh:issue',
+    (
+      _event,
+      args: {
+        repoPath: string
+        repoId?: string | null
+        sourceContext?: TaskSourceContext | null
+        number: number
+      }
+    ) => {
+      const repo = assertRegisteredRepo(args, store)
+      return getIssue(repo.path, args.number, repoConnectionId(repo))
+    }
+  )
 
   ipcMain.handle('gh:listIssues', (_event, args: { repoPath: string; limit?: number }) => {
     const repo = assertRegisteredRepo(args, store)
@@ -429,6 +440,8 @@ export function registerGitHubHandlers(store: Store, stats: StatsCollector): voi
       _event,
       args: {
         repoPath: string
+        repoId?: string | null
+        sourceContext?: TaskSourceContext | null
         prNumber: number
         headSha?: string
         prRepo?: GitHubOwnerRepo | null
@@ -455,6 +468,8 @@ export function registerGitHubHandlers(store: Store, stats: StatsCollector): voi
       _event,
       args: {
         repoPath: string
+        repoId?: string | null
+        sourceContext?: TaskSourceContext | null
         checkRunId?: number
         workflowRunId?: number
         checkName?: string
@@ -483,6 +498,8 @@ export function registerGitHubHandlers(store: Store, stats: StatsCollector): voi
       _event,
       args: {
         repoPath: string
+        repoId?: string | null
+        sourceContext?: TaskSourceContext | null
         prNumber: number
         prRepo?: GitHubOwnerRepo | null
         noCache?: boolean
@@ -500,7 +517,16 @@ export function registerGitHubHandlers(store: Store, stats: StatsCollector): voi
 
   ipcMain.handle(
     'gh:resolveReviewThread',
-    async (_event, args: { repoPath: string; threadId: string; resolve: boolean }) => {
+    async (
+      _event,
+      args: {
+        repoPath: string
+        repoId?: string | null
+        sourceContext?: TaskSourceContext | null
+        threadId: string
+        resolve: boolean
+      }
+    ) => {
       const repo = assertRegisteredRepo(args, store)
       // Why: thread resolve doesn't carry the PR number, so we cannot target
       // a specific cache entry. The renderer cache stores per-(repo, type, number)
@@ -559,6 +585,7 @@ export function registerGitHubHandlers(store: Store, stats: StatsCollector): voi
       args: {
         repoPath: string
         repoId?: string
+        sourceContext?: TaskSourceContext | null
         prNumber: number
         commentId: number
         body: string
@@ -876,6 +903,7 @@ export function registerGitHubHandlers(store: Store, stats: StatsCollector): voi
       args: {
         repoPath: string
         repoId?: string
+        sourceContext?: TaskSourceContext | null
         number: number
         body: string
         type?: 'issue' | 'pr'

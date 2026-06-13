@@ -27,6 +27,7 @@ import {
 import { clearRuntimeCompatibilityCacheForTests } from '../../runtime/runtime-rpc-client'
 import { getHostedReviewCacheKey } from './hosted-review-cache-identity'
 import { getTaskSourceCacheScope } from '../../../../shared/task-source-context'
+import type { TaskSourceContext } from '../../../../shared/task-source-context'
 
 const runtimeEnvironmentCall = vi.fn()
 const runtimeEnvironmentTransportCall = vi.fn()
@@ -94,6 +95,21 @@ function makePR(overrides: Partial<PRInfo> = {}): PRInfo {
     mergeable: 'UNKNOWN',
     headSha: 'head-oid',
     ...overrides
+  }
+}
+
+function githubSourceContext(
+  hostId: TaskSourceContext['hostId'],
+  repoId = 'source-repo-id'
+): TaskSourceContext {
+  return {
+    kind: 'task-source',
+    provider: 'github',
+    projectId: 'github:stablyai/orca',
+    hostId,
+    projectHostSetupId: 'setup-1',
+    repoId,
+    providerIdentity: { provider: 'github', owner: 'stablyai', repo: 'orca' }
   }
 }
 
@@ -348,6 +364,43 @@ describe('createGitHubSlice cache bounds', () => {
         issueCacheKey(repoPath, 'repo-runtime', 123, null, null, 'runtime:env-1')
       ]?.data
     ).toMatchObject({ number: 123 })
+  })
+
+  it('routes explicit source-context issue fetches through the source runtime', async () => {
+    runtimeEnvironmentCall.mockResolvedValueOnce({
+      id: 'rpc-source-issue',
+      ok: true,
+      result: {
+        number: 19,
+        title: 'Source issue',
+        state: 'open',
+        url: 'https://example.com/issues/19'
+      },
+      _meta: { runtimeId: 'source-runtime' }
+    })
+    const store = createTestStore()
+    const repoPath = '/repo'
+    const repoId = 'caller-repo-id'
+    const sourceContext = githubSourceContext('runtime:source-runtime', 'runtime-repo-id')
+    store.setState({
+      settings: { activeRuntimeEnvironmentId: 'focused-runtime' } as AppState['settings'],
+      repos: [{ id: repoId, path: repoPath, name: 'repo', kind: 'git' }]
+    } as unknown as Partial<AppState>)
+
+    await expect(
+      store.getState().fetchIssue(repoPath, 19, { repoId, sourceContext })
+    ).resolves.toMatchObject({ number: 19, title: 'Source issue' })
+
+    expect(mockApi.gh.issue).not.toHaveBeenCalled()
+    expect(runtimeEnvironmentCall).toHaveBeenCalledWith({
+      selector: 'source-runtime',
+      method: 'github.issue',
+      params: { repo: 'runtime-repo-id', number: 19 },
+      timeoutMs: 30_000
+    })
+    expect(
+      store.getState().issueCache[`${getTaskSourceCacheScope(sourceContext)}::${repoId}::19`]?.data
+    ).toMatchObject({ number: 19 })
   })
 
   it('routes SSH-owned issue fetches through local IPC when a runtime is focused', async () => {
@@ -827,6 +880,48 @@ describe('createGitHubSlice.fetchPRChecks', () => {
     expect(store.getState().prCache[repoScopedKey]?.data?.checksStatus).toBe('success')
     expect(store.getState().prCache[pathScopedKey]?.data?.checksStatus).toBe('pending')
   })
+
+  it('routes explicit source-context PR checks through the source runtime', async () => {
+    runtimeEnvironmentCall.mockResolvedValueOnce({
+      id: 'rpc-source-checks',
+      ok: true,
+      result: [{ name: 'source-build', status: 'completed', conclusion: 'success', url: null }],
+      _meta: { runtimeId: 'source-runtime' }
+    })
+    const store = createTestStore()
+    const repoPath = '/repo'
+    const repoId = 'caller-repo-id'
+    const sourceContext = githubSourceContext('runtime:source-runtime', 'runtime-repo-id')
+    store.setState({
+      settings: { activeRuntimeEnvironmentId: 'focused-runtime' } as AppState['settings'],
+      repos: [{ id: repoId, path: repoPath, name: 'repo', kind: 'git' }]
+    } as unknown as Partial<AppState>)
+
+    await store.getState().fetchPRChecks(repoPath, 12, 'feature/source', 'head-1', null, {
+      force: true,
+      repoId,
+      sourceContext
+    })
+
+    expect(runtimeEnvironmentCall).toHaveBeenCalledWith({
+      selector: 'source-runtime',
+      method: 'github.prChecks',
+      params: {
+        repo: 'runtime-repo-id',
+        prNumber: 12,
+        headSha: 'head-1',
+        prRepo: null,
+        noCache: true
+      },
+      timeoutMs: 30_000
+    })
+    expect(
+      store.getState().checksCache[
+        `${getTaskSourceCacheScope(sourceContext)}::${repoId}::${prChecksCacheSuffix(12, null, 'head-1')}`
+      ]?.data?.[0].name
+    ).toBe('source-build')
+    expect(mockApi.gh.prChecks).not.toHaveBeenCalled()
+  })
 })
 
 describe('createGitHubSlice.fetchPRComments', () => {
@@ -915,6 +1010,48 @@ describe('createGitHubSlice.fetchPRComments', () => {
     expect(
       store.getState().commentsCache[`${repoId}::pr-comments::acme/widgets::12`]
     ).toBeUndefined()
+  })
+
+  it('routes explicit source-context PR comments through the source runtime', async () => {
+    runtimeEnvironmentCall.mockResolvedValueOnce({
+      id: 'rpc-source-comments',
+      ok: true,
+      result: [{ id: 1, author: 'source', authorAvatarUrl: '', body: '', createdAt: '', url: '' }],
+      _meta: { runtimeId: 'source-runtime' }
+    })
+    const store = createTestStore()
+    const repoPath = '/repo'
+    const repoId = 'caller-repo-id'
+    const sourceContext = githubSourceContext('runtime:source-runtime', 'runtime-repo-id')
+    store.setState({
+      settings: { activeRuntimeEnvironmentId: 'focused-runtime' } as AppState['settings'],
+      repos: [{ id: repoId, path: repoPath, name: 'repo', kind: 'git' }]
+    } as unknown as Partial<AppState>)
+
+    await store.getState().fetchPRComments(repoPath, 12, {
+      force: true,
+      repoId,
+      sourceContext,
+      prRepo: { owner: 'Acme', repo: 'Widgets' }
+    })
+
+    expect(runtimeEnvironmentCall).toHaveBeenCalledWith({
+      selector: 'source-runtime',
+      method: 'github.prComments',
+      params: {
+        repo: 'runtime-repo-id',
+        prNumber: 12,
+        prRepo: { owner: 'Acme', repo: 'Widgets' },
+        noCache: true
+      },
+      timeoutMs: 30_000
+    })
+    expect(
+      store.getState().commentsCache[
+        `${getTaskSourceCacheScope(sourceContext)}::${repoId}::pr-comments::acme/widgets::12`
+      ]?.data?.[0].author
+    ).toBe('source')
+    expect(mockApi.gh.prComments).not.toHaveBeenCalled()
   })
 
   it('bounds PR comment cache entries across many repos', async () => {
@@ -1154,6 +1291,37 @@ describe('createGitHubSlice PR comment mutations', () => {
     })
     expect(
       store.getState().commentsCache[`${repoId}::pr-comments::acme/widgets::12`]?.data?.[0].body
+    ).toBe('done')
+  })
+
+  it('posts top-level PR comments with explicit local source context', async () => {
+    const store = createTestStore()
+    const repoPath = '/repo'
+    const repoId = 'repo-id'
+    const sourceContext = githubSourceContext('local', repoId)
+    store.setState({
+      repos: [{ id: repoId, path: repoPath, name: 'repo', kind: 'git' }]
+    } as unknown as Partial<AppState>)
+
+    await store.getState().addPRConversationComment(repoPath, 12, 'done', {
+      repoId,
+      sourceContext,
+      prRepo: { owner: 'Acme', repo: 'Widgets' }
+    })
+
+    expect(mockApi.gh.addIssueComment).toHaveBeenCalledWith({
+      repoPath,
+      repoId,
+      number: 12,
+      body: 'done',
+      type: 'pr',
+      prRepo: { owner: 'Acme', repo: 'Widgets' },
+      sourceContext
+    })
+    expect(
+      store.getState().commentsCache[
+        `${getTaskSourceCacheScope(sourceContext)}::${repoId}::pr-comments::acme/widgets::12`
+      ]?.data?.[0].body
     ).toBe('done')
   })
 

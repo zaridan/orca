@@ -696,6 +696,28 @@ function runtimeScopedRepoCacheKey(
   return getGitHubRepoCacheKey(repoPath, repoId, suffix, settings, connectionId, executionHostId)
 }
 
+function sourceScopedRepoCacheKey(
+  repoPath: string,
+  repoId: string | undefined,
+  suffix: string,
+  settings?: AppState['settings'],
+  connectionId?: string | null,
+  executionHostId?: string | null,
+  sourceContext?: TaskSourceContext | null
+): string {
+  if (sourceContext?.provider === 'github') {
+    return `${getTaskSourceCacheScope(sourceContext)}::${repoId ?? repoPath}::${suffix}`
+  }
+  return runtimeScopedRepoCacheKey(
+    repoPath,
+    repoId,
+    suffix,
+    settings,
+    connectionId,
+    executionHostId
+  )
+}
+
 function prCacheKey(
   repoPath: string,
   repoId: string | undefined,
@@ -2618,14 +2640,19 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   fetchIssue: async (repoPath, number, options) => {
     const repo = findRepoForGitHubOwner(get(), options?.repoId, repoPath)
     const repoId = options?.repoId ?? repo?.id
-    const requestSettings = settingsForGitHubRepoOwner(get().settings, repo)
-    const cacheKey = issueCacheKey(
+    const requestSettings = getGitHubWorkItemSourceSettings(
+      get().settings,
+      repo,
+      options?.sourceContext
+    )
+    const cacheKey = sourceScopedRepoCacheKey(
       repoPath,
       repoId,
-      number,
+      String(number),
       requestSettings,
       repo?.connectionId,
-      repo?.executionHostId
+      repo?.executionHostId,
+      options?.sourceContext
     )
     const cached = get().issueCache[cacheKey]
     if (isFresh(cached)) {
@@ -2639,15 +2666,27 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
 
     const request = (async () => {
       try {
-        const runtimeRepo = getRuntimeRepoTarget(get(), repoPath, requestSettings)
-        const issue = runtimeRepo
-          ? await callRuntimeRpc<IssueInfo | null>(
-              runtimeRepo.target,
-              'github.issue',
-              { repo: runtimeRepo.repo.id, number },
-              { timeoutMs: 30_000 }
-            )
-          : await window.api.gh.issue({ repoPath, repoId, number })
+        const requestContext = getGitHubWorkItemRequestContext(
+          get(),
+          requestSettings,
+          repoId ?? repoPath,
+          repoPath,
+          options?.sourceContext
+        )
+        const issue =
+          requestContext.target.kind === 'environment'
+            ? await callRuntimeRpc<IssueInfo | null>(
+                { kind: 'environment', environmentId: requestContext.target.environmentId },
+                'github.issue',
+                { repo: requestContext.target.runtimeRepoId, number },
+                { timeoutMs: 30_000 }
+              )
+            : await window.api.gh.issue({
+                repoPath,
+                repoId,
+                number,
+                sourceContext: options?.sourceContext
+              })
         set((s) => ({
           issueCache: withBoundedCacheEntry(s.issueCache, cacheKey, {
             data: issue,
@@ -2687,23 +2726,29 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
       options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
     )
     const repoId = options?.repoId ?? repo?.id
-    const requestSettings = settingsForGitHubRepoOwner(get().settings, repo)
-    const cacheKey = runtimeScopedRepoCacheKey(
+    const requestSettings = getGitHubWorkItemSourceSettings(
+      get().settings,
+      repo,
+      options?.sourceContext
+    )
+    const cacheKey = sourceScopedRepoCacheKey(
       repoPath,
       repoId,
       prChecksCacheSuffix(prNumber, prRepo, headSha),
       requestSettings,
       repo?.connectionId,
-      repo?.executionHostId
+      repo?.executionHostId,
+      options?.sourceContext
     )
     const legacyCacheKey = headSha
-      ? runtimeScopedRepoCacheKey(
+      ? sourceScopedRepoCacheKey(
           repoPath,
           repoId,
           prChecksCacheSuffix(prNumber, prRepo),
           requestSettings,
           repo?.connectionId,
-          repo?.executionHostId
+          repo?.executionHostId,
+          options?.sourceContext
         )
       : cacheKey
     const inflightKey = cacheKey
@@ -2748,28 +2793,36 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
 
     const request = (async () => {
       try {
-        const runtimeRepo = getRuntimeRepoTarget(get(), repoPath, requestSettings)
-        const checks = runtimeRepo
-          ? await callRuntimeRpc<PRCheckDetail[]>(
-              runtimeRepo.target,
-              'github.prChecks',
-              {
-                repo: runtimeRepo.repo.id,
+        const requestContext = getGitHubWorkItemRequestContext(
+          get(),
+          requestSettings,
+          repoId ?? repoPath,
+          repoPath,
+          options?.sourceContext
+        )
+        const checks =
+          requestContext.target.kind === 'environment'
+            ? await callRuntimeRpc<PRCheckDetail[]>(
+                { kind: 'environment', environmentId: requestContext.target.environmentId },
+                'github.prChecks',
+                {
+                  repo: requestContext.target.runtimeRepoId,
+                  prNumber,
+                  headSha,
+                  prRepo: prRepo ?? null,
+                  noCache: Boolean(options?.force || options?.noCache)
+                },
+                { timeoutMs: 30_000 }
+              )
+            : ((await window.api.gh.prChecks({
+                repoPath,
+                repoId,
                 prNumber,
                 headSha,
                 prRepo: prRepo ?? null,
-                noCache: Boolean(options?.force || options?.noCache)
-              },
-              { timeoutMs: 30_000 }
-            )
-          : ((await window.api.gh.prChecks({
-              repoPath,
-              repoId,
-              prNumber,
-              headSha,
-              prRepo: prRepo ?? null,
-              noCache: Boolean(options?.force || options?.noCache)
-            })) as PRCheckDetail[])
+                noCache: Boolean(options?.force || options?.noCache),
+                sourceContext: options?.sourceContext
+              })) as PRCheckDetail[])
         set((s) => {
           const nextState: Partial<AppState> = {
             checksCache: withBoundedCacheEntry(s.checksCache, cacheKey, {
@@ -2824,14 +2877,24 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
       options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
     )
     const repoId = options?.repoId ?? repo?.id
-    const requestSettings = get().settings
-    const runtimeRepo = getRuntimeRepoTarget(get(), repoPath, requestSettings)
-    return runtimeRepo
+    const requestSettings = getGitHubWorkItemSourceSettings(
+      get().settings,
+      repo,
+      options?.sourceContext
+    )
+    const requestContext = getGitHubWorkItemRequestContext(
+      get(),
+      requestSettings,
+      repoId ?? repoPath,
+      repoPath,
+      options?.sourceContext
+    )
+    return requestContext.target.kind === 'environment'
       ? await callRuntimeRpc<PRCheckRunDetails | null>(
-          runtimeRepo.target,
+          { kind: 'environment', environmentId: requestContext.target.environmentId },
           'github.prCheckDetails',
           {
-            repo: runtimeRepo.repo.id,
+            repo: requestContext.target.runtimeRepoId,
             checkRunId: args.checkRunId,
             workflowRunId: args.workflowRunId,
             checkName: args.checkName,
@@ -2847,7 +2910,8 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
           workflowRunId: args.workflowRunId,
           checkName: args.checkName,
           url: args.url,
-          prRepo: args.prRepo ?? null
+          prRepo: args.prRepo ?? null,
+          sourceContext: options?.sourceContext
         })) as PRCheckRunDetails | null)
   },
 
@@ -2856,14 +2920,19 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
       options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
     )
     const repoId = options?.repoId ?? repo?.id
-    const requestSettings = settingsForGitHubRepoOwner(get().settings, repo)
-    const cacheKey = runtimeScopedRepoCacheKey(
+    const requestSettings = getGitHubWorkItemSourceSettings(
+      get().settings,
+      repo,
+      options?.sourceContext
+    )
+    const cacheKey = sourceScopedRepoCacheKey(
       repoPath,
       repoId,
       prCommentsCacheSuffix(prNumber, options?.prRepo),
       requestSettings,
       repo?.connectionId,
-      repo?.executionHostId
+      repo?.executionHostId,
+      options?.sourceContext
     )
     const cached = get().commentsCache[cacheKey]
     if (!options?.force && isFresh(cached)) {
@@ -2877,26 +2946,34 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
 
     const request = (async () => {
       try {
-        const runtimeRepo = getRuntimeRepoTarget(get(), repoPath, requestSettings)
-        const comments = runtimeRepo
-          ? await callRuntimeRpc<PRComment[]>(
-              runtimeRepo.target,
-              'github.prComments',
-              {
-                repo: runtimeRepo.repo.id,
+        const requestContext = getGitHubWorkItemRequestContext(
+          get(),
+          requestSettings,
+          repoId ?? repoPath,
+          repoPath,
+          options?.sourceContext
+        )
+        const comments =
+          requestContext.target.kind === 'environment'
+            ? await callRuntimeRpc<PRComment[]>(
+                { kind: 'environment', environmentId: requestContext.target.environmentId },
+                'github.prComments',
+                {
+                  repo: requestContext.target.runtimeRepoId,
+                  prNumber,
+                  prRepo: options?.prRepo ?? null,
+                  noCache: options?.force
+                },
+                { timeoutMs: 30_000 }
+              )
+            : ((await window.api.gh.prComments({
+                repoPath,
+                repoId,
                 prNumber,
                 prRepo: options?.prRepo ?? null,
-                noCache: options?.force
-              },
-              { timeoutMs: 30_000 }
-            )
-          : ((await window.api.gh.prComments({
-              repoPath,
-              repoId,
-              prNumber,
-              prRepo: options?.prRepo ?? null,
-              noCache: options?.force
-            })) as PRComment[])
+                noCache: options?.force,
+                sourceContext: options?.sourceContext
+              })) as PRComment[])
         set((s) => ({
           commentsCache: withBoundedCacheEntry(s.commentsCache, cacheKey, {
             data: comments,
@@ -2921,39 +2998,52 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
       options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
     )
     const repoId = options?.repoId ?? repo?.id
-    const requestSettings = settingsForGitHubRepoOwner(get().settings, repo)
-    const cacheKey = runtimeScopedRepoCacheKey(
+    const requestSettings = getGitHubWorkItemSourceSettings(
+      get().settings,
+      repo,
+      options?.sourceContext
+    )
+    const cacheKey = sourceScopedRepoCacheKey(
       repoPath,
       repoId,
       prCommentsCacheSuffix(prNumber, options?.prRepo),
       requestSettings,
       repo?.connectionId,
-      repo?.executionHostId
+      repo?.executionHostId,
+      options?.sourceContext
     )
-    const runtimeRepo = getRuntimeRepoTarget(get(), repoPath, requestSettings)
+    const requestContext = getGitHubWorkItemRequestContext(
+      get(),
+      requestSettings,
+      repoId ?? repoPath,
+      repoPath,
+      options?.sourceContext
+    )
     let result: GitHubCommentResult
     try {
-      result = runtimeRepo
-        ? await callRuntimeRpc<GitHubCommentResult>(
-            runtimeRepo.target,
-            'github.addIssueComment',
-            {
-              repo: runtimeRepo.repo.id,
+      result =
+        requestContext.target.kind === 'environment'
+          ? await callRuntimeRpc<GitHubCommentResult>(
+              { kind: 'environment', environmentId: requestContext.target.environmentId },
+              'github.addIssueComment',
+              {
+                repo: requestContext.target.runtimeRepoId,
+                number: prNumber,
+                body,
+                type: 'pr',
+                prRepo: options?.prRepo ?? null
+              },
+              { timeoutMs: 30_000 }
+            )
+          : await window.api.gh.addIssueComment({
+              repoPath,
+              repoId,
               number: prNumber,
               body,
               type: 'pr',
-              prRepo: options?.prRepo ?? null
-            },
-            { timeoutMs: 30_000 }
-          )
-        : await window.api.gh.addIssueComment({
-            repoPath,
-            repoId,
-            number: prNumber,
-            body,
-            type: 'pr',
-            prRepo: options?.prRepo ?? null
-          })
+              prRepo: options?.prRepo ?? null,
+              sourceContext: options?.sourceContext
+            })
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Failed to post comment.'
       return { ok: false, error }
@@ -2986,45 +3076,58 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
       options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
     )
     const repoId = options?.repoId ?? repo?.id
-    const requestSettings = settingsForGitHubRepoOwner(get().settings, repo)
-    const cacheKey = runtimeScopedRepoCacheKey(
+    const requestSettings = getGitHubWorkItemSourceSettings(
+      get().settings,
+      repo,
+      options?.sourceContext
+    )
+    const cacheKey = sourceScopedRepoCacheKey(
       repoPath,
       repoId,
       prCommentsCacheSuffix(prNumber, options?.prRepo),
       requestSettings,
       repo?.connectionId,
-      repo?.executionHostId
+      repo?.executionHostId,
+      options?.sourceContext
     )
-    const runtimeRepo = getRuntimeRepoTarget(get(), repoPath, requestSettings)
+    const requestContext = getGitHubWorkItemRequestContext(
+      get(),
+      requestSettings,
+      repoId ?? repoPath,
+      repoPath,
+      options?.sourceContext
+    )
     let result: GitHubCommentResult
     try {
-      result = runtimeRepo
-        ? await callRuntimeRpc<GitHubCommentResult>(
-            runtimeRepo.target,
-            'github.addPRReviewCommentReply',
-            {
-              repo: runtimeRepo.repo.id,
+      result =
+        requestContext.target.kind === 'environment'
+          ? await callRuntimeRpc<GitHubCommentResult>(
+              { kind: 'environment', environmentId: requestContext.target.environmentId },
+              'github.addPRReviewCommentReply',
+              {
+                repo: requestContext.target.runtimeRepoId,
+                prNumber,
+                commentId,
+                body,
+                threadId: options?.threadId,
+                path: options?.path,
+                line: options?.line,
+                prRepo: options?.prRepo ?? null
+              },
+              { timeoutMs: 30_000 }
+            )
+          : await window.api.gh.addPRReviewCommentReply({
+              repoPath,
+              repoId,
               prNumber,
               commentId,
               body,
               threadId: options?.threadId,
               path: options?.path,
               line: options?.line,
-              prRepo: options?.prRepo ?? null
-            },
-            { timeoutMs: 30_000 }
-          )
-        : await window.api.gh.addPRReviewCommentReply({
-            repoPath,
-            repoId,
-            prNumber,
-            commentId,
-            body,
-            threadId: options?.threadId,
-            path: options?.path,
-            line: options?.line,
-            prRepo: options?.prRepo ?? null
-          })
+              prRepo: options?.prRepo ?? null,
+              sourceContext: options?.sourceContext
+            })
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Failed to post reply.'
       return { ok: false, error }
@@ -3063,14 +3166,19 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
       options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
     )
     const repoId = options?.repoId ?? repo?.id
-    const requestSettings = settingsForGitHubRepoOwner(get().settings, repo)
-    const cacheKey = runtimeScopedRepoCacheKey(
+    const requestSettings = getGitHubWorkItemSourceSettings(
+      get().settings,
+      repo,
+      options?.sourceContext
+    )
+    const cacheKey = sourceScopedRepoCacheKey(
       repoPath,
       repoId,
       prCommentsCacheSuffix(prNumber, options?.prRepo),
       requestSettings,
       repo?.connectionId,
-      repo?.executionHostId
+      repo?.executionHostId,
+      options?.sourceContext
     )
 
     // Optimistic update: toggle isResolved on all comments in this thread immediately
@@ -3088,17 +3196,30 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
       }))
     }
 
-    const runtimeRepo = getRuntimeRepoTarget(get(), repoPath, requestSettings)
+    const requestContext = getGitHubWorkItemRequestContext(
+      get(),
+      requestSettings,
+      repoId ?? repoPath,
+      repoPath,
+      options?.sourceContext
+    )
     let ok = false
     try {
-      ok = runtimeRepo
-        ? await callRuntimeRpc<boolean>(
-            runtimeRepo.target,
-            'github.resolveReviewThread',
-            { repo: runtimeRepo.repo.id, threadId, resolve },
-            { timeoutMs: 30_000 }
-          )
-        : await window.api.gh.resolveReviewThread({ repoPath, repoId, threadId, resolve })
+      ok =
+        requestContext.target.kind === 'environment'
+          ? await callRuntimeRpc<boolean>(
+              { kind: 'environment', environmentId: requestContext.target.environmentId },
+              'github.resolveReviewThread',
+              { repo: requestContext.target.runtimeRepoId, threadId, resolve },
+              { timeoutMs: 30_000 }
+            )
+          : await window.api.gh.resolveReviewThread({
+              repoPath,
+              repoId,
+              threadId,
+              resolve,
+              sourceContext: options?.sourceContext
+            })
     } catch (err) {
       console.error('Failed to update review thread:', err)
       ok = false
