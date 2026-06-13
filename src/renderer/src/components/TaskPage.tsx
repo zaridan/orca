@@ -949,7 +949,7 @@ function GHStatusCell({
       reqRef.current += 1
       const reqId = reqRef.current
       updateLocalState(newState)
-      patchWorkItem(item.id, { state: newState }, item.repoId)
+      patchWorkItem(item.id, { state: newState }, item.repoId, { sourceContext })
       const target = getActiveRuntimeTarget(sourceSettings)
       const runtimeRepoId =
         sourceContext?.provider === 'github' ? (sourceContext.repoId ?? repo.id) : repo.id
@@ -979,7 +979,8 @@ function GHStatusCell({
             patchWorkItem(
               item.id,
               { state: newState === 'closed' ? 'open' : 'closed' },
-              item.repoId
+              item.repoId,
+              { sourceContext }
             )
             toast.error(
               typed.error ??
@@ -994,7 +995,14 @@ function GHStatusCell({
             return
           }
           updateLocalState(newState === 'closed' ? 'open' : 'closed')
-          patchWorkItem(item.id, { state: newState === 'closed' ? 'open' : 'closed' }, item.repoId)
+          patchWorkItem(
+            item.id,
+            { state: newState === 'closed' ? 'open' : 'closed' },
+            item.repoId,
+            {
+              sourceContext
+            }
+          )
           toast.error(translate('auto.components.TaskPage.1c893195ac', 'Failed to update state'))
         })
     },
@@ -1401,7 +1409,7 @@ function GHAssigneesCell({
         ? assignees.filter((a) => a.login.toLowerCase() !== userLoginKey)
         : [...assignees, user]
       setPendingLogin(user.login)
-      patchWorkItem(item.id, { assignees: nextAssignees }, item.repoId)
+      patchWorkItem(item.id, { assignees: nextAssignees }, item.repoId, { sourceContext })
 
       try {
         const updates = isOn ? { removeAssignees: [user.login] } : { addAssignees: [user.login] }
@@ -1451,7 +1459,7 @@ function GHAssigneesCell({
         }
         useAppStore.getState().recordFeatureInteraction('github-tasks')
       } catch (err) {
-        patchWorkItem(item.id, { assignees: previousAssignees }, item.repoId)
+        patchWorkItem(item.id, { assignees: previousAssignees }, item.repoId, { sourceContext })
         toast.error(
           err instanceof Error
             ? err.message
@@ -1931,7 +1939,9 @@ function PRReviewCell({
           localReviewRequests
         )
         setLocalReviewRequests(nextReviewRequests)
-        patchWorkItem(item.id, { reviewRequests: nextReviewRequests }, item.repoId)
+        patchWorkItem(item.id, { reviewRequests: nextReviewRequests }, item.repoId, {
+          sourceContext
+        })
         setReviewerInput('')
         useAppStore.getState().recordFeatureInteraction('github-tasks')
       } else {
@@ -1986,7 +1996,9 @@ function PRReviewCell({
           (reviewer) => !removed.has(reviewer.login.toLowerCase())
         )
         setLocalReviewRequests(nextReviewRequests)
-        patchWorkItem(item.id, { reviewRequests: nextReviewRequests }, item.repoId)
+        patchWorkItem(item.id, { reviewRequests: nextReviewRequests }, item.repoId, {
+          sourceContext
+        })
         setReviewerInput('')
       } else {
         toast.error(result.error)

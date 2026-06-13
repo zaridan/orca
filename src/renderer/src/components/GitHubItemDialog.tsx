@@ -724,7 +724,9 @@ function PRReviewersPanel({
         localReviewRequests
       )
       setLocalReviewRequests(nextReviewRequests)
-      patchWorkItem(item.id, { reviewRequests: nextReviewRequests }, item.repoId)
+      patchWorkItem(item.id, { reviewRequests: nextReviewRequests }, item.repoId, {
+        sourceContext
+      })
       onReviewersRequested(nextReviewRequests)
       setReviewerInput('')
       useAppStore.getState().recordFeatureInteraction('github-tasks')
@@ -799,7 +801,9 @@ function PRReviewersPanel({
         (reviewer) => !removed.has(reviewer.login.toLowerCase())
       )
       setLocalReviewRequests(nextReviewRequests)
-      patchWorkItem(item.id, { reviewRequests: nextReviewRequests }, item.repoId)
+      patchWorkItem(item.id, { reviewRequests: nextReviewRequests }, item.repoId, {
+        sourceContext
+      })
       onReviewersRequested(nextReviewRequests)
       setReviewerInput('')
       useAppStore.getState().recordFeatureInteraction('github-tasks')
@@ -3118,10 +3122,10 @@ function PRActionsPanel({
   const applyStatePatch = useCallback(
     (state: GitHubWorkItem['state']) => {
       onStateChange(state)
-      patchWorkItem(item.id, { state }, item.repoId)
+      patchWorkItem(item.id, { state }, item.repoId, { sourceContext })
       patchProjectRowIfNeeded(state)
     },
-    [item.id, item.repoId, onStateChange, patchProjectRowIfNeeded, patchWorkItem]
+    [item.id, item.repoId, onStateChange, patchProjectRowIfNeeded, patchWorkItem, sourceContext]
   )
 
   const handleStateChange = async (): Promise<void> => {
@@ -4613,17 +4617,17 @@ function GHEditSection({
           }),
         onOptimistic: () => {
           onStateChange(newState)
-          patchWorkItem(item.id, { state: newState }, item.repoId)
+          patchWorkItem(item.id, { state: newState }, item.repoId, { sourceContext })
           patchProjectRowIfNeeded({ state: newState })
         },
         onRevert: () => {
           onStateChange(prevState)
-          patchWorkItem(item.id, { state: prevState }, item.repoId)
+          patchWorkItem(item.id, { state: prevState }, item.repoId, { sourceContext })
           patchProjectRowIfNeeded({ state: prevState })
         },
         onSuccess: () => {
           useAppStore.getState().recordFeatureInteraction('github-tasks')
-          patchWorkItem(item.id, { state: newState }, item.repoId)
+          patchWorkItem(item.id, { state: newState }, item.repoId, { sourceContext })
           patchProjectRowIfNeeded({ state: newState })
           onMutated()
         },
@@ -4665,7 +4669,7 @@ function GHEditSection({
             }),
           onOptimistic: () => {
             onLabelsChange(newLabels)
-            patchWorkItem(item.id, { labels: newLabels }, item.repoId)
+            patchWorkItem(item.id, { labels: newLabels }, item.repoId, { sourceContext })
             patchProjectRowIfNeeded({ labels: newLabels })
           },
           onSuccess: () => {
@@ -4674,7 +4678,7 @@ function GHEditSection({
           },
           onRevert: () => {
             onLabelsChange(prevLabels)
-            patchWorkItem(item.id, { labels: prevLabels }, item.repoId)
+            patchWorkItem(item.id, { labels: prevLabels }, item.repoId, { sourceContext })
             patchProjectRowIfNeeded({ labels: prevLabels })
           },
           onError: (err) => toast.error(err)
@@ -4692,12 +4696,12 @@ function GHEditSection({
             }),
           onOptimistic: () => {
             onLabelsChange(newLabels)
-            patchWorkItem(item.id, { labels: newLabels }, item.repoId)
+            patchWorkItem(item.id, { labels: newLabels }, item.repoId, { sourceContext })
             patchProjectRowIfNeeded({ labels: newLabels })
           },
           onRevert: () => {
             onLabelsChange(prevLabels)
-            patchWorkItem(item.id, { labels: prevLabels }, item.repoId)
+            patchWorkItem(item.id, { labels: prevLabels }, item.repoId, { sourceContext })
             patchProjectRowIfNeeded({ labels: prevLabels })
           },
           onSuccess: () => {

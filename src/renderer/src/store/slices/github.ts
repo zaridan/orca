@@ -80,6 +80,10 @@ export type ProjectRowContentUpdate = {
   removeAssignees?: string[]
 }
 
+export type GitHubPatchWorkItemOptions = {
+  sourceContext?: TaskSourceContext | null
+}
+
 /** Optimistic, IPC-free patch shape for `projectViewCache` rows.
  *  Why: the dialog already issues mutations via slug-addressed IPCs and only
  *  needs to keep the Project table view in sync optimistically. Replacing
@@ -1573,7 +1577,12 @@ export type GitHubSlice = {
     query?: string,
     options?: { sourceContext?: TaskSourceContext | null }
   ) => void
-  patchWorkItem: (itemId: string, patch: Partial<GitHubWorkItem>, repoId?: string | null) => void
+  patchWorkItem: (
+    itemId: string,
+    patch: Partial<GitHubWorkItem>,
+    repoId?: string | null,
+    options?: GitHubPatchWorkItemOptions
+  ) => void
   /**
    * Monotonic counter bumped whenever a repo's issue-source preference is
    * flipped. Subscribers (TaskPage's fetch effect) include this in their
@@ -3666,11 +3675,20 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
     }
   },
 
-  patchWorkItem: (itemId, patch, repoId) => {
+  patchWorkItem: (itemId, patch, repoId, options) => {
     set((s) => {
       const nextCache = { ...s.workItemsCache }
       let changed = false
+      const sourceScope =
+        options?.sourceContext?.provider === 'github'
+          ? getTaskSourceCacheScope(options.sourceContext)
+          : null
       for (const key of Object.keys(nextCache)) {
+        // Why: task edits from one host/account must not optimistically patch
+        // another host's visually identical GitHub issue or PR cache entry.
+        if (sourceScope && key !== sourceScope && !key.startsWith(`${sourceScope}::`)) {
+          continue
+        }
         const entry = nextCache[key]
         if (!entry?.data) {
           continue

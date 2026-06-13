@@ -491,6 +491,58 @@ describe('createGitHubSlice.patchWorkItem', () => {
     })
     expect(repoTwoPatched).toBe(repoTwoItem)
   })
+
+  it('can scope patches to one GitHub task source when hosts share a repo id and work-item id', () => {
+    const store = createTestStore()
+    const firstSourceContext = githubSourceContext('runtime:first-host', 'repo-1')
+    const secondSourceContext = githubSourceContext('runtime:second-host', 'repo-1')
+    const firstItem = {
+      id: 'pr:42',
+      repoId: 'repo-1',
+      type: 'pr',
+      number: 42,
+      title: 'First host PR'
+    } as GitHubWorkItem
+    const secondItem = {
+      id: 'pr:42',
+      repoId: 'repo-1',
+      type: 'pr',
+      number: 42,
+      title: 'Second host PR'
+    } as GitHubWorkItem
+
+    store.setState({
+      workItemsCache: {
+        [workItemsCacheKey('repo-1', 20, '', getTaskSourceCacheScope(firstSourceContext))]: {
+          data: [firstItem],
+          fetchedAt: 1
+        },
+        [workItemsCacheKey('repo-1', 20, '', getTaskSourceCacheScope(secondSourceContext))]: {
+          data: [secondItem],
+          fetchedAt: 1
+        }
+      }
+    })
+
+    store.getState().patchWorkItem('pr:42', { reviewRequests: [] }, 'repo-1', {
+      sourceContext: firstSourceContext
+    })
+
+    const state = store.getState()
+    const firstPatched =
+      state.workItemsCache[
+        workItemsCacheKey('repo-1', 20, '', getTaskSourceCacheScope(firstSourceContext))
+      ]?.data?.[0]
+    const secondPatched =
+      state.workItemsCache[
+        workItemsCacheKey('repo-1', 20, '', getTaskSourceCacheScope(secondSourceContext))
+      ]?.data?.[0]
+    expect(firstPatched).toMatchObject({
+      title: 'First host PR',
+      reviewRequests: []
+    })
+    expect(secondPatched).toBe(secondItem)
+  })
 })
 
 describe('createGitHubSlice.fetchPRChecks', () => {
