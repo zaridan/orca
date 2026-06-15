@@ -535,7 +535,11 @@ export class SshRelaySession {
     )
     registerSshFilesystemProvider(this.targetId, fsProvider)
 
-    const gitProvider = new SshGitProvider(this.targetId, mux)
+    const gitProvider = new SshGitProvider(
+      this.targetId,
+      mux,
+      this.remoteCliBridgeEnv?.hostPlatform ?? null
+    )
     registerSshGitProvider(this.targetId, gitProvider)
 
     this.wireUpPtyEvents(ptyProvider)

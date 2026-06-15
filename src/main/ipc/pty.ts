@@ -235,6 +235,13 @@ function getProviderForPty(ptyId: string): IPtyProvider {
   return getProvider(connectionId)
 }
 
+function hasPtyProviderForInspection(ptyId: string): boolean {
+  // Why: process inspection is background polling; disconnected SSH hosts should
+  // read as idle instead of surfacing repeated IPC errors.
+  const connectionId = ptyOwnership.get(ptyId)
+  return connectionId == null || sshProviders.has(connectionId)
+}
+
 function getAppPtyId(connectionId: string | null | undefined, ptyId: string): string {
   return connectionId ? toAppSshPtyId(connectionId, ptyId) : ptyId
 }
@@ -3056,7 +3063,7 @@ export function registerPtyHandlers(
   // Why: cwd/process metadata can reveal another window's terminal state.
   // Keep raw-PTY metadata reads scoped to the owning renderer window.
   ipcMain.handle('pty:hasChildProcesses', async (event, args: { id: string }): Promise<boolean> => {
-    if (!senderOwnsPty(event, args.id)) {
+    if (!senderOwnsPty(event, args.id) || !hasPtyProviderForInspection(args.id)) {
       return false
     }
     return getProviderForPty(args.id).hasChildProcesses(args.id)
@@ -3065,7 +3072,7 @@ export function registerPtyHandlers(
   ipcMain.handle(
     'pty:getForegroundProcess',
     async (event, args: { id: string }): Promise<string | null> => {
-      if (!senderOwnsPty(event, args.id)) {
+      if (!senderOwnsPty(event, args.id) || !hasPtyProviderForInspection(args.id)) {
         return null
       }
       return getProviderForPty(args.id).getForegroundProcess(args.id)

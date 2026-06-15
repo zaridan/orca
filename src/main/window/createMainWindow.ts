@@ -1026,6 +1026,9 @@ export function createMainWindow(
     }
     e.preventDefault()
     pendingQuitCloseRequest = opts?.getIsQuitting?.() ?? false
+    // Why: the renderer owns the close decision (dirty-file save dialogs,
+    // running-process confirmation). The subscription lives at the always-
+    // mounted App root, so even pre-workspace states reply — see #5144.
     mainWindow.webContents.send('window:close-requested', {
       isQuitting: pendingQuitCloseRequest
     })
