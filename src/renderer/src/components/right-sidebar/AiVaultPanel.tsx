@@ -3,8 +3,20 @@ import { toast } from 'sonner'
 import { buildAiVaultResumeCommandForWorktree } from '@/lib/ai-vault-resume-command'
 import { launchAiVaultSessionInNewTab } from '@/lib/launch-ai-vault-session'
 import { useAppStore } from '@/store'
-import { useActiveWorktree, useRepoById } from '@/store/selectors'
+import {
+  useActiveRepo,
+  useActiveWorktree,
+  useAllWorktrees,
+  useProjectHostSetupProjection,
+  useRepoById,
+  useRepos
+} from '@/store/selectors'
 import { agentLabel, filterAiVaultSessions, groupAiVaultSessions } from './ai-vault-session-filters'
+import {
+  normalizeAiVaultScopeForContext,
+  shouldRestoreAiVaultProjectScope
+} from './ai-vault-scope-state'
+import { buildAiVaultProjectContext } from './ai-vault-session-projects'
 import {
   AI_VAULT_AGENTS,
   type AiVaultAgent,
@@ -23,12 +35,16 @@ const SESSION_LIMIT = 500
 
 export default function AiVaultPanel(): React.JSX.Element {
   const activeWorktree = useActiveWorktree()
-  const activeRepo = useRepoById(activeWorktree?.repoId ?? null)
+  const activeRepo = useActiveRepo()
+  const activeWorktreeRepo = useRepoById(activeWorktree?.repoId ?? null)
+  const repos = useRepos()
+  const allWorktrees = useAllWorktrees()
+  const projectHostSetupProjection = useProjectHostSetupProjection()
   const agentCmdOverrides = useAppStore((s) => s.settings?.agentCmdOverrides ?? {})
   const [query, setQuery] = useState('')
-  const [scope, setScope] = useState<AiVaultScope>('workspace')
+  const [scope, setScope] = useState<AiVaultScope>('project')
   const [sort, setSort] = useState<AiVaultSort>('updated')
-  const [group, setGroup] = useState<AiVaultGroup>('folder')
+  const [group, setGroup] = useState<AiVaultGroup>('project')
   const [hideEmptySessions, setHideEmptySessions] = useState(true)
   const [agents, setAgents] = useState<AiVaultAgent[]>([...AI_VAULT_AGENTS])
   const [sessions, setSessions] = useState<AiVaultSession[]>([])
@@ -39,21 +55,57 @@ export default function AiVaultPanel(): React.JSX.Element {
   const refreshIdRef = useRef(0)
   const refreshInFlightRef = useRef(false)
   const mountedRef = useRef(true)
+  const userChangedScopeRef = useRef(false)
 
-  const isRemoteWorktree = Boolean(activeRepo?.connectionId)
+  const isRemoteWorktree = Boolean(activeWorktreeRepo?.connectionId)
   const activeWorktreePath = activeWorktree?.path ?? null
+  const projectContext = useMemo(
+    () =>
+      buildAiVaultProjectContext({
+        repos,
+        worktrees: allWorktrees,
+        projectHostSetupProjection,
+        activeRepo,
+        activeWorktree,
+        sessions
+      }),
+    [activeRepo, activeWorktree, allWorktrees, projectHostSetupProjection, repos, sessions]
+  )
+  const activeProjectKey = projectContext.activeProjectKey
+  const activeRepoId = projectContext.activeRepoId
+  const projectLabelByKey = projectContext.projectLabelByKey
+  const sessionProjectById = projectContext.sessionProjectById
   const hasAllAgentsSelected = agents.length === AI_VAULT_AGENTS.length
   const viewAdjustmentCount =
     (hasAllAgentsSelected ? 0 : 1) +
     (sort === 'updated' ? 0 : 1) +
-    (group === 'folder' ? 0 : 1) +
+    (group === 'project' ? 0 : 1) +
     (hideEmptySessions ? 0 : 1)
 
+  // Project scope depends on active project context, but should come back after
+  // transient context loss unless the user intentionally chose another scope.
   useEffect(() => {
-    if (!activeWorktreePath && scope === 'workspace') {
-      setScope('all')
+    const normalizedScope = normalizeAiVaultScopeForContext({
+      scope,
+      activeProjectKey,
+      activeWorktreePath
+    })
+    if (normalizedScope !== scope) {
+      setScope(normalizedScope)
     }
-  }, [activeWorktreePath, scope])
+  }, [activeProjectKey, activeWorktreePath, scope])
+
+  useEffect(() => {
+    if (
+      shouldRestoreAiVaultProjectScope({
+        scope,
+        activeProjectKey,
+        userChangedScope: userChangedScopeRef.current
+      })
+    ) {
+      setScope('project')
+    }
+  }, [activeProjectKey, scope])
 
   const refresh = useCallback(async (args: { force?: boolean } = {}): Promise<void> => {
     if (refreshInFlightRef.current) {
@@ -108,14 +160,34 @@ export default function AiVaultPanel(): React.JSX.Element {
         scope,
         sort,
         activeWorktreePath,
+        activeProjectKey,
+        activeRepoId,
+        sessionProjectById,
+        projectLabelByKey,
         hideEmptySessions
       }),
-    [activeWorktreePath, agents, hideEmptySessions, query, scope, sessions, sort]
+    [
+      activeProjectKey,
+      activeRepoId,
+      activeWorktreePath,
+      agents,
+      hideEmptySessions,
+      projectLabelByKey,
+      query,
+      scope,
+      sessionProjectById,
+      sessions,
+      sort
+    ]
   )
 
   const groups = useMemo(
-    () => groupAiVaultSessions(filteredSessions, group),
-    [filteredSessions, group]
+    () =>
+      groupAiVaultSessions(filteredSessions, group, {
+        sessionProjectById,
+        projectLabelByKey
+      }),
+    [filteredSessions, group, projectLabelByKey, sessionProjectById]
   )
 
   const buildResumeCommand = useCallback(
@@ -200,8 +272,13 @@ export default function AiVaultPanel(): React.JSX.Element {
   const resetViewOptions = useCallback(() => {
     setAgents([...AI_VAULT_AGENTS])
     setSort('updated')
-    setGroup('folder')
+    setGroup('project')
     setHideEmptySessions(true)
+  }, [])
+
+  const handleScopeChange = useCallback((nextScope: AiVaultScope) => {
+    userChangedScopeRef.current = nextScope !== 'project'
+    setScope(nextScope)
   }, [])
 
   const toggleGroup = useCallback((key: string) => {
@@ -225,6 +302,7 @@ export default function AiVaultPanel(): React.JSX.Element {
         sessionCount={sessions.length}
         hasScanResult={Boolean(scanResult)}
         activeWorktreePath={activeWorktreePath}
+        activeProjectKey={activeProjectKey}
         scope={scope}
         agents={agents}
         sort={sort}
@@ -232,7 +310,7 @@ export default function AiVaultPanel(): React.JSX.Element {
         hideEmptySessions={hideEmptySessions}
         adjustmentCount={viewAdjustmentCount}
         onQueryChange={setQuery}
-        onScopeChange={setScope}
+        onScopeChange={handleScopeChange}
         onAgentEnabledChange={setAgentEnabled}
         onSortChange={setSort}
         onGroupChange={setGroup}
