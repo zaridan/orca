@@ -9744,6 +9744,68 @@
                   "f1c0179002": "流不生成帧。"
                 }
               }
+            },
+            "mobile": {
+              "emulator": {
+                "agent": {
+                  "setup": {
+                    "state": {
+                      "fdcca1ec75": "正在注册...",
+                      "69fb2c2289": "已启用",
+                      "c6705092ba": "修复 PATH",
+                      "7c1b6bdb1e": "启用",
+                      "51074ccb05": "无法加载 CLI 状态。",
+                      "35dea1ae12": "agent控制已就绪。",
+                      "9dff3a6338": "技能已安装。启用 Orca CLI 以完成设置。",
+                      "15986a1080": "Orca CLI 已就绪。安装技能以完成设置。",
+                      "4c26913def": "尚未设置完成。请完成两个步骤以启用agent控制。",
+                      "c94ff11e91": "无法重新检查设置状态。",
+                      "2b519eed94": "已在 PATH 中注册 Orca CLI。"
+                    }
+                  }
+                },
+                "tab": {
+                  "intro": {
+                    "actions": {
+                      "68a5dc6604": "无法隐藏移动模拟器。"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "MobileEmulatorAgentSetupGuide": {
+            "2fda9ff015": "设置Agent控制",
+            "0ac0fef514": "Agent控制已就绪。",
+            "2bdfff8763": "Agent控制（可选）。",
+            "72736b051f": "当您希望Agent控制此模拟器时，设置 Orca CLI + 技能。",
+            "d10ae98046": "完成",
+            "3756cbeca7": "暂不",
+            "6d950431d2": "隐藏",
+            "ebceac65a4": "设置",
+            "3f003507f4": "在设置中打开完整设置"
+          },
+          "MobileEmulatorAgentSetupGuideSteps": {
+            "9b49d892e3": "启用 Orca CLI",
+            "3d8dc52c93": "在 agent shell 中注册用于模拟器控制的 orca 命令。",
+            "21f5687c07": "Orca CLI 技能",
+            "64fb057667": "教授 agents 此工作区的 orca 模拟器命令。"
+          },
+          "MobileEmulatorTabIntroCallout": {
+            "1924982130": "关闭",
+            "5789936d9a": "在 agents 控制屏幕时预览 iOS 模拟器。",
+            "8014b4b80b": "保留",
+            "6e051a40b7": "隐藏"
+          },
+          "mobile": {
+            "emulator": {
+              "hidden": {
+                "toast": {
+                  "e8f098a870": "移动模拟器已隐藏",
+                  "c46c979c1d": "随时重新启用移动模拟器",
+                  "600f9a745a": "设置 › 移动模拟器"
+                }
+              }
             }
           }
         }

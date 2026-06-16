@@ -11,7 +11,7 @@ type Props = {
   disabled?: boolean
   preInstallNotice?: ReactNode
   onBeforeOpenTerminal?: () => void | Promise<void>
-  onRecheck: () => void | Promise<void>
+  onRecheck: () => void | Promise<unknown>
 }
 
 export function BrowserUseSkillStep({
