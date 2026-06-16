@@ -94,12 +94,16 @@ function isSafeHiddenRedrawCsi(
 }
 
 function containsOnlyRestorableHiddenOutput(data: string): boolean {
+  let hasSnapshotWorthContent = false
   for (let index = 0; index < data.length; ) {
     const code = data.charCodeAt(index)
     if (code === 0x1b) {
       const nextIndex = findTitleOscEnd(data, index) ?? findSafeCsiEnd(data, index)
       if (nextIndex === null) {
         return false
+      }
+      if (findTitleOscEnd(data, index) !== null) {
+        hasSnapshotWorthContent = true
       }
       index = nextIndex
       continue
@@ -115,9 +119,15 @@ function containsOnlyRestorableHiddenOutput(data: string): boolean {
     if (typeof codePoint !== 'number' || !isAllowedPlainHiddenOutputCodePoint(codePoint)) {
       return false
     }
+    if (
+      (codePoint >= 0x00a0 && codePoint <= 0x024f) ||
+      (codePoint >= 0x1e00 && codePoint <= 0x1eff)
+    ) {
+      hasSnapshotWorthContent = true
+    }
     index += codePoint > 0xffff ? 2 : 1
   }
-  return true
+  return hasSnapshotWorthContent
 }
 
 function containsOnlyModelRestorableSynchronizedOutput(data: string): boolean {

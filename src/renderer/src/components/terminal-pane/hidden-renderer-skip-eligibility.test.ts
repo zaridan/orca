@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { shouldSkipHiddenRendererOutput } from './hidden-renderer-skip-eligibility'
 
 describe('shouldSkipHiddenRendererOutput', () => {
-  it('skips hidden plain ASCII output when a snapshot restore is available', () => {
+  it('keeps hidden plain ASCII output live when a snapshot restore is available', () => {
     expect(
       shouldSkipHiddenRendererOutput({
         foreground: false,
@@ -11,7 +11,7 @@ describe('shouldSkipHiddenRendererOutput', () => {
         synchronizedOutputActive: false,
         data: 'line one\r\nline two\tok\n'
       })
-    ).toBe(true)
+    ).toBe(false)
   })
 
   it('skips hidden width-stable Latin output when a snapshot restore is available', () => {
