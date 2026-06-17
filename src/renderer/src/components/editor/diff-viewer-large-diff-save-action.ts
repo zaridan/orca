@@ -4,16 +4,20 @@ type DiffViewerLargeDiffSaveActionInput = {
   editable?: boolean
   modifiedContent: string
   onSave?: (content: string) => void
+  saveContentAvailable?: boolean
 }
 
 export function getDiffViewerLargeDiffSaveAction({
   editable,
   modifiedContent,
-  onSave
+  onSave,
+  saveContentAvailable = true
 }: DiffViewerLargeDiffSaveActionInput):
   | { label: string; description: string; onClick: () => void }
   | undefined {
-  if (!editable || !onSave) {
+  // Why: oversized diffs can arrive with text bodies stripped before IPC;
+  // fallback saves only when the modified content is known to be complete.
+  if (!editable || !onSave || !saveContentAvailable) {
     return undefined
   }
 

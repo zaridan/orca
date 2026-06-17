@@ -10,6 +10,7 @@ import * as path from 'path'
 import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { execFileSync } from 'child_process'
+import { MAX_RENDERED_DIFF_COMBINED_CHARACTERS } from '../shared/large-diff-render-limit'
 import {
   createMockDispatcher,
   gitInit,
@@ -71,6 +72,8 @@ describe('GitHandler', () => {
     expect(methods).toContain('git.bulkUnstage')
     expect(methods).toContain('git.abortMerge')
     expect(methods).toContain('git.abortRebase')
+    expect(methods).toContain('git.checkout')
+    expect(methods).toContain('git.localBranches')
     expect(methods).toContain('git.discard')
     expect(methods).toContain('git.bulkDiscard')
     expect(methods).toContain('git.conflictOperation')
@@ -79,6 +82,7 @@ describe('GitHandler', () => {
     expect(methods).toContain('git.fetch')
     expect(methods).toContain('git.forkSync')
     expect(methods).toContain('git.fetchRemoteTrackingRef')
+    expect(methods).toContain('git.fetchGitLabMergeRequestHead')
     expect(methods).toContain('git.push')
     expect(methods).toContain('git.pull')
     expect(methods).toContain('git.fastForward')
@@ -152,6 +156,43 @@ describe('GitHandler', () => {
       await expect(fs.access(path.join(tmpDir, '.git', 'rebase-merge'))).rejects.toThrow()
       await expect(fs.access(path.join(tmpDir, '.git', 'rebase-apply'))).rejects.toThrow()
       await expect(fs.readFile(path.join(tmpDir, 'file.txt'), 'utf-8')).resolves.toBe('feature\n')
+    })
+  })
+
+  describe('checkout / localBranches', () => {
+    it('switches to an existing local branch and lists branches current-first', async () => {
+      gitInit(tmpDir)
+      writeFileSync(path.join(tmpDir, 'file.txt'), 'base\n')
+      gitCommit(tmpDir, 'initial')
+      const baseBranch = execFileSync('git', ['branch', '--show-current'], {
+        cwd: tmpDir,
+        encoding: 'utf-8',
+        stdio: 'pipe'
+      }).trim()
+      execFileSync('git', ['branch', 'feature'], { cwd: tmpDir, stdio: 'pipe' })
+
+      const before = (await dispatcher.callRequest('git.localBranches', {
+        worktreePath: tmpDir
+      })) as { current: string | null; branches: string[] }
+      expect(before.current).toBe(baseBranch)
+      expect(before.branches).toContain('feature')
+      expect(before.branches[0]).toBe(baseBranch)
+
+      await dispatcher.callRequest('git.checkout', { worktreePath: tmpDir, branch: 'feature' })
+
+      expect(
+        execFileSync('git', ['branch', '--show-current'], {
+          cwd: tmpDir,
+          encoding: 'utf-8',
+          stdio: 'pipe'
+        }).trim()
+      ).toBe('feature')
+
+      const after = (await dispatcher.callRequest('git.localBranches', {
+        worktreePath: tmpDir
+      })) as { current: string | null; branches: string[] }
+      expect(after.current).toBe('feature')
+      expect(after.branches[0]).toBe('feature')
     })
   })
 
@@ -451,6 +492,34 @@ describe('GitHandler', () => {
       expect(result.kind).toBe('text')
       expect(result.originalContent).toBe('original')
       expect(result.modifiedContent).toBe('staged-content')
+    })
+
+    it('omits over-limit text bodies before returning diff payloads', async () => {
+      gitInit(tmpDir)
+      writeFileSync(path.join(tmpDir, 'file.txt'), 'original')
+      gitCommit(tmpDir, 'initial')
+      const oversizedText = 'a'.repeat(MAX_RENDERED_DIFF_COMBINED_CHARACTERS + 1)
+      writeFileSync(path.join(tmpDir, 'file.txt'), oversizedText)
+
+      const result = (await dispatcher.callRequest('git.diff', {
+        worktreePath: tmpDir,
+        filePath: 'file.txt',
+        staged: false
+      })) as {
+        kind: string
+        originalContent: string
+        modifiedContent: string
+        largeDiffRenderLimit?: { limited: boolean; reason?: string; characterCount?: number }
+      }
+
+      expect(result.kind).toBe('text')
+      expect(result.originalContent).toBe('')
+      expect(result.modifiedContent).toBe('')
+      expect(result.largeDiffRenderLimit?.limited).toBe(true)
+      expect(result.largeDiffRenderLimit?.reason).toBe('character-count')
+      expect(result.largeDiffRenderLimit?.characterCount).toBe(
+        oversizedText.length + 'original'.length
+      )
     })
 
     it('returns diff for tracked files in valid dot-dot-prefixed directories', async () => {
@@ -1097,6 +1166,56 @@ describe('GitHandler', () => {
           ref: 'refs/remotes/origin/other'
         })
       ).rejects.toThrow('Remote-tracking ref does not match the requested remote and branch.')
+    })
+
+    it('fetches GitLab merge request heads through the narrow fetch RPC', async () => {
+      const bareDir = mkdtempSync(path.join(tmpdir(), 'relay-gitlab-mr-bare-'))
+      try {
+        execFileSync('git', ['init', '--bare'], { cwd: bareDir, stdio: 'pipe' })
+        gitInit(tmpDir)
+        writeFileSync(path.join(tmpDir, 'mr.txt'), 'head')
+        gitCommit(tmpDir, 'mr head')
+        const expected = execFileSync('git', ['rev-parse', 'HEAD'], {
+          cwd: tmpDir,
+          encoding: 'utf-8'
+        }).trim()
+        execFileSync('git', ['remote', 'add', 'origin', bareDir], { cwd: tmpDir, stdio: 'pipe' })
+        execFileSync('git', ['push', 'origin', 'HEAD:refs/merge-requests/42/head'], {
+          cwd: tmpDir,
+          stdio: 'pipe'
+        })
+
+        await dispatcher.callRequest('git.fetchGitLabMergeRequestHead', {
+          worktreePath: tmpDir,
+          remote: 'origin',
+          mrIid: 42
+        })
+
+        const actual = execFileSync('git', ['rev-parse', 'FETCH_HEAD'], {
+          cwd: tmpDir,
+          encoding: 'utf-8'
+        }).trim()
+        expect(actual).toBe(expected)
+      } finally {
+        await fs.rm(bareDir, { recursive: true, force: true })
+      }
+    })
+
+    it('rejects invalid GitLab merge request head fetch requests', async () => {
+      await expect(
+        dispatcher.callRequest('git.fetchGitLabMergeRequestHead', {
+          worktreePath: tmpDir,
+          remote: '-origin',
+          mrIid: 42
+        })
+      ).rejects.toThrow('GitLab merge request fetch remote must not start with "-".')
+      await expect(
+        dispatcher.callRequest('git.fetchGitLabMergeRequestHead', {
+          worktreePath: tmpDir,
+          remote: 'origin',
+          mrIid: 0
+        })
+      ).rejects.toThrow('Invalid GitLab merge request fetch request.')
     })
 
     it('rethrows upstreamStatus failures that are not "no upstream configured"', async () => {

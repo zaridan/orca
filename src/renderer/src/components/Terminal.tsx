@@ -112,7 +112,12 @@ const EditorPanel = lazy(() => import('./editor/EditorPanel'))
 // feel responsive on a deliberate follow-up click; long enough to absorb the
 // trailing edge of a physical double-click (~150 ms on most hardware).
 const CLOSE_DIALOG_DEBOUNCE_MS = 200
-const EDITOR_TAB_CONTENT_TYPES = new Set<TabContentType>(['editor', 'diff', 'conflict-review'])
+const EDITOR_TAB_CONTENT_TYPES = new Set<TabContentType>([
+  'editor',
+  'diff',
+  'conflict-review',
+  'check-details'
+])
 
 type TerminalStoreSnapshot = ReturnType<typeof useAppStore.getState>
 
@@ -1449,6 +1454,16 @@ function Terminal(): React.JSX.Element | null {
         return
       }
 
+      // Cmd/Ctrl+Alt+W - close every editor file tab in the active worktree.
+      // Why: reuse the context-menu close-all path so pinned and dirty-file
+      // rules stay identical; terminal focus still honors shortcut policy.
+      if (!e.repeat && matchShortcut('tab.closeAll')) {
+        e.preventDefault()
+        notifyTerminalCapture('tab.closeAll')
+        handleCloseAllFiles()
+        return
+      }
+
       // Ctrl+Tab - quick-toggle to the previously focused tab in this group.
       if (
         matchesRecentTabSwitcherChord(e, shortcutPlatform, keybindings, {
@@ -1562,6 +1577,7 @@ function Terminal(): React.JSX.Element | null {
     handleCloseBrowserTab,
     closeBrowserTab,
     handleCloseFile,
+    handleCloseAllFiles,
     keybindings,
     mobileEmulatorEnabled,
     terminalShortcutPolicy

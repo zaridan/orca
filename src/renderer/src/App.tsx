@@ -24,6 +24,8 @@ import { SYNC_FIT_PANES_EVENT, TOGGLE_TERMINAL_PANE_EXPAND_EVENT } from '@/const
 import { syncZoomCSSVar } from '@/lib/ui-zoom'
 import { resolveLeftSidebarStyleVariables } from '@/lib/left-sidebar-appearance'
 import { canShowRightSidebarForView } from '@/lib/right-sidebar-visibility'
+import { resolveLeftTitlebarChromeLayout } from '@/lib/titlebar-left-chrome'
+import { shouldShowWorktreeCreationSurface } from '@/lib/worktree-creation-surface'
 import { buildAppFontFamily } from '@/lib/app-font-family'
 import { toast } from 'sonner'
 import { Toaster } from '@/components/ui/sonner'
@@ -243,6 +245,12 @@ const StatusBar = lazy(() =>
 const SetupGuideModal = lazy(() => import('./components/setup-guide/SetupGuideModal'))
 const FeatureWallModal = lazy(() => import('./components/feature-wall/FeatureWallModal'))
 const FeatureTipsModal = lazy(() => import('./components/feature-tips/FeatureTipsModal'))
+const AddRepoDialog = lazy(() => import('./components/sidebar/AddRepoDialog'))
+const NonGitFolderDialog = lazy(() => import('./components/sidebar/NonGitFolderDialog'))
+const AddProjectFromFolderDialog = lazy(
+  () => import('./components/sidebar/AddProjectFromFolderDialog')
+)
+const ProjectAddedDialog = lazy(() => import('./components/sidebar/ProjectAddedDialog'))
 const DeleteWorktreeDialog = lazy(() => import('./components/sidebar/DeleteWorktreeDialog'))
 const DictationController = lazy(() =>
   import('./components/dictation/DictationController').then((module) => ({
@@ -384,14 +392,12 @@ function App(): React.JSX.Element {
   const contextualToursAutoEligible = useAppStore((s) => s.contextualToursAutoEligible)
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const activePendingCreationId = useAppStore((s) => s.activePendingCreationId)
-  // Why: the creation loader is debounced — a fast create resolves before its
-  // entry's loaderVisible flips, so the content area keeps showing the prior
-  // workspace (or Landing) and never flashes a loader. Only a create still
-  // pending past the debounce gates the loader and hides the terminal.
-  const activeCreationLoaderVisible = useAppStore(
+  // Why: the creation surface owns the tab strip from the first pending frame.
+  // Gating it on the delayed loader flag made the tab bar swap in mid-create.
+  const activePendingCreationExists = useAppStore(
     (s) =>
-      s.activePendingCreationId != null &&
-      s.pendingWorktreeCreations[s.activePendingCreationId]?.loaderVisible === true
+      s.activePendingCreationId !== null &&
+      s.pendingWorktreeCreations[s.activePendingCreationId] !== undefined
   )
   // Why: App swaps the sidebar between workspace and landing layouts when the
   // active workspace is slept/deleted. Keep virtualized scroll memory above
@@ -428,9 +434,14 @@ function App(): React.JSX.Element {
   // and shutdown transitions where activeWorktreeId can briefly become null.
   const shouldMountTerminalWorkbench =
     activeWorktreeId !== null || hasMountedTerminalWorkbenchRef.current
-  // Why: visible worktree creation owns its faux tab strip; the previous
-  // workspace must stay mounted for retention without rendering real chrome.
-  const creationLayoutActive = activeView === 'terminal' && activeCreationLoaderVisible
+  // Why: visible worktree creation owns its faux tab strip from start to finish;
+  // the previous workspace must stay mounted for retention without rendering
+  // real chrome.
+  const creationLayoutActive = shouldShowWorktreeCreationSurface({
+    activeView,
+    activePendingCreationId,
+    hasActivePendingCreation: activePendingCreationExists
+  })
   const workspaceChromeActive =
     activeView === 'terminal' && activeWorktreeId !== null && !creationLayoutActive
   const terminalWorkbenchVisible =
@@ -529,6 +540,7 @@ function App(): React.JSX.Element {
       setFloatingTerminalOpenWithFocus(false)
     }
   }, [floatingTerminalEnabled, setFloatingTerminalOpenWithFocus])
+
   const sidebarWidth = useAppStore((s) => s.sidebarWidth)
   const sidebarOpen = useAppStore((s) => s.sidebarOpen)
   const groupBy = useAppStore((s) => s.groupBy)
@@ -575,10 +587,12 @@ function App(): React.JSX.Element {
   const titlebarLeftControlsRef = useRef<HTMLDivElement | null>(null)
   const [collapsedSidebarHeaderWidth, setCollapsedSidebarHeaderWidth] = useState(0)
   const [mountedLazyModalIds, setMountedLazyModalIds] = useState<Set<LazyModalId>>(() => new Set())
+  const [shouldMountAddRepoDialog, setShouldMountAddRepoDialog] = useState(false)
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null)
   const [onboardingLoaded, setOnboardingLoaded] = useState(false)
   const featureTipsPromptedThisSessionRef = useRef(false)
   const featureTipsSuppressedByOnboardingThisSessionRef = useRef(false)
+  const unmountAddRepoDialogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [featureTipCliInstalled, setFeatureTipCliInstalled] = useState<boolean | null>(null)
   const [onboardingSettingsDetour, setOnboardingSettingsDetour] = useState(false)
   const shouldRenderOnboarding = onboarding !== null && shouldShowOnboarding(onboarding)
@@ -589,6 +603,31 @@ function App(): React.JSX.Element {
     // it during render so onboarding can resume without a follow-up Effect pass.
     setOnboardingSettingsDetour(false)
   }
+
+  useEffect(() => {
+    if (activeModal === 'add-repo') {
+      if (unmountAddRepoDialogTimerRef.current) {
+        clearTimeout(unmountAddRepoDialogTimerRef.current)
+        unmountAddRepoDialogTimerRef.current = null
+      }
+      setShouldMountAddRepoDialog(true)
+      return
+    }
+    if (shouldMountAddRepoDialog && !unmountAddRepoDialogTimerRef.current) {
+      // Why: AddRepoDialog's close effect aborts in-flight clone/nested work.
+      // Keep one closed render, then remove hidden SSH/remote subscriptions.
+      unmountAddRepoDialogTimerRef.current = setTimeout(() => {
+        setShouldMountAddRepoDialog(false)
+        unmountAddRepoDialogTimerRef.current = null
+      }, 0)
+    }
+    return () => {
+      if (unmountAddRepoDialogTimerRef.current) {
+        clearTimeout(unmountAddRepoDialogTimerRef.current)
+        unmountAddRepoDialogTimerRef.current = null
+      }
+    }
+  }, [activeModal, shouldMountAddRepoDialog])
 
   // Subscribe to IPC push events
   useIpcEvents()
@@ -1280,9 +1319,17 @@ function App(): React.JSX.Element {
     activeView !== 'skills'
   // Why: Tasks/Landing keep the full titlebar only when the sidebar is
   // collapsed; with it open, mirror workspace view so titlebar-left sits flush
-  // above nav. Creation layout suppresses both titlebar forms.
+  // above nav. Creation layout suppresses the full-width titlebar.
   const stackedSidebarOpen =
     !workspaceChromeActive && !creationLayoutActive && showSidebar && sidebarOpen
+  // Why: visible creation keeps only the top-left window chrome; workspace tabs
+  // and right-sidebar chrome remain gated by workspaceChromeActive.
+  const leftTitlebarChromeLayout = resolveLeftTitlebarChromeLayout({
+    workspaceChromeActive,
+    stackedSidebarOpen,
+    creationLayoutActive,
+    sidebarOpen
+  })
   // Why: suppress right sidebar controls on full-page navigation surfaces
   // since those surfaces intentionally own the full content area.
   const showRightSidebarControls = !creationLayoutActive && canShowRightSidebarForView(activeView)
@@ -1596,7 +1643,13 @@ function App(): React.JSX.Element {
     })
     observer.observe(controls)
     return () => observer.disconnect()
-  }, [isFullScreen, settings?.showTitlebarAppName, showSidebar, workspaceChromeActive, sidebarOpen])
+  }, [
+    isFullScreen,
+    settings?.showTitlebarAppName,
+    showSidebar,
+    leftTitlebarChromeLayout.isFloating,
+    sidebarOpen
+  ])
 
   const resolvedMountedLazyModalIds = resolveMountedLazyModalIds(activeModal, mountedLazyModalIds)
   if (resolvedMountedLazyModalIds !== mountedLazyModalIds) {
@@ -1620,7 +1673,7 @@ function App(): React.JSX.Element {
     <div
       ref={titlebarLeftControlsRef}
       className={`flex h-full shrink-0 items-center${
-        workspaceChromeActive && !sidebarOpen ? ' w-max' : ' w-full'
+        leftTitlebarChromeLayout.isFloating ? ' w-max' : ' w-full'
       }`}
     >
       <div className="flex h-full items-center">
@@ -1802,7 +1855,7 @@ function App(): React.JSX.Element {
   return (
     <div
       ref={setAppRootNode}
-      className="flex flex-col h-screen w-screen overflow-hidden"
+      className="flex flex-col h-dvh w-screen overflow-hidden"
       style={
         {
           '--collapsed-sidebar-header-width': `${collapsedSidebarHeaderWidth}px`,
@@ -1847,7 +1900,7 @@ function App(): React.JSX.Element {
                 to the top of the window. Left titlebar controls move to a
                 header above the sidebar. Settings, landing, and the tasks
                 page keep the titlebar. */}
-                  {!workspaceChromeActive && !stackedSidebarOpen && !creationLayoutActive ? (
+                  {!leftTitlebarChromeLayout.shouldMount ? (
                     <div className="titlebar">
                       <div className="flex items-center shrink-0 mr-2">{titlebarLeftControls}</div>
                       {titlebarMainStrip}
@@ -1855,7 +1908,7 @@ function App(): React.JSX.Element {
                   ) : null}
                   <div className="flex flex-row flex-1 min-h-0 overflow-hidden">
                     {showSidebar ? (
-                      workspaceChromeActive || stackedSidebarOpen ? (
+                      leftTitlebarChromeLayout.shouldMount ? (
                         /* Why: left column wraps the sidebar with a titlebar-height
                      header above it. The header holds the same controls
                      (traffic lights, sidebar toggle, "Orca" title, agent badge)
@@ -1877,9 +1930,9 @@ function App(): React.JSX.Element {
                             // header sized to its own controls instead of the w-0
                             // sidebar wrapper.
                             className={`titlebar-left${
-                              sidebarOpen
-                                ? ''
-                                : ' titlebar-left-floating absolute top-0 left-0 z-10 w-max border-r border-border'
+                              leftTitlebarChromeLayout.isFloating
+                                ? ' titlebar-left-floating absolute top-0 left-0 z-10 w-max border-r border-border'
+                                : ''
                             }`}
                             style={{
                               // Why: custom sidebar appearances are scoped to the sidebar
@@ -2021,13 +2074,18 @@ function App(): React.JSX.Element {
                               {activeView === 'space' ? <WorkspaceSpacePage /> : null}
                               {activeView === 'mobile' ? <MobilePage /> : null}
                               {activeView === 'terminal' &&
-                              activeCreationLoaderVisible &&
+                              creationLayoutActive &&
                               activePendingCreationId ? (
-                                <WorktreeCreationPanel creationId={activePendingCreationId} />
+                                <WorktreeCreationPanel
+                                  creationId={activePendingCreationId}
+                                  reserveCollapsedSidebarHeaderSpace={
+                                    leftTitlebarChromeLayout.isFloating
+                                  }
+                                />
                               ) : null}
                               {activeView === 'terminal' &&
                               !activeWorktreeId &&
-                              !activeCreationLoaderVisible ? (
+                              !creationLayoutActive ? (
                                 <Landing />
                               ) : null}
                             </RecoverableRenderErrorBoundary>
@@ -2121,6 +2179,50 @@ function App(): React.JSX.Element {
                 <NewWorkspaceComposerModal />
               </RecoverableRenderErrorBoundary>
             ) : null}
+            <Suspense fallback={null}>
+              {shouldMountAddRepoDialog ? (
+                <RecoverableRenderErrorBoundary
+                  boundaryId="modal.add-repo"
+                  surface="modal"
+                  resetKey={activeModal === 'add-repo'}
+                  compact
+                >
+                  <AddRepoDialog />
+                </RecoverableRenderErrorBoundary>
+              ) : null}
+              {/* Why: Settings can start Add Project without mounting Sidebar,
+              so Add Project handoff dialogs must share the root host. */}
+              {activeModal === 'confirm-non-git-folder' ? (
+                <RecoverableRenderErrorBoundary
+                  boundaryId="modal.confirm-non-git-folder"
+                  surface="modal"
+                  resetKey
+                  compact
+                >
+                  <NonGitFolderDialog />
+                </RecoverableRenderErrorBoundary>
+              ) : null}
+              {activeModal === 'confirm-add-project-from-folder' ? (
+                <RecoverableRenderErrorBoundary
+                  boundaryId="modal.confirm-add-project-from-folder"
+                  surface="modal"
+                  resetKey
+                  compact
+                >
+                  <AddProjectFromFolderDialog />
+                </RecoverableRenderErrorBoundary>
+              ) : null}
+              {activeModal === 'project-added' ? (
+                <RecoverableRenderErrorBoundary
+                  boundaryId="modal.project-added"
+                  surface="modal"
+                  resetKey
+                  compact
+                >
+                  <ProjectAddedDialog />
+                </RecoverableRenderErrorBoundary>
+              ) : null}
+            </Suspense>
             {/* Why: root overlays can render Radix <Tooltip>s; keep them inside
             the shared provider so lazy surfaces mount safely from any entry point. */}
             <Suspense fallback={null}>

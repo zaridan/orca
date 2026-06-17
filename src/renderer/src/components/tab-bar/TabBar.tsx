@@ -67,6 +67,8 @@ import { Button } from '@/components/ui/button'
 import type { TabCreateEntryArgs } from './tab-create-entry-action'
 import { buildTabAgentLaunchOptions, orderTabLaunchAgents } from './tab-agent-launch-options'
 import { buildTabCreateMenuOptions, type TabCreateMenuOption } from './tab-create-menu-options'
+import { MobileEmulatorTabIntroCallout } from '../emulator-pane/MobileEmulatorTabIntroCallout'
+import { shouldShowMobileEmulatorTabIntro } from '../emulator-pane/mobile-emulator-tab-intro-visibility'
 import { translate } from '@/i18n/i18n'
 import { useTabStripOverflowNavigation } from './tab-strip-overflow-navigation'
 
@@ -259,6 +261,14 @@ function TabBarInner({
   const newFileShortcut = useShortcutLabel('tab.newMarkdown')
   const generatedTabTitlesEnabled = useAppStore((s) => s.settings?.tabAutoGenerateTitle === true)
   const mobileEmulatorEnabled = useAppStore((s) => s.settings?.mobileEmulatorEnabled !== false)
+  const persistedUIReady = useAppStore((s) => s.persistedUIReady)
+  const mobileEmulatorTabIntroDismissed = useAppStore((s) => s.mobileEmulatorTabIntroDismissed)
+  const showMobileEmulatorIntroCallout = shouldShowMobileEmulatorTabIntro({
+    persistedUIReady,
+    mobileEmulatorTabIntroDismissed,
+    mobileEmulatorEnabled,
+    isMacOs
+  })
   const gitStatusEntries = useAppStore(
     (s) => s.gitStatusByWorktree[worktreeId] ?? EMPTY_GIT_STATUS_ENTRIES
   )
@@ -689,6 +699,14 @@ function TabBarInner({
         {translate('auto.components.tab.bar.TabBar.4f327c8b3d', 'Open Markdown...')}
       </DropdownMenuItem>
     ) : null
+  const mobileEmulatorIntroMenuBlock =
+    showMobileEmulatorIntroCallout &&
+    !terminalOnly &&
+    isMacOs &&
+    mobileEmulatorEnabled &&
+    onNewSimulatorTab ? (
+      <MobileEmulatorTabIntroCallout onAction={() => setNewTabMenuOpen(false)} />
+    ) : null
   const standardCreateMenuItems =
     newTabMenuOrder === 'markdown-first' ? (
       <>
@@ -697,6 +715,7 @@ function TabBarInner({
         {defaultTerminalMenuItems}
         {newBrowserMenuItem}
         {newSimulatorMenuItem}
+        {mobileEmulatorIntroMenuBlock}
       </>
     ) : (
       <>
@@ -705,6 +724,7 @@ function TabBarInner({
         {newMarkdownMenuItem}
         {openMarkdownMenuItem}
         {newSimulatorMenuItem}
+        {mobileEmulatorIntroMenuBlock}
       </>
     )
 

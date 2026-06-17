@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto'
 import type { Page } from '@stablyai/playwright-test'
 import { test, expect } from './helpers/orca-app'
 import { waitForSessionReady } from './helpers/store'
-import { MAX_RENDERED_DIFF_LINES_PER_SIDE } from '../../src/renderer/src/components/editor/large-diff-render-limit'
+import { getLargeDiffRenderLimit } from '../../src/shared/large-diff-render-limit'
 
 type IsolatedLargeDiffRepo = {
   repoPath: string
@@ -112,11 +112,15 @@ test.describe('Large diff freeze repro', () => {
         `Invalid ORCA_LARGE_DIFF_REPRO_LINES: ${process.env.ORCA_LARGE_DIFF_REPRO_LINES}`
       )
     }
-    const expectFallback = lineCount > MAX_RENDERED_DIFF_LINES_PER_SIDE
+    const modifiedContent = buildLargeTypeScriptFile(lineCount)
+    const expectFallback = getLargeDiffRenderLimit({
+      originalContent: 'export const seed = 1\n',
+      modifiedContent
+    }).limited
 
     try {
       const worktreeId = await addAndActivateRepo(orcaPage, fixture.repoPath)
-      writeFileSync(fixture.absolutePath, buildLargeTypeScriptFile(lineCount))
+      writeFileSync(fixture.absolutePath, modifiedContent)
       const measurement = await orcaPage.evaluate(
         async ({ wId, absolutePath, relativePath, expectFallback }) => {
           const store = window.__store

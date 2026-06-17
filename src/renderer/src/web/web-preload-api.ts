@@ -485,20 +485,15 @@ function createWebPreloadApi(): Partial<PreloadApi> {
       getStatus: () =>
         Promise.resolve({
           localFileEnabled: false,
-          otlpEnabled: false,
           bundleEnabled: false,
-          otlpStatus: 'Unavailable on web',
           traceFilePath: '',
           traceFamilySize: 0
         }),
-      openTraceFolder: () => Promise.resolve(),
-      clearTraces: () => Promise.resolve(),
-      collectBundle: () => Promise.reject(new Error('Diagnostic bundles are unavailable on web.')),
-      openBundlePreview: () =>
-        Promise.reject(new Error('Diagnostic bundles are unavailable on web.')),
+      collectBundle: () => Promise.reject(new Error('Review files are unavailable on web.')),
+      openBundlePreview: () => Promise.reject(new Error('Review files are unavailable on web.')),
       discardBundlePreview: () => Promise.resolve(),
-      uploadBundle: () => Promise.reject(new Error('Diagnostic bundles are unavailable on web.')),
-      deleteBundle: () => Promise.reject(new Error('Diagnostic bundles are unavailable on web.'))
+      uploadBundle: () => Promise.reject(new Error('Sending diagnostics is unavailable on web.')),
+      deleteBundle: () => Promise.reject(new Error('Sent diagnostics are unavailable on web.'))
     },
     session: {
       // hostId mirrors the desktop bridge: omitted/'local' targets the existing
@@ -1012,6 +1007,7 @@ function createReposApi(): NonNullable<Partial<PreloadApi>['repos']> {
     update: async ({ repoId, updates }) =>
       (await callRuntimeResult<{ repo: Repo }>('repo.update', { repo: repoId, updates })).repo,
     pickFolder: () => Promise.resolve(null),
+    pickFolders: () => Promise.resolve([]),
     pickDirectory: () => Promise.resolve(null),
     clone: async ({ url, destination }) => {
       invalidateRuntimeWorktreeCaches()
@@ -1101,6 +1097,7 @@ function createWorktreesApi(): NonNullable<Partial<PreloadApi>['worktrees']> {
         repo: args.repoId,
         name: args.name,
         baseBranch: args.baseBranch,
+        compareBaseRef: args.compareBaseRef,
         branchNameOverride: args.branchNameOverride,
         linkedIssue: args.linkedIssue,
         linkedPR: args.linkedPR,
@@ -1132,18 +1129,20 @@ function createWorktreesApi(): NonNullable<Partial<PreloadApi>['worktrees']> {
         baseBranch
       })
     },
-    resolvePrBase: async ({ repoId, prNumber, headRefName, isCrossRepository }) =>
+    resolvePrBase: async ({ repoId, prNumber, headRefName, baseRefName, isCrossRepository }) =>
       callRuntimeResult('worktree.resolvePrBase', {
         repo: repoId,
         prNumber,
         headRefName,
+        baseRefName,
         isCrossRepository
       }),
-    resolveMrBase: async ({ repoId, mrIid, sourceBranch, isCrossRepository }) =>
+    resolveMrBase: async ({ repoId, mrIid, sourceBranch, targetBranch, isCrossRepository }) =>
       callRuntimeResult('worktree.resolveMrBase', {
         repo: repoId,
         mrIid,
         sourceBranch,
+        targetBranch,
         isCrossRepository
       }),
     remove: async ({ worktreeId, force }) => {
@@ -1976,6 +1975,9 @@ function createWebUiApi(): NonNullable<Partial<PreloadApi>['ui']> {
     onOpenSetupGuide: () => noopUnsubscribe,
     onOpenFeatureTour: () => noopUnsubscribe,
     onOpenCrashReport: () => noopUnsubscribe,
+    // No desktop main process to push state changes; the web client re-reads
+    // via ui.get on interaction instead.
+    onStateChanged: () => noopUnsubscribe,
     onToggleLeftSidebar: () => noopUnsubscribe,
     onToggleRightSidebar: () => noopUnsubscribe,
     onToggleWorktreePalette: () => noopUnsubscribe,
@@ -2001,6 +2003,7 @@ function createWebUiApi(): NonNullable<Partial<PreloadApi>['ui']> {
     onFocusBrowserAddressBar: () => noopUnsubscribe,
     onFindInBrowserPage: () => noopUnsubscribe,
     onReloadBrowserPage: () => noopUnsubscribe,
+    onBrowserHistoryNavigate: () => noopUnsubscribe,
     onZoomBrowserPage: () => noopUnsubscribe,
     onHardReloadBrowserPage: () => noopUnsubscribe,
     onCloseActiveTab: () => noopUnsubscribe,
@@ -2012,7 +2015,6 @@ function createWebUiApi(): NonNullable<Partial<PreloadApi>['ui']> {
     onCtrlTabKeyUp: () => noopUnsubscribe,
     onToggleStatusBar: () => noopUnsubscribe,
     onDictationKeyDown: () => noopUnsubscribe,
-    onExportPdfRequested: () => noopUnsubscribe,
     onActivateWorktree: () => noopUnsubscribe,
     onCreateTerminal: () => noopUnsubscribe,
     onRequestTerminalCreate: () => noopUnsubscribe,

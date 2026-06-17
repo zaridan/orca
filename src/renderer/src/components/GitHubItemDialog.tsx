@@ -3397,6 +3397,7 @@ function PRActionsPanel({
         sourceContext,
         prNumber: item.number,
         enabled,
+        method: enabled ? mergeMethods.defaultMethod : undefined,
         prRepo: item.prRepo ?? null
       })
       if (!result.ok) {

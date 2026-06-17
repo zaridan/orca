@@ -1,7 +1,8 @@
 /* eslint-disable max-lines -- Why: the right sidebar owns activity-bar visibility, routing, and resize behavior as one interaction surface; splitting the tab table away would make hidden-tab fallbacks harder to audit. */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Plug, Files, GitBranch, ListChecks, PanelRight, Workflow } from 'lucide-react'
 import { useAppStore } from '@/store'
+import type { ActiveRightSidebarTab } from '@/store/slices/editor'
 import { useRepoById } from '@/store/selectors'
 import { cn } from '@/lib/utils'
 import { useSidebarResize } from '@/hooks/useSidebarResize'
@@ -99,6 +100,13 @@ function RightSidebarInner(): React.JSX.Element {
         folderOnly: true
       },
       {
+        id: 'pr-checks',
+        icon: ListChecks,
+        title: translate('auto.components.right.sidebar.index.parentPrChecks', 'PR Checks'),
+        shortcut: '',
+        folderOnly: true
+      },
+      {
         id: 'source-control',
         icon: GitBranch,
         title: translate('auto.components.right.sidebar.index.0314901467', 'Source Control'),
@@ -133,14 +141,32 @@ function RightSidebarInner(): React.JSX.Element {
     [activityItems, isFolder, isFolderWorkspace, isSshRepo]
   )
 
+  const rememberedFolderTabByWorkspaceKeyRef = useRef<Record<string, ActiveRightSidebarTab>>({})
+  const activeFolderWorkspaceKey = isFolderWorkspace ? (activeWorktreeId ?? null) : null
+
   // If the active tab is hidden (e.g. switched from a folder workspace to a git
-  // worktree), render the first visible tab without overwriting the remembered
-  // tab. Back/forward can then restore folder-only tabs when the folder is active
-  // again.
+  // worktree), render a visible fallback without overwriting the stored route.
+  // Folder workspaces keep a session-local effective-tab memory so a PR Checks
+  // row can open a child Checks tab without erasing the parent's overview tab.
   const normalizedActiveTab = normalizeRightSidebarRoute(rightSidebarTab).rightSidebarTab
-  const effectiveTab = visibleItems.some((item) => item.id === normalizedActiveTab)
+  const rememberedFolderTab = activeFolderWorkspaceKey
+    ? rememberedFolderTabByWorkspaceKeyRef.current[activeFolderWorkspaceKey]
+    : null
+  const visibleNormalizedTab = visibleItems.some((item) => item.id === normalizedActiveTab)
+  const visibleRememberedFolderTab =
+    rememberedFolderTab && visibleItems.some((item) => item.id === rememberedFolderTab)
+      ? rememberedFolderTab
+      : null
+  const effectiveTab = visibleNormalizedTab
     ? normalizedActiveTab
-    : visibleItems[0].id
+    : (visibleRememberedFolderTab ?? visibleItems[0].id)
+
+  useEffect(() => {
+    if (!activeFolderWorkspaceKey || !visibleItems.some((item) => item.id === effectiveTab)) {
+      return
+    }
+    rememberedFolderTabByWorkspaceKeyRef.current[activeFolderWorkspaceKey] = effectiveTab
+  }, [activeFolderWorkspaceKey, effectiveTab, visibleItems])
   const selectActivityTab = (tab: typeof effectiveTab): void => {
     if (tab === 'explorer') {
       showRightSidebarFiles()

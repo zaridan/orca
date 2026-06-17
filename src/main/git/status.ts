@@ -44,6 +44,7 @@ import {
 } from '../../shared/git-discard-path-safety'
 import { resolveWorktreeAddBaseRef } from '../../shared/worktree-base-ref'
 import { hasWorktreeBaseCommitRef } from './worktree-base-ref-probe'
+import { getLargeDiffRenderLimit } from '../../shared/large-diff-render-limit'
 
 const MAX_GIT_SHOW_BYTES = 10 * 1024 * 1024
 const MAX_STAGED_COMMIT_CONTEXT_BYTES = MAX_GIT_SHOW_BYTES
@@ -286,7 +287,9 @@ function rememberEffectiveUpstreamStatus(
   now: number,
   probedSameNameOriginRef: boolean
 ): void {
-  if (status.hasUpstream) {
+  // Why: hasConfiguredPushTarget gates a write action. Re-probe it each poll
+  // rather than keeping a stale positive target after branch config changes.
+  if (status.hasUpstream || status.hasConfiguredPushTarget) {
     effectiveUpstreamStatusCache.delete(cacheKey)
     return
   }
@@ -979,7 +982,10 @@ async function readGitBlobAtIndexPath(
     })
 
     return { ...bufferToBlob(stdout, filePath), exists: true }
-  } catch {
+  } catch (error) {
+    if (isMaxBufferOverflowError(error)) {
+      return { content: '', isBinary: true, exists: true }
+    }
     return { content: '', isBinary: false, exists: false }
   }
 }
@@ -1001,7 +1007,10 @@ async function readGitBlobAtOidPath(
     )
 
     return { ...bufferToBlob(stdout, filePath), exists: true }
-  } catch {
+  } catch (error) {
+    if (isMaxBufferOverflowError(error)) {
+      return { content: '', isBinary: true, exists: true }
+    }
     return { content: '', isBinary: false, exists: false }
   }
 }
@@ -1063,6 +1072,20 @@ function buildDiffResult(
       // that legacy flag for PDFs until the wider contract is renamed.
       ...(mimeType ? { isImage: true, mimeType } : {})
     } as GitDiffResult
+  }
+
+  // Why: if the diff exceeds safe render limits, avoid sending large text
+  // payloads and return metadata so the renderer can show fallback UI.
+  const largeDiffRenderLimit = getLargeDiffRenderLimit({ originalContent, modifiedContent })
+  if (largeDiffRenderLimit.limited) {
+    return {
+      kind: 'text',
+      originalContent: '',
+      modifiedContent: '',
+      originalIsBinary: false,
+      modifiedIsBinary: false,
+      largeDiffRenderLimit
+    }
   }
 
   return {

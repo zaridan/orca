@@ -171,6 +171,7 @@ import {
 import { normalizeTerminalCursorStyleDefault } from '../shared/terminal-cursor-style-settings'
 import { normalizeUiLanguage } from '../shared/ui-language'
 import { normalizeBrowserPageZoomLevel } from '../shared/browser-page-zoom'
+import { persistedUIValuesEqual } from '../shared/persisted-ui-equality'
 import {
   normalizeFolderWorkspaceName,
   normalizeFolderWorkspaces
@@ -832,8 +833,14 @@ function remapLegacyOnboardingLastCompletedStep(
   lastCompletedStep: number,
   raw: Record<string, unknown>
 ): number {
-  if (raw.outcome === 'completed' && lastCompletedStep >= ONBOARDING_FINAL_STEP) {
+  if (raw.outcome === 'completed' && lastCompletedStep >= 4) {
     return ONBOARDING_FINAL_STEP
+  }
+  // Why: v3 was the four-step flow before the Windows terminal preference
+  // page. Step 4 already meant notifications, so open progress should resume
+  // there rather than treating it as the newly inserted Windows step.
+  if (raw.flowVersion === 3) {
+    return Math.min(4, lastCompletedStep)
   }
   // Why: v2 was the five-step flow; missing/older versions were seven-step
   // data where step 4 was removed agent setup, not completed integrations.
@@ -2167,6 +2174,7 @@ export class Store {
       originWebContentsId?: number
     ) => void
   >()
+  private uiChangeListeners = new Set<(ui: PersistedState['ui']) => void>()
 
   constructor() {
     const loaded = this.load()
@@ -4386,6 +4394,27 @@ export class Store {
     }
   }
 
+  // Why: UI view-state (group/sort/filters etc.) is written from both the
+  // desktop renderer and mobile (via the ui.set RPC) into one shared store.
+  // Without this, a mobile change persisted but the desktop renderer — which
+  // hydrates UI state once — never learned of it, breaking bi-directional sync.
+  onUIChanged(listener: (ui: PersistedState['ui']) => void): () => void {
+    this.uiChangeListeners.add(listener)
+    return () => {
+      this.uiChangeListeners.delete(listener)
+    }
+  }
+
+  private notifyUIChanged(): void {
+    if (this.uiChangeListeners.size === 0) {
+      return
+    }
+    const ui = this.getUI()
+    for (const listener of this.uiChangeListeners) {
+      listener(ui)
+    }
+  }
+
   updateSettings(
     updates: Partial<GlobalSettings>,
     options: { notifyListeners?: boolean; originWebContentsId?: number } = {}
@@ -4548,6 +4577,7 @@ export class Store {
 
   updateUI(updates: Partial<PersistedState['ui']>): void {
     const sanitizedUpdates = stripMainOwnedTelemetryMarkerFromUI(updates)
+    const previousUI = this.getUI()
     const currentUI = {
       ...getDefaultUIState(),
       ...stripMainOwnedTelemetryMarkerFromUI(this.state.ui)
@@ -4568,7 +4598,7 @@ export class Store {
               this.state.ui?.rightSidebarExplorerView,
               nextRightSidebarTab
             )
-    this.state.ui = {
+    const nextUI = {
       ...currentUI,
       ...sanitizedUpdates,
       groupBy: sanitizedUpdates.groupBy
@@ -4646,7 +4676,12 @@ export class Store {
             )
           : normalizeFeatureInteractions(this.state.ui?.featureInteractions)
     }
+    if (persistedUIValuesEqual(previousUI, nextUI)) {
+      return
+    }
+    this.state.ui = nextUI
     this.scheduleSave()
+    this.notifyUIChanged()
   }
 
   recordFeatureInteraction(id: FeatureInteractionId): PersistedState['ui'] {

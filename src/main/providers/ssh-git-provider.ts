@@ -363,6 +363,19 @@ export class SshGitProvider implements IGitProvider {
     await this.mux.request('git.abortRebase', { worktreePath })
   }
 
+  async checkoutBranch(worktreePath: string, branch: string): Promise<void> {
+    await this.mux.request('git.checkout', { worktreePath, branch })
+  }
+
+  async listLocalBranches(
+    worktreePath: string
+  ): Promise<{ current: string | null; branches: string[] }> {
+    return (await this.mux.request('git.localBranches', { worktreePath })) as {
+      current: string | null
+      branches: string[]
+    }
+  }
+
   async getBranchCompare(worktreePath: string, baseRef: string): Promise<GitBranchCompareResult> {
     return (await this.mux.request('git.branchCompare', {
       worktreePath,
@@ -441,6 +454,18 @@ export class SshGitProvider implements IGitProvider {
       remote,
       branch,
       ref
+    })
+  }
+
+  async fetchGitLabMergeRequestHead(
+    worktreePath: string,
+    remote: string,
+    mrIid: number
+  ): Promise<void> {
+    await this.mux.request('git.fetchGitLabMergeRequestHead', {
+      worktreePath,
+      remote,
+      mrIid
     })
   }
 

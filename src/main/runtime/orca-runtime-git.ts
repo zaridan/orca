@@ -43,6 +43,8 @@ import {
   stageFile,
   unstageFile
 } from '../git/status'
+import { checkoutBranch, listLocalBranches } from '../git/checkout'
+import type { RuntimeGitCheckoutResult, RuntimeGitLocalBranches } from '../../shared/runtime-types'
 import { getHistory as getGitHistory } from '../git/history'
 import { getUpstreamStatus } from '../git/upstream'
 import { gitFastForward, gitFetch, gitPull, gitPullRebaseFromBase, gitPush } from '../git/remote'
@@ -69,6 +71,8 @@ import { prepareLocalCommitMessageAgentEnv } from '../text-generation/commit-mes
 import { getPullRequestDraftContext } from '../text-generation/pull-request-context'
 import { normalizeRuntimeRelativePath } from './runtime-relative-paths'
 import { gitExecFileAsync } from '../git/runner'
+import { resolveHostedReviewBodyForGeneration } from '../source-control/pull-request-template'
+import type { HostedReviewProvider } from '../../shared/hosted-review'
 
 export type ResolvedRuntimeGitWorktree = Worktree & { git: GitWorktreeInfo }
 type RuntimeCommitMessageSettingsOverride = Partial<
@@ -211,6 +215,35 @@ export class RuntimeGitCommands {
     }
     await abortRebase(target.worktree.path)
     return { ok: true }
+  }
+
+  async checkoutRuntimeGitBranch(
+    worktreeSelector: string,
+    branch: string
+  ): Promise<RuntimeGitCheckoutResult> {
+    const target = await this.host.resolveRuntimeGitTarget(worktreeSelector)
+    const provider = target.connectionId ? getSshGitProvider(target.connectionId) : null
+    if (target.connectionId) {
+      if (!provider) {
+        throw new Error(SSH_GIT_PROVIDER_UNAVAILABLE_MESSAGE)
+      }
+      await provider.checkoutBranch(target.worktree.path, branch)
+      return { ok: true, branch }
+    }
+    await checkoutBranch(target.worktree.path, branch)
+    return { ok: true, branch }
+  }
+
+  async listRuntimeGitLocalBranches(worktreeSelector: string): Promise<RuntimeGitLocalBranches> {
+    const target = await this.host.resolveRuntimeGitTarget(worktreeSelector)
+    const provider = target.connectionId ? getSshGitProvider(target.connectionId) : null
+    if (target.connectionId) {
+      if (!provider) {
+        throw new Error(SSH_GIT_PROVIDER_UNAVAILABLE_MESSAGE)
+      }
+      return provider.listLocalBranches(target.worktree.path)
+    }
+    return listLocalBranches(target.worktree.path)
   }
 
   async getRuntimeGitDiff(
@@ -549,7 +582,14 @@ export class RuntimeGitCommands {
 
   async generateRuntimePullRequestFields(
     worktreeSelector: string,
-    input: { base: string; title: string; body: string; draft: boolean },
+    input: {
+      base: string
+      title: string
+      body: string
+      draft: boolean
+      provider?: HostedReviewProvider
+      useTemplate?: boolean
+    },
     settingsOverride?: RuntimeCommitMessageSettingsOverride
   ): Promise<GeneratePullRequestFieldsResult> {
     const target = await this.host.resolveRuntimeGitTarget(worktreeSelector)
@@ -581,11 +621,18 @@ export class RuntimeGitCommands {
     }
     let context: Awaited<ReturnType<typeof getPullRequestDraftContext>>
     try {
+      const currentBody = await resolveHostedReviewBodyForGeneration({
+        body: input.body,
+        repoPath: target.worktree.path,
+        connectionId: target.connectionId,
+        provider: input.provider,
+        useTemplate: input.useTemplate
+      })
       context = target.connectionId
         ? await getPullRequestDraftContext((argv) => provider!.exec(argv, target.worktree.path), {
             base: input.base,
             currentTitle: input.title,
-            currentBody: input.body,
+            currentBody,
             currentDraft: input.draft
           })
         : await getPullRequestDraftContext(
@@ -593,7 +640,7 @@ export class RuntimeGitCommands {
             {
               base: input.base,
               currentTitle: input.title,
-              currentBody: input.body,
+              currentBody,
               currentDraft: input.draft
             }
           )

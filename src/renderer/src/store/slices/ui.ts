@@ -68,6 +68,7 @@ import {
   DEFAULT_BROWSER_PAGE_ZOOM_LEVEL,
   normalizeBrowserPageZoomLevel
 } from '../../../../shared/browser-page-zoom'
+import { persistedUIValuesEqual } from '../../../../shared/persisted-ui-equality'
 import {
   normalizeExecutionHostOrder,
   normalizeExecutionHostScope,
@@ -437,6 +438,12 @@ function sanitizeWorkspaceCleanupDismissals(
   return out
 }
 
+function hydratedUIPartialMatchesState(state: AppState, hydrated: Partial<UISlice>): boolean {
+  return Object.entries(hydrated).every(([key, value]) =>
+    persistedUIValuesEqual(state[key as keyof AppState], value)
+  )
+}
+
 function agentKindForTarget(agentType: Parameters<typeof agentTypeToIconAgent>[0]) {
   const tuiAgent = agentTypeToIconAgent(agentType)
   return tuiAgent ? tuiAgentToAgentKind(tuiAgent) : 'other'
@@ -624,6 +631,7 @@ export type UISlice = {
     // Why: project-first workspace creation resolves through these when present,
     // while old drafts can keep using only repoId during the additive migration.
     projectId?: string | null
+    projectGroupId?: string | null
     hostId?: ExecutionHostId | null
     projectHostSetupId?: string | null
     name: string
@@ -650,6 +658,9 @@ export type UISlice = {
     // Why: repo-scoped start ref selected via the "Start from" picker.
     // Absent means "use the repo's effective base ref".
     baseBranch?: string
+    // Why: review-created worktrees can start from a head ref/SHA while Source
+    // Control must compare against the provider target branch.
+    compareBaseRef?: string
   } | null
   openTaskPage: (
     data?: UISlice['taskPageData'],
@@ -753,6 +764,10 @@ export type UISlice = {
   markSetupGuideBrowserMilestoneMigrated: (legacyComplete: boolean) => void
   browserImportHintHidden: boolean
   setBrowserImportHintHidden: (hidden: boolean) => void
+  mobileEmulatorTabIntroDismissed: boolean
+  dismissMobileEmulatorTabIntro: () => void
+  mobileEmulatorAgentSetupDismissed: boolean
+  dismissMobileEmulatorAgentSetup: () => void
   projectOrderManualDefaultNoticeDismissed: boolean
   dismissProjectOrderManualDefaultNotice: () => void
   usageEmptyStateDismissed: boolean
@@ -1778,6 +1793,24 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       window.api.ui.set({ browserImportHintHidden: hidden }).catch(console.error)
       return { browserImportHintHidden: hidden }
     }),
+  mobileEmulatorTabIntroDismissed: false,
+  dismissMobileEmulatorTabIntro: () =>
+    set((s) => {
+      if (s.mobileEmulatorTabIntroDismissed) {
+        return s
+      }
+      window.api.ui.set({ mobileEmulatorTabIntroDismissed: true }).catch(console.error)
+      return { mobileEmulatorTabIntroDismissed: true }
+    }),
+  mobileEmulatorAgentSetupDismissed: false,
+  dismissMobileEmulatorAgentSetup: () =>
+    set((s) => {
+      if (s.mobileEmulatorAgentSetupDismissed) {
+        return s
+      }
+      window.api.ui.set({ mobileEmulatorAgentSetupDismissed: true }).catch(console.error)
+      return { mobileEmulatorAgentSetupDismissed: true }
+    }),
   projectOrderManualDefaultNoticeDismissed: true,
   dismissProjectOrderManualDefaultNotice: () =>
     set((s) => {
@@ -1802,7 +1835,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   // collapsed state from one mode is meaningless in another. Clearing
   // also prevents unbounded accumulation of stale keys across mode switches.
   setGroupBy: (g) => {
-    window.api.ui.set({ collapsedGroups: [] }).catch(console.error)
+    window.api.ui.set({ groupBy: g, collapsedGroups: [] }).catch(console.error)
     set({ groupBy: g, collapsedGroups: new Set<string>() })
   },
 
@@ -2129,7 +2162,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         ui.rightSidebarTab,
         ui.rightSidebarExplorerView
       )
-      return {
+      const hydrated = {
         // Why: persisted UI data comes from disk and may be stale, corrupted,
         // or manually edited. Clamp widths during hydration so invalid values
         // cannot push the renderer into broken layouts before the user drags a
@@ -2230,6 +2263,8 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         setupGuideBrowserMilestoneLegacyComplete:
           ui.setupGuideBrowserMilestoneLegacyComplete === true,
         browserImportHintHidden: ui.browserImportHintHidden === true,
+        mobileEmulatorTabIntroDismissed: ui.mobileEmulatorTabIntroDismissed === true,
+        mobileEmulatorAgentSetupDismissed: ui.mobileEmulatorAgentSetupDismissed === true,
         projectOrderManualDefaultNoticeDismissed:
           ui.projectOrderManualDefaultNoticeDismissed === true,
         // Why: default false when undefined so existing users still see the CTA;
@@ -2250,6 +2285,9 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         ),
         persistedUIReady: true
       }
+      // Why: main rebroadcasts UI written by any client. Identical hydration must
+      // not create fresh references that App's debounced writer echoes to main.
+      return hydratedUIPartialMatchesState(s, hydrated) ? s : hydrated
     }),
 
   updateStatus: { state: 'idle' },

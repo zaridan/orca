@@ -28,6 +28,7 @@ import { useWarpThemeImport } from './useWarpThemeImport'
 import { RepositoryPane } from './RepositoryPane'
 import { GitPane } from './GitPane'
 import { CommitMessageAiPane } from './CommitMessageAiPane'
+import { GitProviderApiBudgetPane } from './GitProviderApiBudgetPane'
 import { NotificationsPane } from './NotificationsPane'
 import { VoicePane } from './VoicePane'
 import { SshPane } from './SshPane'
@@ -1172,6 +1173,7 @@ function Settings(): React.JSX.Element {
                         customPromptDiscardSignal={sourceControlAiPromptDiscardSignal}
                         settingsSearchQuery={settingsSearchQuery}
                       />
+                      <GitProviderApiBudgetPane settingsSearchQuery={settingsSearchQuery} />
                     </>
                   ) : null}
                 </SettingsSection>

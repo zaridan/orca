@@ -22,33 +22,7 @@ import { LargeDiffFallback } from './LargeDiffFallback'
 import { getLargeDiffRenderLimit } from './large-diff-render-limit'
 import { useDiffViewerLargeDiffLifecycle } from './useDiffViewerLargeDiffLifecycle'
 import { getDiffViewerLargeDiffSaveAction } from './diff-viewer-large-diff-save-action'
-
-type DiffViewerProps = {
-  modelKey: string
-  originalModelKey?: string
-  modifiedModelKey?: string
-  originalContent: string
-  modifiedContent: string
-  language: string
-  filePath: string
-  relativePath: string
-  sideBySide: boolean
-  editable?: boolean
-  // Why: optional because DiffViewer is also used by GitHubItemDialog for PR
-  // review, where there is no local worktree to attach comments to. When
-  // omitted, the per-line comment decorator is skipped.
-  worktreeId?: string
-  onAddLineComment?: (args: {
-    lineNumber: number
-    startLine?: number
-    body: string
-  }) => Promise<boolean>
-  commentableLineNumbers?: readonly number[]
-  addLineCommentLabel?: string
-  addLineCommentPlaceholder?: string
-  onContentChange?: (content: string) => void
-  onSave?: (content: string) => void
-}
+import type { DiffViewerProps } from './diff-viewer-props'
 
 export default function DiffViewer({
   modelKey,
@@ -67,7 +41,9 @@ export default function DiffViewer({
   addLineCommentLabel,
   addLineCommentPlaceholder,
   onContentChange,
-  onSave
+  onSave,
+  largeDiffRenderLimit,
+  largeDiffSaveContentAvailable
 }: DiffViewerProps): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const editorFontZoomLevel = useAppStore((s) => s.editorFontZoomLevel)
@@ -106,8 +82,8 @@ export default function DiffViewer({
   } | null>(null)
 
   const renderLimit = useMemo(
-    () => getLargeDiffRenderLimit({ originalContent, modifiedContent }),
-    [originalContent, modifiedContent]
+    () => largeDiffRenderLimit ?? getLargeDiffRenderLimit({ originalContent, modifiedContent }),
+    [largeDiffRenderLimit, originalContent, modifiedContent]
   )
   const hasLineCommentAction = Boolean(worktreeId || onAddLineComment)
 
@@ -437,7 +413,12 @@ export default function DiffViewer({
           <LargeDiffFallback
             filePath={relativePath}
             renderLimit={renderLimit}
-            action={getDiffViewerLargeDiffSaveAction({ editable, modifiedContent, onSave })}
+            action={getDiffViewerLargeDiffSaveAction({
+              editable,
+              modifiedContent,
+              onSave,
+              saveContentAvailable: largeDiffSaveContentAvailable
+            })}
           />
         ) : (
           <DiffEditor
