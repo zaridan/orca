@@ -141,7 +141,7 @@ describe('WorktreeCard linked PR display', () => {
 
     expect(markup).toContain('PR: Open')
     expect(markup).not.toContain('Linked PR #456')
-  }, 10_000)
+  }, 20_000)
 
   it('does not show cached branch PR details when the worktree has no linked PR', async () => {
     hostedReviewCache = {

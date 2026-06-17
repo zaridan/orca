@@ -27,7 +27,7 @@
 //
 // Per-attribute length capping is deliberately NOT applied here. The spec
 // argues against it (see §The redactor "No per-attribute length cap"):
-// envelope-level bounds (10 MB × 10 file rotation; 10 MB Mode-3 upload cap)
+// envelope-level bounds (10 MB × 10 file rotation; 4 MiB bundle upload cap)
 // already cover the worst case, and a per-attribute truncation would eat the
 // tail of long stack chains, which is the most diagnostic part. Spans that
 // dump a multi-MB blob into one attribute are a call-site bug to fix at the

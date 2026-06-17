@@ -37,6 +37,28 @@ describe('agent process recognition', () => {
     expect(isExpectedAgentProcess('powershell.exe', 'claude')).toBe(false)
   })
 
+  it('does not recognize Claude print-mode hook subprocesses as interactive agents', () => {
+    expect(
+      recognizeAgentProcessFromCommandLine(
+        'claude --print --model haiku "Analyze this conversation and determine: Does the assistant have more autonomous work to do RIGHT NOW?"'
+      )
+    ).toBeNull()
+    expect(
+      recognizeAgentProcessFromCommandLine(
+        String.raw`/home/dev/.local/bin/claude -p "Context: This summary will be shown in a list"`
+      )
+    ).toBeNull()
+    expect(
+      recognizeAgentProcessFromCommandLine(
+        String.raw`C:\Users\dev\AppData\Roaming\npm\claude.exe --output-format=json "hook prompt"`
+      )
+    ).toBeNull()
+    expect(recognizeAgentProcessFromCommandLine('claude --resume abc123')).toEqual({
+      agent: 'claude',
+      processName: 'claude'
+    })
+  })
+
   it('recognizes Command Code without classifying Windows cmd.exe as an agent', () => {
     expect(recognizeAgentProcess('command-code')).toEqual({
       agent: 'command-code',

@@ -1,11 +1,9 @@
 import { getTuiAgentDetectCommands, TUI_AGENT_CONFIG } from './tui-agent-config'
 import type { AgentType } from './agent-status-types'
 import type { TuiAgent } from './types'
+import { isClaudeHeadlessOneShotCommand } from './claude-headless-command'
 
-export type RecognizedAgentProcess = {
-  agent: TuiAgent
-  processName: string
-}
+export type RecognizedAgentProcess = { agent: TuiAgent; processName: string }
 
 const PROCESS_EXTENSION_RE = /\.(?:exe|cmd|bat|ps1)$/i
 const INTERPRETER_SCRIPT_EXTENSION_RE = /\.(?:js|mjs|cjs)$/i
@@ -300,6 +298,11 @@ export function recognizeAgentProcessFromCommandLine(
   const tokens = tokenizeCommandLine(commandLine)
   const firstNormalized = normalizeProcessName(tokens[0])
   const directRecognition = recognizeAgentProcess(tokens[0])
+  // Why: Claude Code plugin hooks spawn `claude --print`/JSON one-shots for
+  // internal analysis; those should not surface as long-running agent sessions.
+  if (directRecognition?.agent === 'claude' && isClaudeHeadlessOneShotCommand(tokens)) {
+    return null
+  }
   if (directRecognition) {
     return directRecognition
   }

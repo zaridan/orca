@@ -509,7 +509,10 @@
         "b2ead86962": "无法解析 PR 基础引用。",
         "a9ff236145": "部分附件无法上传。",
         "3db83fc58a": "没有可用于附件的远程项目路径。",
-        "ba6cb77082": "无法连接到项目。"
+        "ba6cb77082": "无法连接到项目。",
+        "chooseOrAddProjectBeforeWorkspace": "创建工作区前，请选择或添加项目。",
+        "folderWorkspaceCreateFailedTitle": "文件夹工作区创建失败",
+        "folderWorkspaceCreateFailedMessage": "无法创建文件夹工作区。请查看上方错误详情，然后重试。"
       },
       "useGlobalFileDrop": {
         "38c9f034ff": "无法上传删除的文件。",
@@ -1034,6 +1037,9 @@
         "7711ad5122": "本地设置命令",
         "e5db1b0419": "组合设置命令",
         "addProjectBeforeWorkspace": "在创建工作区之前添加项目。",
+        "connectProjectFirst": "请先连接此项目",
+        "connectSourceLookup": "连接",
+        "reconnectSourceLookup": "重新连接",
         "sshNotConnected": "SSH 未连接",
         "connectingSsh": "正在连接 SSH...",
         "sshAuthenticationFailed": "SSH 身份验证失败",
@@ -1253,7 +1259,7 @@
         "92b0f9d921": "已通过身份验证并重试。",
         "cd8c34aac1": "gh",
         "cf82170065": "无法为该 repo 加注星标。确保",
-        "30c36231c1": "如果 Orca 节省了您的时间，那么 GitHub 之星就会大有帮助。它可以帮助其他开发人员发现该项目并保持团队进行改进的动力。",
+        "30c36231c1": "Orca 是开源项目。如果它今天帮到了你，GitHub 星标会帮助其他开发者找到它。",
         "b5e685e4d9": "关闭",
         "5f6df21046": "喜欢 Orca 吗？",
         "2d67b6c849": "在 GitHub 上加星标",
@@ -1262,7 +1268,7 @@
         "996bf76e46": "在浏览器中打开 GitHub 以完成操作。",
         "d32015fec7": "正在打开...",
         "157bb5ecbb": "打开 GitHub",
-        "8c967b4d15": "暂时不要",
+        "8c967b4d15": "稍后",
         "73dfd4eb8d": "不再询问"
       },
       "TaskPage": {
@@ -2224,7 +2230,14 @@
             "ebd2fa844d": "关闭",
             "1d1a7a9c1f": "取消",
             "6b9a6975f8": "terminal 仍有正在运行的进程。如果关闭 terminal，该进程将被终止。",
-            "78b79d854d": "关闭 Terminal？"
+            "78b79d854d": "关闭 Terminal？",
+            "stop_agent_title": "Stop this agent?",
+            "stop_command_title": "Stop running command?",
+            "stop_agent_description": "Closing this terminal will stop the agent's current work.",
+            "stop_command_description": "Closing this terminal will stop the command running inside it.",
+            "dont_ask_again": "Don't ask again for running terminals",
+            "stop_agent_confirm": "Stop Agent",
+            "stop_command_confirm": "Stop and Close"
           },
           "MobileDriverOverlay": {
             "c6460cf584": "收回",
@@ -2455,7 +2468,7 @@
             "39676a184c": "打开任何文件、URL、Agent..."
           },
           "TabBarQuickCommandsButton": {
-            "a2c7a33831": "添加命令",
+            "a2c7a33831": "命令",
             "20bbd75896": "无命令",
             "b82e237a4b": "更快捷的命令",
             "85482c57bc": "运行快速命令",
@@ -2686,7 +2699,7 @@
             "97957ad3a3": "连接 AI 提供商账户，即可实时查看使用量并在账户间快速切换。",
             "9a542f46c7": "从状态栏隐藏",
             "84c3b15dca": "Agent 用量限制",
-            "d663430cf9": "连接AI账户查看使用情况"
+            "d663430cf9": "设置用量跟踪"
           },
           "UpdateStatusSegment": {
             "5cd13105a3": "更新失败。单击以展开。",
@@ -4045,7 +4058,7 @@
           "create": "创建工作区",
           "sourceProject": "任务来源",
           "chooseSourceProject": "选择任务来源",
-          "createStart": "Create & Start Agent"
+          "createFailed": "文件夹工作区创建失败。"
         },
         "ProjectOrderManualDefaultNotice": {
           "a1f4c2d8e0": "手动项目排序现在是默认设置",
@@ -6022,7 +6035,9 @@
           "af0c3b6e39": "在 Windows 上，右键单击将剪贴板粘贴到 terminal 中。使用 Ctrl+右键单击打开上下文菜单。",
           "29154326bb": "在",
           "ab20575a8a": "离开",
-          "ab3a1f9068": "执行程序"
+          "ab3a1f9068": "执行程序",
+          "ask_before_closing_running_terminals_title": "Ask Before Closing Running Terminals",
+          "ask_before_closing_running_terminals_description": "Show a confirmation before closing a terminal that has a running command or agent."
         },
         "TerminalSettingsPreview": {
           "a63953a48a": "预览 {{value0}} 主题",
@@ -7630,7 +7645,9 @@
               "description": "Import theme YAML files as Orca terminal themes.",
               "keyword_yaml": "yaml",
               "keyword_custom": "自定义"
-            }
+            },
+            "ask_before_closing_running_terminals_title": "Ask Before Closing Running Terminals",
+            "ask_before_closing_running_terminals_description": "Show a confirmation before closing a terminal that has a running command or agent."
           },
           "windows": {
             "search": {
@@ -8380,7 +8397,26 @@
             "e283b50179": "提交信息",
             "f394c6128a": "没有可用于解释此提交的代理",
             "04a5d7239b": "此仓库没有受支持的网页远程库",
-            "15b6e834ac": "无法在浏览器中打开提交"
+            "15b6e834ac": "无法在浏览器中打开提交",
+            "d37e68f61d": "正在准备分支以供评审…",
+            "8d8f5c6c94": "正在生成 commit 消息…",
+            "fda060d6ce": "请先检查 commit 消息，然后重试创建 PR。",
+            "b75cb1fd0c": "正在提交更改…",
+            "995c5e67ec": "评审设置需要处理。",
+            "d7492cafce": "无法刷新 Source Control。请重试创建 PR。",
+            "473f18758e": "Source Control AI 设置",
+            "createPrIntentConfigureAi": "请添加 commit 消息或配置 Source Control AI 设置。",
+            "createPrIntentGenerateFailed": "无法生成 commit 消息。请添加一条消息后重试。",
+            "createPrIntentCommitFailed": "无法提交更改。请修复问题后重试创建 PR。",
+            "createPrIntentNeedsSync": "创建评审前请先同步此分支。",
+            "createPrIntentBranchNotReady": "分支尚未准备好创建评审。",
+            "createPrIntentPublishing": "正在发布分支…",
+            "createPrIntentForcePushing": "正在使用 lease 强制推送…",
+            "createPrIntentPushing": "正在推送 commits…",
+            "createPrIntentRemoteFailed": "无法更新远程分支。请重试创建 PR。",
+            "createPrIntentGeneratingDetails": "Generating review details…",
+            "createPrIntentBranchChangedDuringDetails": "Branch changed while generating review details. Retry Create PR.",
+            "createPrIntentCreatingReview": "Creating review…"
           },
           "SourceControlAgentActionDialog": {
             "8e856842d1": "无法启动选定的 Agent。",
@@ -8512,7 +8548,8 @@
                 "d91f2a6c39": "发送 {{value0}} 条已排队评论",
                 "a6de3e5a20": "清除已排队评论",
                 "49ea0937e4": "将评论添加到解决列表",
-                "9fecebb29d": "添加"
+                "9fecebb29d": "添加",
+                "b8c4e2a1f7": "View full logs"
               },
               "empty": {
                 "state": {
@@ -8666,7 +8703,12 @@
                   "484f45c439": "{{value0}} 正在进行中...",
                   "74fc171e99": "强制推送正在进行中...",
                   "16aee3a5c1": "正在进行中……",
-                  "e61b0d7a3c": "Check out a branch before publishing commits."
+                  "e61b0d7a3c": "请先检出分支再发布 commits。",
+                  "1d47e850cf": "将更新推送到已关联的评审分支",
+                  "c39d0c75c3": "已关联的评审分支目标不可用。",
+                  "8c6d15a07d": "创建 PR",
+                  "d37e68f61d": "正在准备分支以供评审…",
+                  "c72e5e65d1": "准备此分支并创建 {{value0}}"
                 }
               }
             }
@@ -8986,7 +9028,9 @@
           "a5e5da02f7": "集成",
           "35bbaf5ae0": "notifications",
           "984338477a": "theme",
-          "c47e1bd149": "agent"
+          "c47e1bd149": "智能体",
+          "windowsTerminalTitle": "设置 Windows 终端默认值",
+          "windowsTerminalSubtitle": "为新面板选择默认 Shell，以及终端中右键单击的行为。"
         },
         "OnboardingFooter": {
           "ba58547306": "返回",
@@ -9065,6 +9109,32 @@
         },
         "AgentFeatureSetupStep": {
           "97dcdc010f": "安装 CLI 和技能"
+        },
+        "WindowsTerminalStep": {
+          "powerShell": "PowerShell",
+          "powerShellPwsh": "在可用时使用 PowerShell 7+，否则回退到 Windows PowerShell。",
+          "powerShellInbox": "使用每个受支持的 Windows 安装中都提供的 Windows PowerShell。",
+          "commandPrompt": "命令提示符",
+          "commandPromptDescription": "以经典 cmd.exe 行为打开新的终端面板。",
+          "gitBash": "Git Bash",
+          "gitBashDescription": "使用 Git for Windows 的 bash.exe 进行 Unix 风格的 shell 工作流。",
+          "gitBashUnavailable": "已选择，但此电脑未检测到 Git Bash。",
+          "wsl": "WSL",
+          "wslDescription": "在 Windows Subsystem for Linux 的默认环境中启动新的终端面板。",
+          "wslUnavailable": "已选择，但此电脑未检测到 WSL。",
+          "rightClickPaste": "右键单击时粘贴",
+          "rightClickPasteDescription": "右键单击会粘贴剪贴板内容。Ctrl+右键单击会打开上下文菜单。",
+          "rightClickMenu": "打开上下文菜单",
+          "rightClickMenuDescription": "右键单击会打开终端菜单。可从菜单或键盘粘贴。",
+          "loading": "正在加载终端设置...",
+          "defaultShell": "默认 Shell",
+          "defaultShellDescription": "选择 Orca 在新的 Windows 终端面板中打开的 shell。",
+          "wslDistribution": "WSL 发行版",
+          "wslDistributionDescription": "使用 Windows 默认发行版，或选择一个已安装的特定发行版。",
+          "loadingDistros": "正在加载发行版",
+          "windowsDefault": "Windows 默认值",
+          "rightClickBehavior": "右键单击行为",
+          "rightClickBehaviorDescription": "选择符合你在 Windows 上使用习惯的终端鼠标行为。"
         }
       },
       "new": {
@@ -9099,7 +9169,22 @@
             "fda67f0b61": "当前项目",
             "3e8bb1176a": "在设置中连接 Linear 以搜索议题。",
             "69ce292138": "Linear",
-            "9c004911c3": "GitLab"
+            "9c004911c3": "GitLab",
+            "switchTaskSourceTitle": "切换任务来源？",
+            "differentTaskSource": "，与所选任务来源不同。",
+            "currentTaskSource": "当前任务来源",
+            "placeholderNameOrLinearUrl": "输入名称或 Linear URL",
+            "placeholderWorkspaceName": "输入工作区名称",
+            "placeholderSmartWithBranchGitLabLinear": "输入名称、#1234、分支、GitHub/GitLab 或 Linear URL",
+            "placeholderSmartGitLabLinear": "输入名称、#1234、GitHub/GitLab 或 Linear URL",
+            "placeholderSmartWithBranchGitLab": "输入名称、#1234、分支、GitHub 或 GitLab URL",
+            "placeholderSmartGitLab": "输入名称、#1234、GitHub 或 GitLab URL",
+            "unavailable": "不可用",
+            "searchGitHub": "搜索 GitHub PR 和议题",
+            "searchGitLab": "搜索 GitLab MR 和议题",
+            "searchBranches": "搜索分支",
+            "searchLinear": "搜索 Linear 议题",
+            "workspaceName": "工作区名称"
           },
           "ProjectHostSetupCombobox": {
             "empty": "No hosts are ready for this project.",
@@ -10417,7 +10502,30 @@
           "49731703ea": "Jobs",
           "ee07b33924": "unknown",
           "07eccfa397": "No details are available for this check.",
-          "a916648574": "Open details"
+          "a916648574": "Open details",
+          "834cb3f23d": "Fix with AI",
+          "c8f1a2d4e7": "Choose the agent and edit the full command input before launch.",
+          "b3e7f9a1c2": "Check fix context unavailable",
+          "d5a8c2f1b9": "Start the default AI agent to fix this check",
+          "e2b4d7c8a1": "Choose an agent for this check",
+          "f1c9e3a6d4": "Choose agent to fix check"
+        },
+        "check": {
+          "run": {
+            "details": {
+              "fix": {
+                "with": {
+                  "ai": {
+                    "1a8c4e2b90": "Select a workspace before launching an AI action.",
+                    "4f2d9a8c17": "Select a repository before launching an AI action.",
+                    "7c3e1b5d42": "Open a PR or MR before launching an AI fix.",
+                    "9b2f6d4a81": "This check is not failing.",
+                    "2ef90c9819": "Started an AI agent for this check."
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "diff": {
@@ -10482,7 +10590,11 @@
             "8e24fe4f75": "已发送错误报告。",
             "8b8473c544": "已复制错误报告。",
             "b175e90213": "没有可用的错误报告。",
-            "765591798d": "正在检查错误报告..."
+            "765591798d": "正在检查错误报告...",
+            "b2e36f53a1": "Failed to send crash report. Diagnostic ticket {{value0}} was uploaded but not linked.",
+            "ead6fc0510": "No automatic crash report was captured. You can still send details and include recent diagnostic logs when available.",
+            "b082f27490": "Attach recent diagnostic logs",
+            "e59f0b9427": "Sends a capped redacted log bundle with the report."
           }
         }
       },
@@ -11185,7 +11297,7 @@
               "hostCount": "{{value0}} hosts",
               "searchProjects": "Search projects...",
               "noMatches": "No projects match your search.",
-              "chooseSource": "Choose task source"
+              "chooseSource": "选择任务来源"
             }
           }
         }
