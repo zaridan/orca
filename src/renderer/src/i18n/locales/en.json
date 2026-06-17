@@ -8338,6 +8338,7 @@
             "834cb3f23d": "Fix with AI",
             "60bd988f0b": "AI Fix",
             "461575b9bc": "Generate commit message with AI",
+            "b16b8f0e4b": "ai commit msg",
             "ddc1fbd690": "Stop generating commit message",
             "5acbcedc1a": "Create {{value0}}",
             "aaf1451654": "Create draft {{value0}}",

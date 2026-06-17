@@ -4,9 +4,64 @@ import {
   resolveSupportedHostedReviewCopyProvider
 } from '@/i18n/hosted-review-localized-copy'
 import { supportsHostedReviewCreation } from '../../../../shared/hosted-review-creation-providers'
-import type { HostedReviewCreationEligibility } from '../../../../shared/hosted-review'
+import type {
+  HostedReviewCreationEligibility,
+  HostedReviewInfo,
+  HostedReviewProvider
+} from '../../../../shared/hosted-review'
 import type { PrimaryAction, PrimaryActionInputs } from './source-control-primary-action-types'
 import { resolveCreatePrIntentEligibility } from './source-control-create-pr-intent-state'
+
+export function resolveProvisionalHostedReviewProvider(input: {
+  hostedReview?: Pick<HostedReviewInfo, 'provider'> | null
+  hostedReviewCreationState?: {
+    repoId: string
+    data: Pick<HostedReviewCreationEligibility, 'provider'>
+  } | null
+  activeRepoId?: string | null
+  linkedGitHubPR?: number | null
+  fallbackGitHubPR?: number | null
+  linkedGitLabMR?: number | null
+  linkedBitbucketPR?: number | null
+  linkedAzureDevOpsPR?: number | null
+  linkedGiteaPR?: number | null
+}): HostedReviewProvider {
+  if (input.hostedReview?.provider && supportsHostedReviewCreation(input.hostedReview.provider)) {
+    return input.hostedReview.provider
+  }
+  if (
+    input.hostedReviewCreationState &&
+    input.activeRepoId === input.hostedReviewCreationState.repoId &&
+    supportsHostedReviewCreation(input.hostedReviewCreationState.data.provider)
+  ) {
+    return input.hostedReviewCreationState.data.provider
+  }
+  if (input.linkedGitLabMR != null) {
+    return 'gitlab'
+  }
+  if (input.linkedAzureDevOpsPR != null) {
+    return 'azure-devops'
+  }
+  if (input.linkedGiteaPR != null) {
+    return 'gitea'
+  }
+  if (input.linkedGitHubPR != null || input.fallbackGitHubPR != null) {
+    return 'github'
+  }
+  return 'github'
+}
+
+export function buildLoadingHostedReviewCreationEligibility(
+  provider: HostedReviewProvider
+): HostedReviewCreationEligibility {
+  return {
+    provider,
+    review: null,
+    canCreate: false,
+    blockedReason: null,
+    nextAction: null
+  }
+}
 
 function shouldOfferCreatePrHeaderChrome(
   hostedReviewCreation: HostedReviewCreationEligibility | null | undefined
@@ -197,9 +252,33 @@ export function resolveCreatePrIntentPrimaryAction(
   }
 }
 
+function resolveLoadingCreatePrHeaderAction(
+  hostedReviewCreation: HostedReviewCreationEligibility
+): PrimaryAction | null {
+  if (!shouldOfferCreatePrHeaderChrome(hostedReviewCreation)) {
+    return null
+  }
+  const copy = localizedHostedReviewCopy(
+    resolveSupportedHostedReviewCopyProvider(hostedReviewCreation.provider)
+  )
+  return buildCreatePrHeaderAction(
+    hostedReviewCreation,
+    translate(
+      'auto.components.right.sidebar.source.control.primary.action.h3i4j5k607',
+      'Checking whether this branch can create a {{value0}}…',
+      { value0: copy.reviewLabel }
+    ),
+    true
+  )
+}
+
 export function resolveCreatePrHeaderAction(inputs: PrimaryActionInputs): PrimaryAction | null {
   if (inputs.isPrIntentInFlight) {
     return resolveCreatePrIntentInFlightPrimaryAction(inputs)
+  }
+
+  if (inputs.isHostedReviewCreationLoading && inputs.hostedReviewCreation) {
+    return resolveLoadingCreatePrHeaderAction(inputs.hostedReviewCreation)
   }
 
   if (inputs.isCommitting || inputs.isRemoteOperationActive || inputs.hasUnresolvedConflicts) {

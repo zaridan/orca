@@ -223,7 +223,11 @@ import {
   type CreatePrIntentRunToken
 } from './source-control-create-pr-intent-flow'
 import { resolveVisibleCreatePrHeaderAction } from './source-control-create-pr-intent-state'
-import { resolveCreatePrHeaderAction } from './source-control-primary-create-pr-intent-action'
+import {
+  buildLoadingHostedReviewCreationEligibility,
+  resolveCreatePrHeaderAction,
+  resolveProvisionalHostedReviewProvider
+} from './source-control-primary-create-pr-intent-action'
 import {
   getNextSourceControlViewMode,
   shouldShowSourceControlCompareUnavailableCard,
@@ -560,6 +564,13 @@ type HostedReviewCreationState = {
   worktreeId: string
   branch: string
   data: HostedReviewCreationEligibility
+}
+
+type HostedReviewCreationRequestState = {
+  repoId: string
+  worktreeId: string
+  branch: string
+  status: 'loading' | 'failed'
 }
 
 type CreatedHostedReview = {
@@ -933,6 +944,8 @@ function SourceControlInner(): React.JSX.Element {
   const generateError = generateErrors[activeWorktreeId ?? ''] ?? null
   const [hostedReviewCreationState, setHostedReviewCreationState] =
     useState<HostedReviewCreationState | null>(null)
+  const [hostedReviewCreationRequestState, setHostedReviewCreationRequestState] =
+    useState<HostedReviewCreationRequestState | null>(null)
   const createPrInFlightRef = useRef<Record<string, boolean>>({})
   const [createPrInFlightByWorktree, setCreatePrInFlightByWorktree] = useState<
     Record<string, boolean>
@@ -1285,6 +1298,56 @@ function SourceControlInner(): React.JSX.Element {
   const linkedBitbucketPR = activeWorktree?.linkedBitbucketPR ?? null
   const linkedAzureDevOpsPR = activeWorktree?.linkedAzureDevOpsPR ?? null
   const linkedGiteaPR = activeWorktree?.linkedGiteaPR ?? null
+  const shouldResolveHostedReviewCreation =
+    isBranchVisible &&
+    Boolean(activeRepo) &&
+    !isFolder &&
+    Boolean(branchName) &&
+    branchName !== 'HEAD' &&
+    Boolean(activeWorktreeId)
+  const hostedReviewCreationRequestMatchesCurrent =
+    hostedReviewCreationRequestState !== null &&
+    activeRepo?.id === hostedReviewCreationRequestState.repoId &&
+    activeWorktreeId === hostedReviewCreationRequestState.worktreeId &&
+    branchName === hostedReviewCreationRequestState.branch
+  const isHostedReviewCreationLoading =
+    shouldResolveHostedReviewCreation &&
+    hostedReviewCreationRequestMatchesCurrent &&
+    hostedReviewCreationRequestState.status === 'loading' &&
+    hostedReviewCreation === null &&
+    hostedReview === null
+  const hostedReviewCreationForHeader = useMemo(() => {
+    if (hostedReviewCreation) {
+      return hostedReviewCreation
+    }
+    if (!isHostedReviewCreationLoading) {
+      return null
+    }
+    const provider = resolveProvisionalHostedReviewProvider({
+      hostedReview,
+      hostedReviewCreationState,
+      activeRepoId: activeRepo?.id ?? null,
+      linkedGitHubPR,
+      fallbackGitHubPR: fallbackGitHubPRNumber,
+      linkedGitLabMR,
+      linkedBitbucketPR,
+      linkedAzureDevOpsPR,
+      linkedGiteaPR
+    })
+    return buildLoadingHostedReviewCreationEligibility(provider)
+  }, [
+    activeRepo?.id,
+    fallbackGitHubPRNumber,
+    hostedReview,
+    hostedReviewCreation,
+    hostedReviewCreationState,
+    isHostedReviewCreationLoading,
+    linkedAzureDevOpsPR,
+    linkedBitbucketPR,
+    linkedGitHubPR,
+    linkedGitLabMR,
+    linkedGiteaPR
+  ])
   const hasLinkedHostedReview =
     (linkedGitHubPR ?? fallbackGitHubPRNumber) !== null ||
     linkedGitLabMR !== null ||
@@ -2557,6 +2620,7 @@ function SourceControlInner(): React.JSX.Element {
   useEffect(() => {
     if (!isBranchVisible || !activeRepo || isFolder || !branchName || !activeWorktreeId) {
       setHostedReviewCreationState(null)
+      setHostedReviewCreationRequestState(null)
       return
     }
     // Why: skip refetches while the user's PR flow is mid-flight. AI generation,
@@ -2564,9 +2628,16 @@ function SourceControlInner(): React.JSX.Element {
     // state temporarily. Recomputing eligibility mid-flow can tear down the
     // composer or rotate dropdown hints before the final refresh restores truth.
     if (prGenerating || isCreatingPr || isCreatePrIntentInFlight) {
+      setHostedReviewCreationRequestState(null)
       return
     }
     let stale = false
+    setHostedReviewCreationRequestState({
+      repoId: activeRepo.id,
+      worktreeId: activeWorktreeId,
+      branch: branchName,
+      status: 'loading'
+    })
     void getHostedReviewCreationEligibility({
       repoPath: activeRepo.path,
       repoId: activeRepo.id,
@@ -2592,12 +2663,19 @@ function SourceControlInner(): React.JSX.Element {
             branch: branchName,
             data: result
           })
+          setHostedReviewCreationRequestState(null)
         }
       })
       .catch((error) => {
         console.warn('[SourceControl] hosted review creation eligibility failed', error)
         if (!stale) {
           setHostedReviewCreationState(null)
+          setHostedReviewCreationRequestState({
+            repoId: activeRepo.id,
+            worktreeId: activeWorktreeId,
+            branch: branchName,
+            status: 'failed'
+          })
         }
       })
     return () => {
@@ -2609,6 +2687,7 @@ function SourceControlInner(): React.JSX.Element {
     effectiveBaseRef,
     getHostedReviewCreationEligibility,
     hasUncommittedEntries,
+    setHostedReviewCreationRequestState,
     isBranchVisible,
     isCreatingPr,
     isCreatePrIntentInFlight,
@@ -3498,7 +3577,9 @@ function SourceControlInner(): React.JSX.Element {
       prState: hostedReview?.state ?? null,
       isPRStateLoading: isHostedReviewStateLoading,
       inFlightRemoteOpKind,
-      hostedReviewCreation,
+      hostedReviewCreation: hostedReviewCreationForHeader,
+      isHostedReviewCreationLoading:
+        isHostedReviewCreationLoading && hostedReviewCreationForHeader !== null,
       branchCommitsAhead:
         branchSummary?.status === 'ready' ? (branchSummary.commitsAhead ?? 0) : undefined,
       hasCurrentBranch: Boolean(branchName),
@@ -3525,20 +3606,25 @@ function SourceControlInner(): React.JSX.Element {
     hasStageableChanges,
     hasUnstagedChanges,
     hostedReview?.state,
-    hostedReviewCreation,
+    hostedReviewCreationForHeader,
     hostedReviewCreateCopy.reviewLabel,
     inFlightRemoteOpKind,
     isAbortingOperation,
     isCommitting,
     isCreatePrIntentInFlight,
     isCreatingPr,
+    isHostedReviewCreationLoading,
     isHostedReviewStateLoading,
     isRemoteOperationActive,
     remoteStatus,
     unresolvedConflicts.length
   ])
   const directCreatePrAction =
-    createPrHeaderAction?.kind === 'create_pr' ? createPrHeaderAction : null
+    createPrHeaderAction?.kind === 'create_pr' &&
+    hostedReviewCreation?.canCreate === true &&
+    (!createPrHeaderAction.disabled || isCreatingPr)
+      ? createPrHeaderAction
+      : null
   const visibleCreatePrHeaderAction = resolveVisibleCreatePrHeaderAction({
     createPrHeaderAction
   })
@@ -6135,25 +6221,46 @@ export function CommitArea({
                 </TooltipContent>
               </Tooltip>
             ) : (
-              <button
-                type="button"
-                disabled={isGenerateDisabled}
-                onClick={() => onGenerate()}
-                title={
-                  generateDisabledReason ??
-                  translate(
-                    'auto.components.right.sidebar.SourceControl.461575b9bc',
-                    'Generate commit message with AI'
-                  )
-                }
-                aria-label={translate(
-                  'auto.components.right.sidebar.SourceControl.461575b9bc',
-                  'Generate commit message with AI'
-                )}
-                className="absolute right-1.5 top-1.5 inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-              >
-                <Sparkles className="size-3.5" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-disabled={isGenerateDisabled}
+                    onClick={(event) => {
+                      if (isGenerateDisabled) {
+                        event.preventDefault()
+                        return
+                      }
+                      onGenerate()
+                    }}
+                    title={
+                      generateDisabledReason ??
+                      translate(
+                        'auto.components.right.sidebar.SourceControl.b16b8f0e4b',
+                        'ai commit msg'
+                      )
+                    }
+                    aria-label={translate(
+                      'auto.components.right.sidebar.SourceControl.461575b9bc',
+                      'Generate commit message with AI'
+                    )}
+                    className={cn(
+                      'absolute right-1.5 top-1.5 inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                      isGenerateDisabled &&
+                        'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground'
+                    )}
+                  >
+                    <Sparkles className="size-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left" sideOffset={6}>
+                  {generateDisabledReason ??
+                    translate(
+                      'auto.components.right.sidebar.SourceControl.b16b8f0e4b',
+                      'ai commit msg'
+                    )}
+                </TooltipContent>
+              </Tooltip>
             ))}
         </div>
       ) : null}

@@ -8338,6 +8338,7 @@
             "834cb3f23d": "用 AI 修复",
             "60bd988f0b": "AI 修复",
             "461575b9bc": "使用 AI 生成 commit 消息",
+            "b16b8f0e4b": "AI commit 消息",
             "ddc1fbd690": "停止生成 commit 消息",
             "5acbcedc1a": "创建 {{value0}}",
             "aaf1451654": "创建草稿 {{value0}}",
