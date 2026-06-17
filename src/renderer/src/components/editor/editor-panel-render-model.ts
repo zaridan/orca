@@ -2,7 +2,6 @@ import { detectLanguage } from '@/lib/language-detect'
 import { canPreviewLanguage } from '@/lib/file-preview'
 import type { useAppStore } from '@/store'
 import type { MarkdownViewMode, OpenFile } from '@/store/slices/editor'
-import { RICH_MARKDOWN_MAX_SIZE_BYTES } from '../../../../shared/constants'
 import {
   canOpenMarkdownPreview,
   getDefaultMarkdownViewMode,
@@ -15,11 +14,7 @@ import type { FileContent } from './editor-panel-content-types'
 import { canUseChangesModeForFile } from './editor-panel-file-mode'
 import { getMarkdownRenderMode } from './markdown-render-mode'
 import { getMarkdownRichModeUnsupportedMessage } from './markdown-rich-mode'
-
-const markdownExportSizeEncoder = new TextEncoder()
-// Why: export enablement must match rich-mode fallback without allocating for
-// large markdown files every time the header render model is computed.
-const markdownExportSizeBuffer = new Uint8Array(RICH_MARKDOWN_MAX_SIZE_BYTES + 1)
+import { exceedsMarkdownRichModeSizeLimit } from './markdown-rich-size-limit'
 
 type StoreState = ReturnType<typeof useAppStore.getState>
 
@@ -118,9 +113,7 @@ export function getEditorPanelRenderModel({
   const inlineMarkdownRenderMode =
     activeFile.mode === 'edit' && inlineMarkdownContent !== null
       ? getMarkdownRenderMode({
-          exceedsRichModeSizeLimit:
-            markdownExportSizeEncoder.encodeInto(inlineMarkdownContent, markdownExportSizeBuffer)
-              .written > RICH_MARKDOWN_MAX_SIZE_BYTES,
+          exceedsRichModeSizeLimit: exceedsMarkdownRichModeSizeLimit(inlineMarkdownContent),
           hasRichModeUnsupportedContent:
             getMarkdownRichModeUnsupportedMessage(inlineMarkdownContent) !== null,
           viewMode: mdViewMode

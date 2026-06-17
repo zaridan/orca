@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { OpenFile } from '@/store/slices/editor'
+import { RICH_MARKDOWN_MAX_SIZE_BYTES } from '../../../../shared/constants'
 import type { FileContent } from './editor-panel-content-types'
 import { getEditorPanelRenderModel } from './editor-panel-render-model'
 
@@ -57,6 +58,16 @@ describe('getEditorPanelRenderModel markdown export affordance', () => {
       editorDrafts: { '/repo/README.md': '[example]: https://example.com' }
     })
 
+    expect(model.canExportMarkdownToPdf).toBe(false)
+  })
+
+  it('disables rich export when a multibyte character crosses the byte limit', () => {
+    const model = renderModel({
+      markdownViewMode: { '/repo/README.md': 'rich' },
+      editorDrafts: { '/repo/README.md': `${'a'.repeat(RICH_MARKDOWN_MAX_SIZE_BYTES)}\u00e9` }
+    })
+
+    expect(model.shouldShowMarkdownExportAction).toBe(true)
     expect(model.canExportMarkdownToPdf).toBe(false)
   })
 
