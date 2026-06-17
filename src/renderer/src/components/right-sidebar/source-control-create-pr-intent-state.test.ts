@@ -17,7 +17,7 @@ const createPrAction: PrimaryAction = {
 }
 
 describe('resolveVisibleCreatePrHeaderAction', () => {
-  it('hides the header when the hosted-review composer owns direct Create PR', () => {
+  it('keeps the header visible when direct Create PR is available and the branch has changes', () => {
     expect(
       resolveVisibleCreatePrHeaderAction({
         createPrHeaderAction: createPrAction,
@@ -26,31 +26,19 @@ describe('resolveVisibleCreatePrHeaderAction', () => {
         primaryActionKind: 'create_pr',
         hasBranchChanges: true
       })
-    ).toBeNull()
+    ).toEqual(createPrAction)
   })
 
-  it('shows a disabled header when direct Create PR is available but the branch has no changes', () => {
+  it('hides the header when the empty state owns direct Create PR on an unchanged branch', () => {
     expect(
       resolveVisibleCreatePrHeaderAction({
         createPrHeaderAction: createPrAction,
         directCreatePrAction: createPrAction,
         isCreatePrIntentInFlight: false,
         primaryActionKind: 'create_pr',
-        hasBranchChanges: false,
-        hostedReviewCreation: {
-          provider: 'github',
-          review: null,
-          canCreate: true,
-          blockedReason: null,
-          nextAction: null
-        }
+        hasBranchChanges: false
       })
-    ).toEqual({
-      kind: 'create_pr',
-      label: 'Create PR',
-      title: 'No changes on this branch to include in a pull request.',
-      disabled: true
-    })
+    ).toBeNull()
   })
 
   it('hides the header while Create PR intent is in flight on the commit-area primary', () => {

@@ -3,7 +3,6 @@ import type { HostedReviewCreationEligibility } from '../../../../shared/hosted-
 import { supportsHostedReviewCreation } from '../../../../shared/hosted-review-creation-providers'
 import type { GitUpstreamStatus } from '../../../../shared/types'
 import type { PrimaryAction } from './source-control-primary-action-types'
-import { resolveDisabledCreatePrHeaderAction } from './source-control-primary-create-pr-intent-action'
 
 export type CreatePrIntentKind =
   | 'dirty'
@@ -80,34 +79,17 @@ export function resolveVisibleCreatePrHeaderAction({
   directCreatePrAction,
   isCreatePrIntentInFlight,
   primaryActionKind,
-  hasBranchChanges = true,
-  hostedReviewCreation
+  hasBranchChanges = true
 }: {
   createPrHeaderAction: PrimaryAction | null
   directCreatePrAction: PrimaryAction | null
   isCreatePrIntentInFlight: boolean
   primaryActionKind: PrimaryAction['kind']
   hasBranchChanges?: boolean
-  hostedReviewCreation?: HostedReviewCreationEligibility | null
 }): PrimaryAction | null {
-  // Why: the hosted-review composer owns direct Create PR when the branch has
-  // reviewable changes; an empty compare still needs a disabled header anchor
-  // so the toolbar does not look blank above "No changes on this branch".
-  if (directCreatePrAction && hasBranchChanges) {
-    return null
-  }
+  // Why: empty-branch Create PR lives in the centered empty state, not the header.
   if (directCreatePrAction && !hasBranchChanges) {
-    return (
-      resolveDisabledCreatePrHeaderAction(
-        {
-          hostedReviewCreation,
-          isCommitting: false,
-          isRemoteOperationActive: false,
-          hasUnresolvedConflicts: false
-        },
-        { noBranchChanges: true }
-      ) ?? { ...directCreatePrAction, disabled: true }
-    )
+    return null
   }
   // Why: CommitArea already mirrors in-flight Create PR intent on the primary;
   // keeping a second spinning header button stacks redundant spinners once

@@ -218,8 +218,13 @@ import {
   resolveCreatePrIntentRemoteStep,
   type CreatePrIntentRunToken
 } from './source-control-create-pr-intent-flow'
+import { SourceControlCreatePrNotice } from './source-control-create-pr-notice'
+import { SourceControlEmptyState } from './source-control-empty-state'
 import { resolveVisibleCreatePrHeaderAction } from './source-control-create-pr-intent-state'
-import { resolveCreatePrHeaderAction } from './source-control-primary-create-pr-intent-action'
+import {
+  resolveCreatePrHeaderAction,
+  resolveDisabledCreatePrHeaderAction
+} from './source-control-primary-create-pr-intent-action'
 import {
   getNextSourceControlViewMode,
   shouldShowSourceControlCompareUnavailableCard,
@@ -950,6 +955,16 @@ function SourceControlInner(): React.JSX.Element {
   >({})
   const isCreatePrIntentInFlight = createPrIntentInFlightByWorktree[activeWorktreeId ?? ''] ?? false
   const createPrIntentNotice = createPrIntentNotices[activeWorktreeId ?? ''] ?? null
+  const [createPrComposerExpandedByWorktree, setCreatePrComposerExpandedByWorktree] = useState<
+    Record<string, boolean>
+  >({})
+  const createPrComposerExpanded =
+    createPrComposerExpandedByWorktree[activeWorktreeId ?? ''] ?? false
+  const directCreatePrInFlightRef = useRef<Record<string, boolean>>({})
+  const [directCreatePrInFlightByWorktree, setDirectCreatePrInFlightByWorktree] = useState<
+    Record<string, boolean>
+  >({})
+  const isDirectCreatePrInFlight = directCreatePrInFlightByWorktree[activeWorktreeId ?? ''] ?? false
   const setCreatePrIntentNoticeForWorktree = useCallback(
     (worktreeId: string, notice: CreatePrIntentNotice | null): void => {
       setCreatePrIntentNotices((prev) => ({ ...prev, [worktreeId]: notice }))
@@ -1528,6 +1543,8 @@ function SourceControlInner(): React.JSX.Element {
     setGenerateErrors((prev) => pruneRecord(prev))
     setCreatePrIntentInFlightByWorktree((prev) => pruneRecord(prev))
     setCreatePrIntentNotices((prev) => pruneRecord(prev))
+    setCreatePrComposerExpandedByWorktree((prev) => pruneRecord(prev))
+    setDirectCreatePrInFlightByWorktree((prev) => pruneRecord(prev))
     setGitHistoryByWorktree((prev) => pruneRecord(prev))
     // Refs don't need setState — mutate in place to drop stale keys.
     for (const key of Object.keys(commitInFlightRef.current)) {
@@ -1544,6 +1561,11 @@ function SourceControlInner(): React.JSX.Element {
       if (!worktreeMap.has(key)) {
         delete createPrIntentInFlightRef.current[key]
         delete createPrIntentRunTokenRef.current[key]
+      }
+    }
+    for (const key of Object.keys(directCreatePrInFlightRef.current)) {
+      if (!worktreeMap.has(key)) {
+        delete directCreatePrInFlightRef.current[key]
       }
     }
     for (const key of Object.keys(gitHistoryRequestByWorktreeRef.current)) {
@@ -2202,6 +2224,9 @@ function SourceControlInner(): React.JSX.Element {
       if (!repoPath || !repoId || !branch) {
         return
       }
+      if (worktreeId) {
+        setCreatePrComposerExpandedByWorktree((prev) => ({ ...prev, [worktreeId]: false }))
+      }
       const copy = localizedHostedReviewCopy(
         resolveSupportedHostedReviewCopyProvider(result.provider)
       )
@@ -2477,7 +2502,9 @@ function SourceControlInner(): React.JSX.Element {
     handleCancelGenerate: handleCancelGeneratePullRequestFields,
     applyGeneratedFields: applyGeneratedPullRequestFields
   } = useCreatePullRequestDialogFields({
-    open: hostedReviewCreation?.canCreate === true,
+    // Why: the inline composer is collapsed by default; opening it mounts fields
+    // and optionally runs generateDetailsOnOpen for manual review.
+    open: hostedReviewCreation?.canCreate === true && createPrComposerExpanded,
     repoId: activeRepo?.id ?? '',
     worktreeId: activeWorktreeId,
     worktreePath: worktreePath ?? '',
@@ -2979,6 +3006,59 @@ function SourceControlInner(): React.JSX.Element {
       settings
     ]
   )
+
+  const runDirectCreatePr = useCallback(async (): Promise<void> => {
+    if (
+      !activeRepo ||
+      !activeWorktreeId ||
+      !worktreePath ||
+      !branchName ||
+      !hostedReviewCreation?.canCreate ||
+      isCreatingPr ||
+      isCreatePrIntentInFlight ||
+      prGenerating ||
+      directCreatePrInFlightRef.current[activeWorktreeId]
+    ) {
+      return
+    }
+
+    if (
+      !hasConfiguredSourceControlTextGenerationDefaults({
+        actionId: 'pullRequest',
+        settings,
+        repo: activeRepo
+      })
+    ) {
+      setCreatePrComposerExpandedByWorktree((prev) => ({ ...prev, [activeWorktreeId]: true }))
+      return
+    }
+
+    const token = createCreatePrIntentRunToken({
+      repoId: activeRepo.id,
+      worktreeId: activeWorktreeId,
+      worktreePath,
+      branch: branchName
+    })
+    directCreatePrInFlightRef.current[activeWorktreeId] = true
+    setDirectCreatePrInFlightByWorktree((prev) => ({ ...prev, [activeWorktreeId]: true }))
+    try {
+      await createHostedReviewForCreatePrIntent(token, hostedReviewCreation)
+    } finally {
+      directCreatePrInFlightRef.current[activeWorktreeId] = false
+      setDirectCreatePrInFlightByWorktree((prev) => ({ ...prev, [activeWorktreeId]: false }))
+    }
+  }, [
+    activeRepo,
+    activeWorktreeId,
+    branchName,
+    createHostedReviewForCreatePrIntent,
+    hostedReviewCreation,
+    isCreatePrIntentInFlight,
+    isCreatingPr,
+    prGenerating,
+    settings,
+    worktreePath
+  ])
 
   const refreshBranchCompareForCreatePrIntent = useCallback(
     async (token: CreatePrIntentRunToken): Promise<number | undefined> => {
@@ -3500,17 +3580,28 @@ function SourceControlInner(): React.JSX.Element {
       hasCurrentBranch: Boolean(branchName),
       isPrIntentInFlight: isCreatePrIntentInFlight
     })
-    return isCreatingPr && action?.kind === 'create_pr'
-      ? {
-          ...action,
-          title: translate(
-            'auto.components.right.sidebar.SourceControl.fe5bd1a610',
-            'Creating {{value0}}...',
-            { value0: hostedReviewCreateCopy.reviewLabel }
-          ),
-          disabled: true
-        }
-      : action
+    if (isCreatingPr && action?.kind === 'create_pr') {
+      return {
+        ...action,
+        title: translate(
+          'auto.components.right.sidebar.SourceControl.fe5bd1a610',
+          'Creating {{value0}}...',
+          { value0: hostedReviewCreateCopy.reviewLabel }
+        ),
+        disabled: true
+      }
+    }
+    if (isDirectCreatePrInFlight && action?.kind === 'create_pr') {
+      return {
+        ...action,
+        title: translate(
+          'auto.components.right.sidebar.source.control.primary.action.d37e68f61d',
+          'Preparing branch for review…'
+        ),
+        disabled: true
+      }
+    }
+    return action
   }, [
     branchName,
     branchSummary?.commitsAhead,
@@ -3528,6 +3619,7 @@ function SourceControlInner(): React.JSX.Element {
     isCommitting,
     isCreatePrIntentInFlight,
     isCreatingPr,
+    isDirectCreatePrInFlight,
     isHostedReviewStateLoading,
     isRemoteOperationActive,
     remoteStatus,
@@ -3537,14 +3629,38 @@ function SourceControlInner(): React.JSX.Element {
     createPrHeaderAction?.kind === 'create_pr' ? createPrHeaderAction : null
   const hasBranchChanges =
     hasUncommittedEntries || branchEntries.length > 0 || branchSummary?.status !== 'ready'
+  // Why: an empty compare has nothing for the composer to edit; keep the
+  // disabled header button as the only Create PR affordance in that state.
+  const composerDirectCreatePrAction =
+    directCreatePrAction && hasBranchChanges ? directCreatePrAction : null
   const visibleCreatePrHeaderAction = resolveVisibleCreatePrHeaderAction({
     createPrHeaderAction,
     directCreatePrAction,
     isCreatePrIntentInFlight,
     primaryActionKind: primaryAction.kind,
-    hasBranchChanges,
-    hostedReviewCreation
+    hasBranchChanges
   })
+  const emptyBranchCreatePrAction = useMemo(() => {
+    if (hasBranchChanges || !directCreatePrAction) {
+      return null
+    }
+    return resolveDisabledCreatePrHeaderAction(
+      {
+        hostedReviewCreation,
+        isCommitting: false,
+        isRemoteOperationActive: false,
+        hasUnresolvedConflicts: false
+      },
+      { noBranchChanges: true }
+    )
+  }, [
+    directCreatePrAction,
+    hasBranchChanges,
+    hostedReviewCreation,
+    isCommitting,
+    isRemoteOperationActive,
+    unresolvedConflicts.length
+  ])
 
   const dropdownItems: DropdownEntry[] = useMemo(
     () =>
@@ -3604,7 +3720,7 @@ function SourceControlInner(): React.JSX.Element {
   // pure remote actions go through runRemoteAction.
   const handleActionInvoke = useCallback(
     (kind: DropdownActionKind): void => {
-      if (prGenerating || isCreatingPr || isCreatePrIntentInFlight) {
+      if (prGenerating || isCreatingPr || isCreatePrIntentInFlight || isDirectCreatePrInFlight) {
         return
       }
       switch (kind) {
@@ -3624,7 +3740,11 @@ function SourceControlInner(): React.JSX.Element {
           void handleAbortRebase()
           return
         case 'create_pr':
-          void handleCreatePullRequest()
+          if (createPrComposerExpanded) {
+            void handleCreatePullRequest()
+          } else {
+            void runDirectCreatePr()
+          }
           return
         case 'push_create_pr':
           void runCreatePrIntent()
@@ -3642,13 +3762,16 @@ function SourceControlInner(): React.JSX.Element {
     },
     [
       handleCommit,
+      createPrComposerExpanded,
       handleCreatePullRequest,
       handleAbortMerge,
       handleAbortRebase,
       isCreatingPr,
       isCreatePrIntentInFlight,
+      isDirectCreatePrInFlight,
       prGenerating,
       runCreatePrIntent,
+      runDirectCreatePr,
       runCompoundCommitAction,
       runRemoteAction
     ]
@@ -4026,18 +4149,56 @@ function SourceControlInner(): React.JSX.Element {
     }
   }, [handleActionInvoke, handleStageAllPrimary, primaryAction.kind, runCreatePrIntent])
 
+  const handleToggleCreatePrComposer = useCallback((): void => {
+    if (!activeWorktreeId) {
+      return
+    }
+    setCreatePrComposerExpandedByWorktree((prev) => ({
+      ...prev,
+      [activeWorktreeId]: !prev[activeWorktreeId]
+    }))
+  }, [activeWorktreeId])
+
+  const previousCreatePrBranchNameRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!activeWorktreeId) {
+      previousCreatePrBranchNameRef.current = null
+      return
+    }
+    if (previousCreatePrBranchNameRef.current === branchName) {
+      return
+    }
+    previousCreatePrBranchNameRef.current = branchName
+    setCreatePrComposerExpandedByWorktree((prev) => {
+      if (!prev[activeWorktreeId]) {
+        return prev
+      }
+      return { ...prev, [activeWorktreeId]: false }
+    })
+  }, [activeWorktreeId, branchName])
+
   const handleCreatePrHeaderClick = useCallback((): void => {
     if (!createPrHeaderAction || createPrHeaderAction.disabled) {
       return
     }
     if (createPrHeaderAction.kind === 'create_pr') {
-      void handleCreatePullRequest()
+      if (createPrComposerExpanded) {
+        void handleCreatePullRequest()
+      } else {
+        void runDirectCreatePr()
+      }
       return
     }
     if (createPrHeaderAction.kind === 'create_pr_intent') {
       void runCreatePrIntent()
     }
-  }, [createPrHeaderAction, handleCreatePullRequest, runCreatePrIntent])
+  }, [
+    createPrComposerExpanded,
+    createPrHeaderAction,
+    handleCreatePullRequest,
+    runCreatePrIntent,
+    runDirectCreatePr
+  ])
 
   const handleUnstageAll = useCallback(async () => {
     if (!worktreePath || isExecutingBulk) {
@@ -4782,6 +4943,16 @@ function SourceControlInner(): React.JSX.Element {
   const hasFilteredBranchEntries = filteredBranchEntries.length > 0
   const showGenericEmptyState =
     !hasUncommittedEntries && branchSummary?.status === 'ready' && branchEntries.length === 0
+  const hideCommitAreaForPrFlow =
+    !normalizedFilter &&
+    !createPrComposerExpanded &&
+    !hasUncommittedEntries &&
+    (showGenericEmptyState ||
+      Boolean(composerDirectCreatePrAction) ||
+      isCreatePrIntentInFlight ||
+      isDirectCreatePrInFlight)
+  const showStandaloneCreatePrNotice =
+    hideCommitAreaForPrFlow && createPrIntentNotice != null && !showGenericEmptyState
   const currentWorktreeId = activeWorktree.id
 
   return (
@@ -4796,6 +4967,10 @@ function SourceControlInner(): React.JSX.Element {
           hostedReview={hostedReview}
           isCreatePrIntentInFlight={isCreatePrIntentInFlight}
           isCreatingPr={isCreatingPr}
+          isDirectCreatePrInFlight={isDirectCreatePrInFlight}
+          showCreatePrEditDetails={Boolean(composerDirectCreatePrAction)}
+          createPrComposerExpanded={createPrComposerExpanded}
+          onToggleCreatePrComposer={handleToggleCreatePrComposer}
           onCreatePrHeaderClick={handleCreatePrHeaderClick}
           onOpenHostedReviewInChecks={openHostedReviewInChecks}
           sourceControlViewMode={sourceControlViewMode}
@@ -5010,9 +5185,46 @@ function SourceControlInner(): React.JSX.Element {
           )}
 
           {showGenericEmptyState && !normalizedFilter ? (
-            <EmptyState
-              heading="No changes on this branch"
-              supportingText={`This workspace is clean and this branch has no changes ahead of ${branchSummary?.baseRef ?? 'base'}`}
+            <SourceControlEmptyState
+              heading={translate(
+                'auto.components.right.sidebar.SourceControl.e8f9a0b1c2',
+                'No changes on this branch'
+              )}
+              supportingText={translate(
+                'auto.components.right.sidebar.SourceControl.f9a0b1c2d3',
+                'This workspace is clean and has no changes ahead of {{value0}}.',
+                { value0: branchSummary?.baseRef ?? 'base' }
+              )}
+              action={
+                emptyBranchCreatePrAction ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <Button
+                          type="button"
+                          size="xs"
+                          disabled
+                          className="h-7 px-3 text-xs"
+                          title={emptyBranchCreatePrAction.title}
+                        >
+                          <GitPullRequestArrow className="size-3.5" aria-hidden="true" />
+                          {emptyBranchCreatePrAction.label}
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" sideOffset={6} className="max-w-72">
+                      {emptyBranchCreatePrAction.title}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : null
+              }
+            />
+          ) : null}
+
+          {showStandaloneCreatePrNotice && createPrIntentNotice ? (
+            <SourceControlCreatePrNotice
+              notice={createPrIntentNotice}
+              onOpenSourceControlAiSettings={openSourceControlAiSettings}
             />
           ) : null}
 
@@ -5054,7 +5266,8 @@ function SourceControlInner(): React.JSX.Element {
           ) : null}
 
           {shouldRenderCommitArea(unresolvedConflicts.length, conflictOperation) &&
-            (directCreatePrAction ? (
+            !hideCommitAreaForPrFlow &&
+            (createPrComposerExpanded && composerDirectCreatePrAction ? (
               <CreateHostedReviewComposer
                 provider={hostedReviewCreateProvider}
                 branch={branchName}
@@ -5080,7 +5293,7 @@ function SourceControlInner(): React.JSX.Element {
                   createPrIntentNotice?.tone === 'destructive' ? createPrIntentNotice.message : null
                 }
                 isCreating={isCreatingPr}
-                primaryAction={directCreatePrAction}
+                primaryAction={composerDirectCreatePrAction}
                 dropdownItems={dropdownItems}
                 onGenerate={handleGeneratePullRequestFieldsClick}
                 onCancelGenerate={handleCancelGeneratePullRequestFields}
@@ -6176,6 +6389,7 @@ export function CommitArea({
               <span className="flex flex-1">
                 <Button
                   type="button"
+                  variant="outline"
                   size="xs"
                   disabled={primaryAction.disabled}
                   onClick={() => onPrimaryAction()}
@@ -6202,9 +6416,10 @@ export function CommitArea({
                   <DropdownMenuTrigger asChild>
                     <Button
                       type="button"
+                      variant="outline"
                       size="xs"
                       className={cn(
-                        'rounded-l-none border-l border-primary-foreground/20 px-1.5 shrink-0',
+                        'rounded-l-none border-l border-border px-1.5 shrink-0',
                         // Why: mirror the primary's disabled dimming so the split
                         // button reads as one unit when Commit is unavailable. The
                         // chevron itself stays clickable — its dropdown exposes

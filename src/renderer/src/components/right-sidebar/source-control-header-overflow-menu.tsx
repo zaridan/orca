@@ -1,5 +1,13 @@
 import React from 'react'
-import { List, ListTree, MessageSquare, MoreHorizontal, RefreshCw, Settings2 } from 'lucide-react'
+import {
+  GitPullRequestArrow,
+  List,
+  ListTree,
+  MessageSquare,
+  MoreHorizontal,
+  RefreshCw,
+  Settings2
+} from 'lucide-react'
 import type { SourceControlViewMode } from '../../../../shared/types'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -20,7 +28,10 @@ export function SourceControlHeaderOverflowMenu({
   onRefreshBranchCompare,
   branchCompareRefreshDisabled,
   diffCommentCount,
-  onExpandNotes
+  onExpandNotes,
+  showCreatePrEditDetails = false,
+  createPrComposerExpanded = false,
+  onToggleCreatePrComposer
 }: {
   sourceControlViewMode: SourceControlViewMode
   viewModeToggleDisabled: boolean
@@ -30,6 +41,9 @@ export function SourceControlHeaderOverflowMenu({
   branchCompareRefreshDisabled: boolean
   diffCommentCount: number
   onExpandNotes: () => void
+  showCreatePrEditDetails?: boolean
+  createPrComposerExpanded?: boolean
+  onToggleCreatePrComposer?: () => void
 }): React.JSX.Element {
   const viewModeLabel =
     sourceControlViewMode === 'tree'
@@ -65,6 +79,23 @@ export function SourceControlHeaderOverflowMenu({
         </TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end" className="min-w-[180px]">
+        {showCreatePrEditDetails && onToggleCreatePrComposer ? (
+          <>
+            <DropdownMenuItem onSelect={onToggleCreatePrComposer}>
+              <GitPullRequestArrow className="size-3.5" />
+              {createPrComposerExpanded
+                ? translate(
+                    'auto.components.right.sidebar.SourceControl.a1b2c3d4e5',
+                    'Hide review details'
+                  )
+                : translate(
+                    'auto.components.right.sidebar.SourceControl.f6e5d4c3b2',
+                    'Edit review details before creating'
+                  )}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
         <DropdownMenuItem disabled={viewModeToggleDisabled} onSelect={onToggleViewMode}>
           {sourceControlViewMode === 'tree' ? (
             <List className="size-3.5" />
