@@ -6856,14 +6856,6 @@ function DiffCommentsInlineList({
   )
 }
 
-function conflictAbortButtonVariant(
-  conflictOperation: GitConflictOperation
-): 'outline' | 'destructive' {
-  // Why: aborting a rebase is the escape hatch for this state, so it should
-  // match the quiet outline conflict-review action instead of reading as red.
-  return conflictOperation === 'rebase' ? 'outline' : 'destructive'
-}
-
 export function ConflictSummaryCard({
   conflictOperation,
   unresolvedCount,
@@ -6939,7 +6931,9 @@ export function ConflictSummaryCard({
         {(conflictOperation === 'merge' || conflictOperation === 'rebase') && onAbortOperation ? (
           <Button
             type="button"
-            variant={conflictAbortButtonVariant(conflictOperation)}
+            // Why: abort is the escape hatch for this state, so match the quiet
+            // outline conflict-review action instead of reading as destructive.
+            variant="outline"
             size="sm"
             className="mt-1.5 h-7 w-full text-xs"
             disabled={isResolvingWithAI || isAbortingOperation}
@@ -6990,7 +6984,9 @@ export function OperationBanner({
       {(conflictOperation === 'merge' || conflictOperation === 'rebase') && onAbortOperation ? (
         <Button
           type="button"
-          variant={conflictAbortButtonVariant(conflictOperation)}
+          // Why: abort is the escape hatch for this state, so match the quiet
+          // outline conflict-review action instead of reading as destructive.
+          variant="outline"
           size="sm"
           className="mt-2 h-7 w-full text-xs"
           disabled={isAbortingOperation}
