@@ -14,6 +14,24 @@ export type AgentForegroundResolutionOptions = {
   contextPaths?: readonly string[]
 }
 
+// Why: a bare shell foreground reaches this resolver on every visible-pane
+// completion poll (~2s) via LocalPtyProvider and the SSH relay, neither of
+// which throttles like the daemon's SHELL_FOREGROUND_REFRESH_RETRY_MS. Each
+// miss spawns a full Win32_Process enumeration (powershell.exe Get-CimInstance,
+// up to 3s). Serve shell results from a short per-pid cache so an idle shell
+// does not churn the process table on every poll. Wrapper enrichment keeps its
+// pre-existing per-call behavior — only the shell path is gated here.
+const SHELL_FOREGROUND_RESULT_CACHE_TTL_MS = 5_000
+const SHELL_FOREGROUND_RESULT_CACHE_MAX_ENTRIES = 256
+type ShellForegroundResult = { result: string | null; resolvedAt: number }
+const shellForegroundResultCache = new Map<number, ShellForegroundResult>()
+
+/** Test-only: drop the per-pid shell foreground cache so cases that reuse a
+ *  shell pid do not observe a previous case's cached result. */
+export function __clearWindowsShellForegroundResultCache(): void {
+  shellForegroundResultCache.clear()
+}
+
 export function shouldInspectWindowsAgentForeground(fallbackProcess: string): boolean {
   return isAgentForegroundWrapperProcess(fallbackProcess) || isShellProcess(fallbackProcess)
 }
@@ -23,12 +41,12 @@ export async function resolveWindowsAgentForegroundProcess(
   fallbackProcess: string,
   options: AgentForegroundResolutionOptions
 ): Promise<string | null> {
+  if (isShellProcess(fallbackProcess)) {
+    return resolveWindowsShellAgentForeground(shellPid, options.contextPaths)
+  }
   const candidates = await queryWindowsProcessDescendants(shellPid)
   if (!candidates) {
     return null
-  }
-  if (isShellProcess(fallbackProcess)) {
-    return resolveShellForegroundProcessFromWindowsCandidates(candidates, options.contextPaths)
   }
   const wrapperCandidates = candidates.filter((candidate) =>
     windowsCandidateMatchesFallbackWrapper(candidate, fallbackProcess)
@@ -47,6 +65,29 @@ export async function resolveWindowsAgentForegroundProcess(
     return recognized.processName
   }
   return null
+}
+
+async function resolveWindowsShellAgentForeground(
+  shellPid: number,
+  contextPaths: readonly string[] | undefined
+): Promise<string | null> {
+  const now = Date.now()
+  const cached = shellForegroundResultCache.get(shellPid)
+  if (cached && now - cached.resolvedAt < SHELL_FOREGROUND_RESULT_CACHE_TTL_MS) {
+    return cached.result
+  }
+  const candidates = await queryWindowsProcessDescendants(shellPid)
+  if (!candidates) {
+    // Why: a probe failure is transient (enumeration disabled, timeout). Do not
+    // cache it — fall through to the caller's fallback and retry next poll.
+    return null
+  }
+  const result = resolveShellForegroundProcessFromWindowsCandidates(candidates, contextPaths)
+  if (shellForegroundResultCache.size >= SHELL_FOREGROUND_RESULT_CACHE_MAX_ENTRIES) {
+    shellForegroundResultCache.clear()
+  }
+  shellForegroundResultCache.set(shellPid, { result, resolvedAt: Date.now() })
+  return result
 }
 
 function resolveShellForegroundProcessFromWindowsCandidates(

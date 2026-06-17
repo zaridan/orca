@@ -9,6 +9,7 @@ vi.mock('child_process', () => ({
 }))
 
 import { resolveAgentForegroundProcess } from './agent-foreground-process'
+import { __clearWindowsShellForegroundResultCache } from './windows-agent-foreground-process'
 
 // Why: the module wraps execFile with promisify, so the mock must honor the
 // Node callback contract — invoke the last arg with (err, { stdout, stderr }).
@@ -71,6 +72,7 @@ describe('resolveAgentForegroundProcess', () => {
 
   beforeEach(() => {
     execFileMock.mockReset()
+    __clearWindowsShellForegroundResultCache()
     platform = Object.getOwnPropertyDescriptor(process, 'platform')
     Object.defineProperty(process, 'platform', { value: 'darwin' })
   })
@@ -150,6 +152,27 @@ describe('resolveAgentForegroundProcess', () => {
     )
 
     await expect(resolveAgentForegroundProcess(100, 'powershell.exe')).resolves.toBe('codex')
+  })
+
+  it('serves repeated idle-shell foreground polls from a short cache without re-enumerating', async () => {
+    // Why: each visible idle-shell pane polls foreground ~every 2s via the
+    // unthrottled local/relay paths. Without a cache, every poll spawns a full
+    // Win32_Process enumeration. The second poll within the TTL must reuse the
+    // first result and issue no further process-table probe.
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: unknown) => {
+        const callback = cb as (err: unknown, result: { stdout: string; stderr: string }) => void
+        callback(null, { stdout: windowsProcessJsonRows(), stderr: '' })
+      }
+    )
+
+    await expect(resolveAgentForegroundProcess(100, 'powershell.exe')).resolves.toBe('codex')
+    const callsAfterFirstPoll = execFileMock.mock.calls.length
+    expect(callsAfterFirstPoll).toBeGreaterThan(0)
+
+    await expect(resolveAgentForegroundProcess(100, 'powershell.exe')).resolves.toBe('codex')
+    expect(execFileMock.mock.calls.length).toBe(callsAfterFirstPoll)
   })
 
   it('recognizes Windows Git Bash shell-rooted agent launches', async () => {

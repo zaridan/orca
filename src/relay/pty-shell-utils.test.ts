@@ -13,6 +13,7 @@ import {
   resolveDefaultCwd,
   resolveWindowsDefaultShell
 } from './pty-shell-utils'
+import { __clearWindowsShellForegroundResultCache } from '../main/providers/windows-agent-foreground-process'
 
 function mockExecFile(
   implementation: (command: string, args: string[]) => { stdout: string; stderr?: string } | Error
@@ -47,6 +48,7 @@ async function withProcessPlatform<T>(
 
 beforeEach(() => {
   execFileMock.mockReset()
+  __clearWindowsShellForegroundResultCache()
 })
 
 describe('resolveWindowsDefaultShell', () => {
