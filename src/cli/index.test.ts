@@ -222,7 +222,7 @@ describe('orca root help', () => {
     expect(callMock).not.toHaveBeenCalled()
   })
 
-  it('hides legacy parent-workspace help and scopes create parent selectors', async () => {
+  it('hides removed parent-workspace help and scopes create parent selectors', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     logSpy.mockClear()
 
@@ -1399,69 +1399,6 @@ describe('orca cli worktree awareness', () => {
     }
   })
 
-  it('accepts the hidden parent-workspace compatibility alias on worktree.create', async () => {
-    queueFixtures(
-      callMock,
-      okFixture('req_create', {
-        worktree: {
-          ...buildWorktree('/tmp/repo/child', 'child', 'abc', 'repo-1'),
-          workspaceLineage: {
-            childWorkspaceKey: 'worktree:repo-1::/tmp/repo/child',
-            childInstanceId: 'child-instance',
-            parentWorkspaceKey: 'folder:folder-1',
-            parentInstanceId: null,
-            origin: 'cli',
-            capture: { source: 'explicit-cli-flag', confidence: 'explicit' },
-            createdAt: 1
-          }
-        },
-        lineage: null,
-        workspaceLineage: {
-          childWorkspaceKey: 'worktree:repo-1::/tmp/repo/child',
-          childInstanceId: 'child-instance',
-          parentWorkspaceKey: 'folder:folder-1',
-          parentInstanceId: null,
-          origin: 'cli',
-          capture: { source: 'explicit-cli-flag', confidence: 'explicit' },
-          createdAt: 1
-        },
-        warnings: []
-      })
-    )
-    vi.spyOn(console, 'log').mockImplementation(() => {})
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    await main(
-      [
-        'worktree',
-        'create',
-        '--repo',
-        'id:repo-1',
-        '--name',
-        'child',
-        '--parent-workspace',
-        'folder:folder-1',
-        '--json'
-      ],
-      '/tmp/repo/parent/src'
-    )
-
-    expect(callMock).toHaveBeenCalledTimes(1)
-    expect(callMock).toHaveBeenCalledWith('worktree.create', {
-      repo: 'id:repo-1',
-      name: 'child',
-      baseBranch: undefined,
-      linkedIssue: undefined,
-      comment: undefined,
-      runHooks: false,
-      activate: false,
-      parentWorktree: undefined,
-      parentWorkspace: 'folder:folder-1',
-      noParent: false,
-      callerTerminalHandle: undefined
-    })
-  })
-
   it('passes folder workspace environment lineage through worktree.create', async () => {
     process.env.ORCA_WORKSPACE_ID = 'folder:folder-1'
     queueFixtures(
@@ -1577,82 +1514,36 @@ describe('orca cli worktree awareness', () => {
     process.exitCode = priorExitCode
   })
 
-  it('rejects hidden parent-workspace conflicts on worktree.create with public wording', async () => {
+  it('rejects removed parent-workspace on worktree.create', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const priorExitCode = process.exitCode
-    const conflictCases = [
-      ['--parent-worktree', 'current'],
-      ['--no-parent']
-    ]
     const outputModes = [[], ['--json']]
 
-    for (const conflictArgs of conflictCases) {
-      for (const outputArgs of outputModes) {
-        logSpy.mockClear()
-        errSpy.mockClear()
-        process.exitCode = priorExitCode
+    for (const outputArgs of outputModes) {
+      logSpy.mockClear()
+      errSpy.mockClear()
+      process.exitCode = priorExitCode
 
-        await main(
-          [
-            'worktree',
-            'create',
-            '--repo',
-            'id:repo-1',
-            '--name',
-            'child',
-            '--parent-workspace',
-            'folder:folder-1',
-            ...conflictArgs,
-            ...outputArgs
-          ],
-          '/tmp/not-managed'
-        )
+      await main(
+        [
+          'worktree',
+          'create',
+          '--repo',
+          'id:repo-1',
+          '--name',
+          'child',
+          '--parent-workspace',
+          'folder:folder-1',
+          ...outputArgs
+        ],
+        '/tmp/repo'
+      )
 
-        const output = [...logSpy.mock.calls, ...errSpy.mock.calls].flat().join('\n')
-        expect(output).toContain('Choose either one parent selector or --no-parent.')
-        expect(output).not.toContain('--parent-workspace')
-        expect(callMock).not.toHaveBeenCalled()
-        expect(process.exitCode).toBe(1)
-      }
-    }
-
-    process.exitCode = priorExitCode
-  })
-
-  it('rejects missing hidden parent-workspace values with public wording', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const priorExitCode = process.exitCode
-    const legacyAliasCases = [['--parent-workspace'], ['--parent-workspace=']]
-    const outputModes = [[], ['--json']]
-
-    for (const legacyAliasArgs of legacyAliasCases) {
-      for (const outputArgs of outputModes) {
-        logSpy.mockClear()
-        errSpy.mockClear()
-        process.exitCode = priorExitCode
-
-        await main(
-          [
-            'worktree',
-            'create',
-            '--repo',
-            'id:repo-1',
-            '--name',
-            'child',
-            ...legacyAliasArgs,
-            ...outputArgs
-          ],
-          '/tmp/repo'
-        )
-
-        const output = [...logSpy.mock.calls, ...errSpy.mock.calls].flat().join('\n')
-        expect(output).toContain('Missing required --parent-worktree')
-        expect(output).not.toContain('--parent-workspace')
-        expect(callMock).not.toHaveBeenCalled()
-        expect(process.exitCode).toBe(1)
-      }
+      const output = [...logSpy.mock.calls, ...errSpy.mock.calls].flat().join('\n')
+      expect(output).toContain('Unknown flag --parent-workspace for command: worktree create')
+      expect(callMock).not.toHaveBeenCalled()
+      expect(process.exitCode).toBe(1)
     }
 
     process.exitCode = priorExitCode

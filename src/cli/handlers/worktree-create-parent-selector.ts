@@ -11,35 +11,16 @@ export type CreateParentSelector = {
 const CREATE_PARENT_CONFLICT_MESSAGE = 'Choose either one parent selector or --no-parent.'
 
 export function assertCreateParentFlagsCompatible(flags: Map<string, string | boolean>): void {
+  if (flags.has('parent-worktree') && flags.get('no-parent') === true) {
+    throw new RuntimeClientError('invalid_argument', CREATE_PARENT_CONFLICT_MESSAGE)
+  }
+  const parentWorktree = flags.get('parent-worktree')
   if (
-    (flags.has('parent-worktree') || flags.has('parent-workspace')) &&
-    flags.get('no-parent') === true
+    flags.has('parent-worktree') &&
+    (typeof parentWorktree !== 'string' || parentWorktree === '')
   ) {
-    throw new RuntimeClientError('invalid_argument', CREATE_PARENT_CONFLICT_MESSAGE)
-  }
-  if (flags.has('parent-workspace') && flags.has('parent-worktree')) {
-    throw new RuntimeClientError('invalid_argument', CREATE_PARENT_CONFLICT_MESSAGE)
-  }
-  assertParentFlagValue(flags, 'parent-worktree')
-  assertParentFlagValue(flags, 'parent-workspace')
-}
-
-function assertParentFlagValue(flags: Map<string, string | boolean>, name: string): void {
-  const value = flags.get(name)
-  if (flags.has(name) && (typeof value !== 'string' || value === '')) {
     throw new RuntimeClientError('invalid_argument', 'Missing required --parent-worktree')
   }
-}
-
-function getLegacyParentWorkspace(flags: Map<string, string | boolean>): string | undefined {
-  if (!flags.has('parent-workspace')) {
-    return undefined
-  }
-  const value = flags.get('parent-workspace')
-  if (typeof value === 'string' && value.length > 0) {
-    return value
-  }
-  throw new RuntimeClientError('invalid_argument', 'Missing required --parent-worktree')
 }
 
 function getWorkspaceKeyParentSelector(selector: string): string | undefined {
@@ -52,11 +33,6 @@ export async function resolveCreateParentSelector(
   cwd: string,
   client: RuntimeClient
 ): Promise<CreateParentSelector> {
-  const legacyParentWorkspace = getLegacyParentWorkspace(flags)
-  if (legacyParentWorkspace) {
-    return { parentWorkspace: legacyParentWorkspace }
-  }
-
   const rawParentWorktree = getOptionalStringFlag(flags, 'parent-worktree')
   if (!rawParentWorktree) {
     return {}

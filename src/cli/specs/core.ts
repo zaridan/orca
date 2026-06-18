@@ -122,7 +122,6 @@ export const CORE_COMMAND_SPECS: CommandSpec[] = [
       'run-hooks',
       'activate'
     ],
-    hiddenFlags: ['parent-workspace'],
     notes: [
       'This creates a new checkout. For a fresh agent in an existing worktree, use `orca terminal create --worktree active --command "codex"` instead.',
       'By default, Orca records the new worktree as a child of the caller context when it can infer one from the Orca terminal or current directory.',
