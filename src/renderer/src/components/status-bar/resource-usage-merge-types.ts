@@ -46,7 +46,7 @@ export type UnifiedProjectGroup = {
 }
 
 export type MergeContext = {
-  /** From useAppStore: maps tabId -> worktreeId for tab-walk resolution. */
+  /** From useAppStore: maps worktreeId -> tabs[] for tab-walk resolution. */
   tabsByWorktree: Record<string, TerminalTab[]>
   /** From useAppStore: maps tabId -> ptyIds[] for the bound check. */
   ptyIdsByTabId: Record<string, string[]>
