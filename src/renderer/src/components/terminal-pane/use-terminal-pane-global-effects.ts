@@ -23,6 +23,7 @@ import { useTerminalScrollVisibilityMemory } from './use-terminal-scroll-visibil
 import { useTerminalContainerFitSync } from './use-terminal-container-fit-sync'
 import { pasteTerminalText } from './terminal-bracketed-paste'
 import { recordTerminalUserInputForLeaf } from './terminal-input-activity'
+import { schedulePostPaintTerminalSettle } from './terminal-post-paint-settle'
 
 const VISIBLE_RESUME_FLUSH_CHARS = 256 * 1024
 
@@ -82,11 +83,12 @@ export function useTerminalPaneGlobalEffects({
   useLayoutEffect(() => {
     const manager = managerRef.current
     if (!manager) {
-      return
+      return undefined
     }
     isActiveRef.current = isActive
     isVisibleRef.current = isVisible
     if (isVisible) {
+      const wasHiddenBeforeResume = !wasVisibleRef.current
       // Why: WebGL resume can disturb xterm's viewport bookkeeping before the
       // post-resume fit runs. Capture numeric viewport positions first; the
       // restore path avoids content matching so duplicate agent log lines do
@@ -126,7 +128,29 @@ export function useTerminalPaneGlobalEffects({
       })
       wasVisibleRef.current = true
       applyPendingFollowOutputRequests()
-      return
+      if (!wasHiddenBeforeResume) {
+        return undefined
+      }
+      return schedulePostPaintTerminalSettle(() => {
+        withSuppressedScrollTracking(() => {
+          // Why: v1.4.78 restored hidden terminals after paint. Keep the
+          // pre-paint resume, but repeat fit/reset once layout has painted so
+          // WebGL does not stay stuck with stale switch-time geometry.
+          if (isActiveRef.current) {
+            fitAndFocusPanes(manager)
+          } else {
+            fitPanes(manager)
+          }
+          for (const pane of manager.getPanes()) {
+            const position = viewportPositions.get(pane.id)
+            if (position) {
+              restoreScrollStateAfterLayout(pane.terminal, position)
+            }
+          }
+          resetAllTerminalWebglAtlases()
+        })
+        applyPendingFollowOutputRequests()
+      })
     } else if (wasVisibleRef.current) {
       // Why: hidden DOM/layout churn can mutate xterm's viewport before the
       // pane becomes visible again. Preserve the last visible position.
@@ -137,6 +161,7 @@ export function useTerminalPaneGlobalEffects({
       manager.suspendRendering()
     }
     wasVisibleRef.current = false
+    return undefined
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, isVisible])
 

@@ -327,6 +327,89 @@ describe('useTerminalPaneGlobalEffects', () => {
     expect(observedPhases).toEqual(['suspend:layout', 'resume:layout', 'reset:layout'])
   })
 
+  it('settles hidden terminal rendering again after the visible workspace paints', () => {
+    const order: string[] = []
+    const pendingFrames: FrameRequestCallback[] = []
+    ;(
+      globalThis as unknown as {
+        window: {
+          addEventListener: ReturnType<typeof vi.fn>
+          removeEventListener: ReturnType<typeof vi.fn>
+          requestAnimationFrame: ReturnType<typeof vi.fn>
+          cancelAnimationFrame: ReturnType<typeof vi.fn>
+          api: {
+            ui: { onFileDrop: ReturnType<typeof vi.fn> }
+            pty: { setActiveRendererPty: ReturnType<typeof vi.fn> }
+          }
+        }
+      }
+    ).window.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+      pendingFrames.push(callback)
+      return pendingFrames.length
+    })
+    ;(
+      globalThis as unknown as {
+        window: {
+          cancelAnimationFrame: ReturnType<typeof vi.fn>
+        }
+      }
+    ).window.cancelAnimationFrame = vi.fn()
+
+    const terminalA = { name: 'terminal-a' }
+    const manager = {
+      getPanes: vi.fn(() => [{ id: 1, terminal: terminalA }]),
+      resumeRendering: vi.fn(() => order.push(`resume:${reactEffectPhaseState.current}`)),
+      resetWebglTextureAtlases: vi.fn(() => order.push(`reset:${reactEffectPhaseState.current}`)),
+      suspendRendering: vi.fn(() => order.push(`suspend:${reactEffectPhaseState.current}`)),
+      fitAllPanes: vi.fn(),
+      getActivePane: vi.fn(() => null),
+      setActivePane: vi.fn()
+    }
+    mocks.fitAndFocusPanes.mockImplementation(() =>
+      order.push(`fit-focus:${reactEffectPhaseState.current}`)
+    )
+    mocks.restoreScrollStateAfterLayout.mockImplementation(() =>
+      order.push(`restore:${reactEffectPhaseState.current}`)
+    )
+    mocks.captureScrollState.mockImplementation(() => ({ terminalName: 'terminal-a' }))
+    registerManagerForReset(manager)
+
+    const baseArgs = {
+      tabId: 'tab-1',
+      worktreeId: 'wt-1',
+      isSyncFitEnabled: true,
+      paneCount: 1,
+      managerRef: { current: manager as never },
+      containerRef: { current: null },
+      paneTransportsRef: { current: new Map() },
+      isActiveRef: { current: false },
+      isVisibleRef: { current: false },
+      toggleExpandPane: vi.fn()
+    }
+
+    beginHookRender()
+    useTerminalPaneGlobalEffects({
+      ...baseArgs,
+      isActive: false,
+      isVisible: false
+    })
+
+    beginHookRender()
+    useTerminalPaneGlobalEffects({
+      ...baseArgs,
+      isActive: true,
+      isVisible: true
+    })
+
+    expect(order).toContain('resume:layout')
+    expect(order).toContain('reset:layout')
+    expect(pendingFrames).toHaveLength(1)
+
+    pendingFrames[0]?.(0)
+
+    expect(order).toEqual(expect.arrayContaining(['fit-focus:idle', 'restore:idle', 'reset:idle']))
+  })
+
   it('reports the active local PTY to the main output scheduler', () => {
     const manager = {
       getPanes: vi.fn(() => [{ id: 1, terminal: { name: 'terminal-a' } }]),

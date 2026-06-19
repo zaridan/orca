@@ -1,4 +1,5 @@
 import type { Page, TestInfo } from '@stablyai/playwright-test'
+import { PNG } from 'pngjs'
 import { test, expect } from './helpers/orca-app'
 import {
   ensureTerminalVisible,
@@ -29,11 +30,20 @@ type TerminalSurfaceSample = {
   largestCanvasBottomGap: number | null
   largestCanvasHeightRatio: number | null
   proposedRows: number | null
+  ptyId: string | null
   rowsBottomGap: number | null
   rowsHeightRatio: number | null
   screenHeight: number | null
+  terminalBufferNonEmptyRows: number | null
+  terminalBufferViewportY: number | null
   terminalRows: number | null
   visibleRowCount: number
+}
+
+type TerminalPixelSample = {
+  inkPixels: number
+  inkRatio: number
+  totalPixels: number
 }
 
 type ProbeWindow = Window & {
@@ -155,6 +165,7 @@ async function installManagerProbe(page: Page): Promise<void> {
       const currentManager = currentTabId ? window.__paneManagers?.get(currentTabId) : null
       const currentPane =
         currentManager?.getActivePane?.() ?? currentManager?.getPanes?.()[0] ?? null
+      const terminalBuffer = currentPane?.terminal.buffer.active ?? null
       const screen = currentPane?.container.querySelector('.xterm-screen') ?? null
       const rows = screen?.querySelector('.xterm-rows') ?? null
       const screenRect = screen?.getBoundingClientRect() ?? null
@@ -183,6 +194,13 @@ async function installManagerProbe(page: Page): Promise<void> {
         }
       })()
       const screenHeight = screenRect?.height ?? null
+      const terminalBufferNonEmptyRows =
+        terminalBuffer === null
+          ? null
+          : Array.from({ length: terminalBuffer.length }).filter((_, index) => {
+              const line = terminalBuffer.getLine(index)
+              return line ? line.translateToString(true).trim().length > 0 : false
+            }).length
 
       return {
         frame,
@@ -200,6 +218,7 @@ async function installManagerProbe(page: Page): Promise<void> {
             ? largestCanvasRect.height / screenRect.height
             : null,
         proposedRows,
+        ptyId: currentPane?.container.dataset.ptyId ?? null,
         rowsBottomGap:
           screenRect && rowsRect ? Math.max(0, screenRect.bottom - rowsRect.bottom) : null,
         rowsHeightRatio:
@@ -207,6 +226,8 @@ async function installManagerProbe(page: Page): Promise<void> {
             ? rowsRect.height / screenRect.height
             : null,
         screenHeight,
+        terminalBufferNonEmptyRows,
+        terminalBufferViewportY: terminalBuffer?.viewportY ?? null,
         terminalRows: currentPane?.terminal.rows ?? null,
         visibleRowCount
       }
@@ -330,6 +351,80 @@ async function attachFrameSamples(
   })
 }
 
+async function attachPixelSamples(
+  testInfo: TestInfo,
+  samples: TerminalPixelSample[],
+  name = 'terminal-worktree-switch-pixel-samples'
+): Promise<void> {
+  await testInfo.attach(name, {
+    body: `${JSON.stringify(samples, null, 2)}\n`,
+    contentType: 'application/json'
+  })
+}
+
+function countTerminalInkPixels(buffer: Buffer): TerminalPixelSample {
+  const image = PNG.sync.read(buffer)
+  const buckets = new Map<string, { count: number; red: number; green: number; blue: number }>()
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    const alpha = image.data[offset + 3] ?? 0
+    if (alpha < 128) {
+      continue
+    }
+    const red = image.data[offset] ?? 0
+    const green = image.data[offset + 1] ?? 0
+    const blue = image.data[offset + 2] ?? 0
+    const key = `${red >> 3},${green >> 3},${blue >> 3}`
+    const bucket = buckets.get(key) ?? { count: 0, red, green, blue }
+    bucket.count += 1
+    buckets.set(key, bucket)
+  }
+
+  const background = [...buckets.values()].sort((a, b) => b.count - a.count)[0]
+  if (!background) {
+    return { inkPixels: 0, inkRatio: 0, totalPixels: image.width * image.height }
+  }
+
+  let inkPixels = 0
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    const alpha = image.data[offset + 3] ?? 0
+    if (alpha < 128) {
+      continue
+    }
+    const red = image.data[offset] ?? 0
+    const green = image.data[offset + 1] ?? 0
+    const blue = image.data[offset + 2] ?? 0
+    const distance =
+      Math.abs(red - background.red) +
+      Math.abs(green - background.green) +
+      Math.abs(blue - background.blue)
+    if (distance > 48) {
+      inkPixels += 1
+    }
+  }
+
+  const totalPixels = image.width * image.height
+  return { inkPixels, inkRatio: totalPixels > 0 ? inkPixels / totalPixels : 0, totalPixels }
+}
+
+async function screenshotActiveTerminalScreen(
+  page: Page,
+  sample: TerminalSurfaceSample
+): Promise<Buffer> {
+  const screen =
+    sample.ptyId === null
+      ? page.locator('.xterm-screen').first()
+      : page.locator(`[data-pty-id="${sample.ptyId}"] .xterm-screen`).first()
+  await expect(screen).toBeVisible()
+  return screen.screenshot({ animations: 'disabled' })
+}
+
+async function readActiveTerminalPixelSample(
+  page: Page,
+  sample: TerminalSurfaceSample
+): Promise<TerminalPixelSample> {
+  return countTerminalInkPixels(await screenshotActiveTerminalScreen(page, sample))
+}
+
 test.describe('terminal worktree switch first frame @headful', () => {
   test('resumes the hidden terminal before the first visible frame after switching back', async ({
     orcaPage
@@ -353,39 +448,74 @@ test.describe('terminal worktree switch first frame @headful', () => {
 
     const baseline = await readCurrentTerminalSurface(orcaPage)
     await attachFrameSamples(testInfo, [baseline], 'terminal-worktree-switch-baseline-sample')
+    const baselinePixelSample = await readActiveTerminalPixelSample(orcaPage, baseline)
+    await attachPixelSamples(
+      testInfo,
+      [baselinePixelSample],
+      'terminal-worktree-switch-baseline-ink'
+    )
     expect(baseline.hasWebgl, 'baseline terminal should use WebGL').toBe(true)
+    expect(
+      baseline.terminalBufferNonEmptyRows,
+      'baseline terminal buffer should contain dense content'
+    ).toBeGreaterThanOrEqual(Math.floor((baseline.terminalRows ?? 0) * 0.75))
+    expect(
+      baselinePixelSample.inkPixels,
+      'baseline terminal should paint text pixels'
+    ).toBeGreaterThan(1_000)
     expect(isCollapsedSurface(baseline), 'baseline terminal surface should be full height').toBe(
       false
     )
 
-    await switchToWorktree(orcaPage, secondWorktreeId)
-    await expect
-      .poll(() => getActiveWorktreeId(orcaPage), {
-        timeout: 10_000,
-        message: 'second worktree did not become active before first-frame repro'
-      })
-      .toBe(secondWorktreeId)
-    await ensureTerminalVisible(orcaPage)
-    await waitForActiveTerminalManager(orcaPage, 30_000)
-    await expect
-      .poll(() => readManagerEventNames(orcaPage), {
-        timeout: 5_000,
-        message: 'original terminal did not suspend after being hidden'
-      })
-      .toContain('suspendRendering')
-    await resetManagerEvents(orcaPage)
-
-    const samples = await sampleFramesAfterSwitchBack(orcaPage, firstWorktreeId, 8)
-    await attachFrameSamples(testInfo, samples)
-
-    expect(samples[0]?.activeWorktreeId).toBe(firstWorktreeId)
-    expect(samples[0]?.eventNames).toEqual(
-      expect.arrayContaining(['resumeRendering', 'fitAllPanes', 'resetWebglTextureAtlases'])
+    const switchRounds = Math.max(
+      1,
+      Number.parseInt(process.env.ORCA_TERMINAL_SWITCH_ROUNDS ?? '1', 10) || 1
     )
-    expect(samples[0]?.hasWebgl, 'WebGL should be reattached before frame 1').toBe(true)
-    expect(
-      samples.filter(isCollapsedSurface),
-      'terminal surface should not collapse during first frames after worktree restore'
-    ).toEqual([])
+    const restoredPixelSamples: TerminalPixelSample[] = []
+    for (let round = 0; round < switchRounds; round += 1) {
+      await switchToWorktree(orcaPage, secondWorktreeId)
+      await expect
+        .poll(() => getActiveWorktreeId(orcaPage), {
+          timeout: 10_000,
+          message: 'second worktree did not become active before first-frame repro'
+        })
+        .toBe(secondWorktreeId)
+      await ensureTerminalVisible(orcaPage)
+      await waitForActiveTerminalManager(orcaPage, 30_000)
+      await expect
+        .poll(() => readManagerEventNames(orcaPage), {
+          timeout: 5_000,
+          message: 'original terminal did not suspend after being hidden'
+        })
+        .toContain('suspendRendering')
+      await resetManagerEvents(orcaPage)
+
+      const samples = await sampleFramesAfterSwitchBack(orcaPage, firstWorktreeId, 8)
+      await attachFrameSamples(testInfo, samples, `terminal-worktree-switch-frame-samples-${round}`)
+      const restoredPixelSample = await readActiveTerminalPixelSample(
+        orcaPage,
+        samples.at(-1) ?? samples[0] ?? baseline
+      )
+      restoredPixelSamples.push(restoredPixelSample)
+
+      expect(samples[0]?.activeWorktreeId).toBe(firstWorktreeId)
+      expect(samples[0]?.eventNames).toEqual(
+        expect.arrayContaining(['resumeRendering', 'fitAllPanes', 'resetWebglTextureAtlases'])
+      )
+      expect(samples[0]?.hasWebgl, 'WebGL should be reattached before frame 1').toBe(true)
+      expect(
+        samples.filter(isCollapsedSurface),
+        'terminal surface should not collapse during first frames after worktree restore'
+      ).toEqual([])
+      expect(
+        samples.at(-1)?.terminalBufferNonEmptyRows,
+        'terminal buffer should still contain dense content after switch restore'
+      ).toBeGreaterThanOrEqual(Math.floor((baseline.terminalRows ?? 0) * 0.75))
+      expect(
+        restoredPixelSample.inkPixels,
+        'terminal glyph pixels should remain painted after worktree restore'
+      ).toBeGreaterThanOrEqual(Math.floor(baselinePixelSample.inkPixels * 0.75))
+    }
+    await attachPixelSamples(testInfo, restoredPixelSamples)
   })
 })
