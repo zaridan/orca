@@ -10,6 +10,13 @@ export type GitHubLinkQuery = {
   directNumber: number | null
 }
 
+export function buildGitHubRepoUrl(slug: RepoSlug | null | undefined): string | null {
+  if (!slug?.owner || !slug.repo) {
+    return null
+  }
+  return `https://github.com/${encodeURIComponent(slug.owner)}/${encodeURIComponent(slug.repo)}`
+}
+
 function matchGitHubItemPath(url: URL): RegExpExecArray | null {
   return GH_ITEM_PATH_RE.exec(url.pathname.replace(/\/+$/, ''))
 }
@@ -36,7 +43,7 @@ export function parseGitHubIssueOrPRNumber(input: string): number | null {
     return null
   }
 
-  if (!/^(?:www\.)?github\.com$/i.test(url.hostname)) {
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     return null
   }
 
@@ -50,7 +57,7 @@ export function parseGitHubIssueOrPRNumber(input: string): number | null {
 
 /**
  * Parses an owner/repo slug plus issue/PR number from a GitHub URL. Returns
- * null for anything that isn't a recognizable github.com issue or pull URL.
+ * null for anything that isn't a recognizable GitHub-shaped issue or pull URL.
  */
 export function parseGitHubIssueOrPRLink(input: string): {
   slug: RepoSlug
@@ -69,7 +76,7 @@ export function parseGitHubIssueOrPRLink(input: string): {
     return null
   }
 
-  if (!/^(?:www\.)?github\.com$/i.test(url.hostname)) {
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     return null
   }
 
@@ -105,7 +112,7 @@ export function normalizeGitHubLinkQuery(raw: string): GitHubLinkQuery {
     return { query: trimmed, directNumber: null }
   }
 
-  // Why: any github.com issue/pull URL is accepted by number regardless of
+  // Why: any GitHub-shaped issue/pull URL is accepted by number regardless of
   // slug, since fork checkouts can legitimately target upstream issues whose
   // slug differs from the origin remote.
   return {

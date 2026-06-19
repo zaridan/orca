@@ -17,9 +17,13 @@ import {
   isBenignCheckFailure,
   isMissingUpdateManifestFailure,
   isPrereleaseVersion,
+  isReleaseAssetsPublishingFailure,
   statusesEqual
 } from './updater-fallback'
-import { fetchNewerReleaseTags, getReleaseDownloadUrl } from './updater-prerelease-feed'
+import {
+  fetchNewerReleaseTagsWithReadiness,
+  getReleaseDownloadUrl
+} from './updater-prerelease-feed'
 import { fetchNudge, shouldApplyNudge } from './updater-nudge'
 
 type CheckFailureSource = 'event' | 'promise' | 'fallback-promise'
@@ -31,11 +35,12 @@ const AUTO_UPDATE_RETRY_INTERVAL_MS = 60 * 60 * 1000
 const NUDGE_POLL_INTERVAL_MS = 30 * 60 * 1000
 const NUDGE_ACTIVATION_COOLDOWN_MS = 5 * 60 * 1000
 const QUIT_AND_INSTALL_DELAY_MS = 100
+const PRE_QUIT_CLEANUP_TIMEOUT_MS = 2_500
 
 let mainWindowRef: BrowserWindow | null = null
 let currentStatus: UpdateStatus = { state: 'idle' }
 let userInitiatedCheck = false
-let onBeforeQuitCleanup: (() => void) | null = null
+let onBeforeQuitCleanup: (() => void | Promise<void>) | null = null
 let autoUpdaterInitialized = false
 // Why: Shift-clicking "Check for Updates" opts the user into the RC release
 // channel for the rest of this process. The generic feed still gets pinned to
@@ -48,13 +53,19 @@ let pendingCheckFailurePromise: Promise<void> | null = null
 let autoUpdateCheckTimer: ReturnType<typeof setTimeout> | null = null
 let nudgeCheckTimer: ReturnType<typeof setTimeout> | null = null
 let pendingQuitAndInstallTimer: ReturnType<typeof setTimeout> | null = null
+let quitAndInstallInProgress = false
 let persistLastUpdateCheckAt: ((timestamp: number) => void) | null = null
 let _getLastUpdateCheckAt: (() => number | null) | null = null
 let backgroundCheckLaunchPending = false
+// Why: a manually promoted background check can emit an error event before the
+// paired promise catch runs; keep the promotion attached to that launch.
+let backgroundCheckPromotedToUserInitiated = false
+let pendingPrereleaseUserInitiatedCheckAfterInFlight = false
 let activeUpdateNudgeId: string | null = null
 let awaitingNudgeCheckOutcome = false
 let nudgeCheckInFlight = false
 let lastNudgeCheckAt = 0
+let publishingWindowLastGoodCheck: { lastGoodTag: string } | null = null
 let pendingPrereleaseFallback: {
   primaryTag: string
   fallbackTag: string
@@ -105,6 +116,19 @@ function clearPendingUpdateNudge(): void {
   _setPendingUpdateNudgeId?.(null)
 }
 
+function deferPendingUpdateNudgeUntilRetry(): void {
+  activeUpdateNudgeId = null
+  awaitingNudgeCheckOutcome = false
+}
+
+function clearPublishingWindowLastGoodCheck(): void {
+  publishingWindowLastGoodCheck = null
+}
+
+function getPublishingWindowLastGoodCheck(): { lastGoodTag: string } | null {
+  return publishingWindowLastGoodCheck
+}
+
 function getPersistedPendingUpdateNudgeId(): string | null {
   return _getPendingUpdateNudgeId?.() ?? null
 }
@@ -123,28 +147,61 @@ function decorateStatusWithActiveNudge(status: UpdateStatus): UpdateStatus {
 }
 
 function sendStatus(status: UpdateStatus): void {
+  const shouldLaunchPendingPrereleaseCheck =
+    pendingPrereleaseUserInitiatedCheckAfterInFlight &&
+    (status.state === 'idle' ||
+      status.state === 'not-available' ||
+      status.state === 'available' ||
+      status.state === 'error')
+  const shouldPreserveNudgeForPublishingWindow =
+    publishingWindowLastGoodCheck !== null &&
+    (status.state === 'idle' ||
+      status.state === 'not-available' ||
+      status.state === 'available' ||
+      status.state === 'error')
   if (awaitingNudgeCheckOutcome) {
     if (status.state === 'available') {
-      awaitingNudgeCheckOutcome = false
+      if (shouldPreserveNudgeForPublishingWindow) {
+        // Why: a last-good available update is only a temporary fallback; don't
+        // let dismissing that card consume the newest-release nudge campaign.
+        deferPendingUpdateNudgeUntilRetry()
+      } else {
+        awaitingNudgeCheckOutcome = false
+      }
     } else if (
       status.state === 'idle' ||
       status.state === 'not-available' ||
       status.state === 'error'
     ) {
-      // Why: when a nudge-triggered check finds no update (or errors out),
-      // move the campaign to dismissed so it doesn't re-fire on the next
-      // poll cycle. Without this, a nudge whose version range includes
-      // already-up-to-date users would loop every 30 minutes, each time
-      // triggering a redundant checkForUpdates() and clearing the persisted
-      // dismissedUpdateVersion.
-      if (activeUpdateNudgeId) {
-        _setDismissedUpdateNudgeId?.(activeUpdateNudgeId)
+      if (shouldPreserveNudgeForPublishingWindow) {
+        // Why: last-good checks can legitimately say "not available" while
+        // the campaign's newest release is still publishing.
+        deferPendingUpdateNudgeUntilRetry()
+      } else {
+        // Why: when a nudge-triggered check finds no update (or errors out),
+        // move the campaign to dismissed so it doesn't re-fire on the next
+        // poll cycle. Without this, a nudge whose version range includes
+        // already-up-to-date users would loop every 30 minutes, each time
+        // triggering a redundant checkForUpdates() and clearing the persisted
+        // dismissedUpdateVersion.
+        if (activeUpdateNudgeId) {
+          _setDismissedUpdateNudgeId?.(activeUpdateNudgeId)
+        }
+        clearPendingUpdateNudge()
       }
-      clearPendingUpdateNudge()
     }
   }
 
   const decoratedStatus = decorateStatusWithActiveNudge(status)
+
+  if (
+    status.state === 'idle' ||
+    status.state === 'not-available' ||
+    status.state === 'available' ||
+    status.state === 'error'
+  ) {
+    clearPublishingWindowLastGoodCheck()
+  }
 
   // Why: reset the in-flight guard when the status moves past the
   // window where duplicate download() calls are possible.
@@ -155,11 +212,28 @@ function sendStatus(status: UpdateStatus): void {
   ) {
     downloadInFlight = false
   }
+  if (shouldLaunchPendingPrereleaseCheck) {
+    launchPendingPrereleaseUserInitiatedCheckAfterInFlight()
+    return
+  }
   if (statusesEqual(currentStatus, decoratedStatus)) {
     return
   }
   currentStatus = decoratedStatus
   mainWindowRef?.webContents.send('updater:status', decoratedStatus)
+}
+
+function launchPendingPrereleaseUserInitiatedCheckAfterInFlight(): void {
+  pendingPrereleaseUserInitiatedCheckAfterInFlight = false
+  setTimeout(() => {
+    // Why: electron-updater clears its in-flight promise after emitting the
+    // terminal event. Deferring one tick lets the queued RC check start fresh
+    // instead of being deduped into the just-finished stable check.
+    if (currentStatus.state === 'checking') {
+      currentStatus = { state: 'idle' }
+    }
+    checkForUpdatesFromMenu({ includePrerelease: true })
+  }, 0)
 }
 
 function clearBackgroundCheckLaunchPending(): void {
@@ -211,7 +285,12 @@ function clearPrereleaseFallbackContextIfSettled(): void {
   }
 }
 
-function performQuitAndInstall(): void {
+async function performQuitAndInstall(): Promise<void> {
+  if (quitAndInstallInProgress) {
+    return
+  }
+  quitAndInstallInProgress = true
+
   if (pendingQuitAndInstallTimer) {
     clearTimeout(pendingQuitAndInstallTimer)
     pendingQuitAndInstallTimer = null
@@ -227,14 +306,45 @@ function performQuitAndInstall(): void {
   // either can't replace it or the user ends up on the old version.
   quittingForUpdate = true
 
+  await runBeforeUpdateQuitCleanup()
   killAllPty()
-  onBeforeQuitCleanup?.()
 
   for (const win of BrowserWindow.getAllWindows()) {
     win.removeAllListeners('close')
   }
 
   getAutoUpdater().quitAndInstall(false, true)
+}
+
+async function runBeforeUpdateQuitCleanup(): Promise<void> {
+  if (!onBeforeQuitCleanup) {
+    return
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  const cleanup = Promise.resolve()
+    .then(() => onBeforeQuitCleanup?.())
+    .catch((error) => {
+      console.warn(
+        '[updater] Pre-quit cleanup failed; continuing update install:',
+        error instanceof Error ? error.name : typeof error
+      )
+    })
+  const timeoutResult = new Promise<'timeout'>((resolve) => {
+    timeout = setTimeout(() => resolve('timeout'), PRE_QUIT_CLEANUP_TIMEOUT_MS)
+  })
+
+  const result = await Promise.race([cleanup.then(() => 'done' as const), timeoutResult])
+  if (result === 'timeout') {
+    console.warn(
+      `[updater] Pre-quit cleanup exceeded ${PRE_QUIT_CLEANUP_TIMEOUT_MS}ms; continuing update install`
+    )
+    return
+  }
+
+  if (timeout) {
+    clearTimeout(timeout)
+  }
 }
 
 async function sendCheckFailureStatus(
@@ -296,6 +406,12 @@ async function sendCheckFailureStatus(
         // actionable cause.
         sendErrorStatus("Couldn't reach the update server. Try again in a few minutes.", true)
       } else {
+        if (isReleaseAssetsPublishingFailure(message)) {
+          // Why: a nudge-triggered check can land during the brief window where
+          // GitHub exposes a release before its updater assets are reachable.
+          // Keep the campaign pending so the short retry can still show it.
+          deferPendingUpdateNudgeUntilRetry()
+        }
         sendStatus({ state: 'idle' })
       }
       return
@@ -436,11 +552,15 @@ async function pinDefaultReleaseFeed(): Promise<void> {
   // newer RC or the next stable. Stable users should only resolve stable tags.
   const currentVersion = app.getVersion()
   const includePrerelease = includePrereleaseActive || isPrereleaseVersion(currentVersion)
-  const releaseTags = await fetchNewerReleaseTags(currentVersion, includePrerelease ? 2 : 1, {
-    includePrerelease
-  })
-  const newerTag = releaseTags[0] ?? null
-  const fallbackTag = includePrerelease ? (releaseTags[1] ?? null) : null
+  const releaseTagsResult = await fetchNewerReleaseTagsWithReadiness(
+    currentVersion,
+    includePrerelease ? 2 : 1,
+    {
+      includePrerelease
+    }
+  )
+  const newerTag = releaseTagsResult.tags[0] ?? null
+  const fallbackTag = includePrerelease ? (releaseTagsResult.tags[1] ?? null) : null
   pendingPrereleaseFallback =
     includePrerelease && newerTag && fallbackTag
       ? {
@@ -461,13 +581,33 @@ async function pinDefaultReleaseFeed(): Promise<void> {
   // the updater on a user's machine when something goes wrong. Cheap to keep,
   // invaluable when triaging.
   if (newerTag) {
+    clearPublishingWindowLastGoodCheck()
     const url = getReleaseDownloadUrl(newerTag)
     console.info(
       `[updater] release feed pinned: current=${currentVersion} includePrerelease=${includePrerelease} → ${url}`
     )
     autoUpdater.setFeedURL({ provider: 'generic', url })
+  } else if (releaseTagsResult.state === 'not-ready') {
+    clearPrereleaseFallbackContext()
+    if (releaseTagsResult.lastGoodTag) {
+      // Why: during a publish window the newest tag is unsafe, but a verified
+      // last-good concrete feed lets electron-updater emit a real result.
+      const url = getReleaseDownloadUrl(releaseTagsResult.lastGoodTag)
+      console.info(
+        `[updater] release feed pinned to last-good: current=${currentVersion} includePrerelease=${includePrerelease} → ${url}`
+      )
+      publishingWindowLastGoodCheck = { lastGoodTag: releaseTagsResult.lastGoodTag }
+      autoUpdater.setFeedURL({ provider: 'generic', url })
+      return
+    }
+    clearPublishingWindowLastGoodCheck()
+    console.info(
+      `[updater] release feed deferred: current=${currentVersion} includePrerelease=${includePrerelease}; newest release assets are still publishing`
+    )
+    throw new Error('Latest release assets are still publishing')
   } else {
     clearPrereleaseFallbackContext()
+    clearPublishingWindowLastGoodCheck()
     const url = 'https://github.com/stablyai/orca/releases/latest/download'
     console.info(
       `[updater] release feed fallback: current=${currentVersion} includePrerelease=${includePrerelease} → ${url}`
@@ -545,14 +685,21 @@ function runBackgroundUpdateCheck(
   // currentStatus flips to 'checking'. Track the launch in memory to dedupe
   // that gap without persisting a successful-check timestamp before the result.
   backgroundCheckLaunchPending = true
+  backgroundCheckPromotedToUserInitiated = false
   // Don't send 'checking' here — the 'checking-for-update' event handler does it,
   // and sending it from both places causes duplicate notifications (issue #35).
   const autoUpdater = getAutoUpdater()
   const launch = (): Promise<unknown> => autoUpdater.checkForUpdates()
   const run = pinDefaultReleaseFeed().then(launch)
   void Promise.resolve(run).catch((err) => {
+    const wasUserInitiated =
+      userInitiatedCheck || backgroundCheckPromotedToUserInitiated || undefined
     backgroundCheckLaunchPending = false
-    void sendCheckFailureStatus(String(err?.message ?? err), undefined, 'promise', err)
+    backgroundCheckPromotedToUserInitiated = false
+    if (wasUserInitiated) {
+      userInitiatedCheck = false
+    }
+    void sendCheckFailureStatus(String(err?.message ?? err), wasUserInitiated, 'promise', err)
   })
 }
 
@@ -599,13 +746,25 @@ export function checkForUpdatesFromMenu(options?: { includePrerelease?: boolean 
     enableIncludePrerelease()
   }
 
+  const checkAlreadyInFlight = backgroundCheckLaunchPending || currentStatus.state === 'checking'
   userInitiatedCheck = true
   // Why: a manual check is independent of any active nudge campaign. Reset the
   // nudge marker so the resulting status is not decorated with activeNudgeId,
   // which would cause a later dismiss to consume the campaign by accident.
   activeUpdateNudgeId = null
-  // Don't send 'checking' here — the 'checking-for-update' event handler does it,
-  // and sending it from both places causes duplicate notifications (issue #35).
+  // Why: manual checks should visibly respond before feed pinning or the
+  // electron-updater event fires; duplicate event broadcasts are suppressed by
+  // status equality below.
+  sendStatus({ state: 'checking', userInitiated: true })
+  if (checkAlreadyInFlight) {
+    backgroundCheckPromotedToUserInitiated = true
+    if (options?.includePrerelease) {
+      // Why: the in-flight check may have already pinned the stable feed.
+      // Queue a fresh RC check so Shift-click doesn't inherit a stable result.
+      pendingPrereleaseUserInitiatedCheckAfterInFlight = true
+    }
+    return
+  }
 
   const autoUpdater = getAutoUpdater()
   const launch = (): Promise<unknown> => autoUpdater.checkForUpdates()
@@ -621,7 +780,7 @@ export function isQuittingForUpdate(): boolean {
 }
 
 export function quitAndInstall(): void {
-  if (pendingQuitAndInstallTimer) {
+  if (pendingQuitAndInstallTimer || quitAndInstallInProgress) {
     return
   }
 
@@ -641,7 +800,7 @@ export function quitAndInstall(): void {
   // a moment to flush dismissals/state updates before windows start closing,
   // and centralizing it avoids drift between the toast flow and settings UI.
   pendingQuitAndInstallTimer = setTimeout(() => {
-    performQuitAndInstall()
+    void performQuitAndInstall()
   }, QUIT_AND_INSTALL_DELAY_MS)
 }
 
@@ -714,7 +873,7 @@ export function setupAutoUpdater(
   mainWindow: BrowserWindow,
   opts?: {
     getLastUpdateCheckAt?: () => number | null
-    onBeforeQuit?: () => void
+    onBeforeQuit?: () => void | Promise<void>
     setLastUpdateCheckAt?: (timestamp: number) => void
     getPendingUpdateNudgeId?: () => string | null
     getDismissedUpdateNudgeId?: () => string | null
@@ -796,6 +955,7 @@ export function setupAutoUpdater(
     clearAvailableUpdateContext,
     consumeMissingManifestPrereleaseFallbackResult,
     getMissingManifestPrereleaseFallbackUserInitiated,
+    getPublishingWindowLastGoodCheck,
     getCurrentStatus: () => currentStatus,
     getKnownReleaseUrl,
     getPendingInstallVersion,

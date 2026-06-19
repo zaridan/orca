@@ -9,6 +9,8 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import { useAppStore } from '@/store'
+import { translate } from '@/i18n/i18n'
 
 type ConfirmationDialogOptions = {
   title: string
@@ -36,16 +38,24 @@ export function ConfirmationDialogProvider({
   const nextIdRef = useRef(0)
   const [queue, setQueue] = useState<ConfirmationDialogRequest[]>([])
   const activeRequest = queue[0] ?? null
-  const [renderedRequest, setRenderedRequest] = useState<ConfirmationDialogRequest | null>(null)
   const activeRequestRef = useRef<ConfirmationDialogRequest | null>(activeRequest)
-  const displayedRequest = activeRequest ?? renderedRequest
+  const setContextualToursBlockingSurfaceVisible = useAppStore(
+    (s) => s.setContextualToursBlockingSurfaceVisible
+  )
+  const lastDisplayedRequestRef = useRef<ConfirmationDialogRequest | null>(activeRequest)
+  activeRequestRef.current = activeRequest
+  if (activeRequest) {
+    lastDisplayedRequestRef.current = activeRequest
+  }
+  // Why: Radix keeps dialog content mounted while closing; keep labels stable without a post-render Effect.
+  const displayedRequest = activeRequest ?? lastDisplayedRequestRef.current
 
   useEffect(() => {
-    activeRequestRef.current = activeRequest
-    if (activeRequest) {
-      setRenderedRequest(activeRequest)
-    }
-  }, [activeRequest])
+    // Why: this provider's dialog is not represented by activeModal. Block
+    // contextual tours so they cannot appear behind confirmation prompts.
+    setContextualToursBlockingSurfaceVisible(activeRequest !== null)
+    return () => setContextualToursBlockingSurfaceVisible(false)
+  }, [activeRequest, setContextualToursBlockingSurfaceVisible])
 
   const confirm = useCallback<ConfirmationDialogContextValue>((options) => {
     return new Promise((resolve) => {
@@ -89,14 +99,16 @@ export function ConfirmationDialogProvider({
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => settleActiveRequest(false)}>
-              {displayedRequest?.options.cancelLabel ?? 'Cancel'}
+              {displayedRequest?.options.cancelLabel ??
+                translate('auto.components.confirmation.dialog.56f5c60e0c', 'Cancel')}
             </Button>
             <Button
               type="button"
               variant={displayedRequest?.options.confirmVariant ?? 'default'}
               onClick={() => settleActiveRequest(true)}
             >
-              {displayedRequest?.options.confirmLabel ?? 'Confirm'}
+              {displayedRequest?.options.confirmLabel ??
+                translate('auto.components.confirmation.dialog.8490e5d36a', 'Confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>

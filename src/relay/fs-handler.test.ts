@@ -132,6 +132,7 @@ describe('FsHandler', () => {
     expect(methods).toContain('fs.createDir')
     expect(methods).toContain('fs.createDirNoClobber')
     expect(methods).toContain('fs.rename')
+    expect(methods).toContain('fs.renameNoClobber')
     expect(methods).toContain('fs.copy')
     expect(methods).toContain('fs.realpath')
     expect(methods).toContain('fs.search')
@@ -287,6 +288,19 @@ describe('FsHandler', () => {
     expect(result.type).toBe('directory')
   })
 
+  it('lstat returns symlink type without following links', async () => {
+    const targetFile = path.join(tmpDir, 'target.txt')
+    const linkPath = path.join(tmpDir, 'link.txt')
+    writeFileSync(targetFile, 'target')
+    symlinkSync(targetFile, linkPath)
+
+    const result = (await dispatcher.callRequest('fs.lstat', { filePath: linkPath })) as {
+      type: string
+    }
+
+    expect(result.type).toBe('symlink')
+  })
+
   it('workspaceSpaceScan returns bounded top-level size details', async () => {
     mkdirSync(path.join(tmpDir, 'node_modules'))
     writeFileSync(path.join(tmpDir, 'node_modules', 'pkg.js'), Buffer.alloc(512))
@@ -349,6 +363,43 @@ describe('FsHandler', () => {
     expect(content).toBe('content')
   })
 
+  it('rename preserves raw fs.rename overwrite semantics', async () => {
+    const oldPath = path.join(tmpDir, 'old.txt')
+    const newPath = path.join(tmpDir, 'existing.txt')
+    writeFileSync(oldPath, 'new')
+    writeFileSync(newPath, 'keep')
+
+    await dispatcher.callRequest('fs.rename', { oldPath, newPath })
+
+    expect(await fs.readFile(newPath, 'utf-8')).toBe('new')
+    await expect(fs.access(oldPath)).rejects.toThrow()
+  })
+
+  it('renameNoClobber moves files when destination is available', async () => {
+    const oldPath = path.join(tmpDir, 'old.txt')
+    const newPath = path.join(tmpDir, 'new.txt')
+    writeFileSync(oldPath, 'content')
+
+    await dispatcher.callRequest('fs.renameNoClobber', { oldPath, newPath })
+
+    await expect(fs.access(oldPath)).rejects.toThrow()
+    expect(await fs.readFile(newPath, 'utf-8')).toBe('content')
+  })
+
+  it('renameNoClobber does not overwrite an existing destination', async () => {
+    const oldPath = path.join(tmpDir, 'old.txt')
+    const newPath = path.join(tmpDir, 'existing.txt')
+    writeFileSync(oldPath, 'new')
+    writeFileSync(newPath, 'keep')
+
+    await expect(
+      dispatcher.callRequest('fs.renameNoClobber', { oldPath, newPath })
+    ).rejects.toThrow()
+
+    expect(await fs.readFile(newPath, 'utf-8')).toBe('keep')
+    expect(await fs.readFile(oldPath, 'utf-8')).toBe('new')
+  })
+
   it('copy duplicates files', async () => {
     const src = path.join(tmpDir, 'src.txt')
     const dst = path.join(tmpDir, 'dst.txt')
@@ -382,8 +433,7 @@ describe('FsHandler', () => {
 
     const result = (await dispatcher.callRequest('fs.realpath', { filePath: linkPath })) as string
     // On macOS, /var is a symlink to /private/var, so resolve both to compare
-    const { realpathSync } = await import('fs')
-    expect(result).toBe(realpathSync(realFile))
+    expect(result).toBe(await fs.realpath(realFile))
   })
 
   it('does not let stale pending watch remove newer replacement watch', async () => {

@@ -1,17 +1,25 @@
 import React, { useEffect, useRef } from 'react'
-import { Ban, Keyboard, RotateCcw, Terminal } from 'lucide-react'
+import { Ban, Plus, RotateCcw, Terminal } from 'lucide-react'
 import {
   formatKeybinding,
+  isDigitIndexActionId,
+  isDoubleTapBinding,
   type KeybindingActionId,
   type KeybindingDefinition,
   type KeybindingInput
 } from '../../../../shared/keybindings'
+import {
+  ModifierDoubleTapDetector,
+  modifierFromKeyEvent,
+  toModifierDoubleTapEvent
+} from '../../../../shared/modifier-double-tap-detector'
 import { cn } from '../../lib/utils'
 import { ShortcutKeyCombo } from '../ShortcutKeyCombo'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import { SearchableSetting } from './SearchableSetting'
+import { translate } from '@/i18n/i18n'
 
 type ShortcutBindingRowProps = {
   item: KeybindingDefinition
@@ -36,27 +44,14 @@ export type ShortcutTerminalStatus = {
   description: string
 }
 
-function BindingPreview({
-  bindings,
-  platform
-}: {
-  bindings: readonly string[]
-  platform: NodeJS.Platform
-}): React.JSX.Element {
-  if (bindings.length === 0) {
-    return (
-      <div className="flex min-h-7 items-center">
-        <span className="text-xs text-muted-foreground">Unassigned</span>
-      </div>
-    )
+// Why: digit-index rows store one representative chord (e.g. ⌘1) but fire for
+// 1-9, so the trailing number cap renders the whole range.
+function toDigitRangeKeys(keys: string[]): string[] {
+  const last = keys.at(-1)
+  if (last === undefined || !/^[1-9]$/.test(last)) {
+    return keys
   }
-  return (
-    <div className="flex min-h-7 flex-wrap items-center justify-start gap-1.5">
-      {bindings.map((binding) => (
-        <ShortcutKeyCombo key={binding} keys={formatKeybinding(binding, platform)} />
-      ))}
-    </div>
-  )
+  return [...keys.slice(0, -1), `${last}–9`]
 }
 
 export function ShortcutBindingRow({
@@ -77,18 +72,33 @@ export function ShortcutBindingRow({
   onReset
 }: ShortcutBindingRowProps): React.JSX.Element {
   const recordButtonRef = useRef<HTMLButtonElement | null>(null)
+  const doubleTapDetectorRef = useRef<ModifierDoubleTapDetector | null>(null)
+  if (!doubleTapDetectorRef.current) {
+    doubleTapDetectorRef.current = new ModifierDoubleTapDetector()
+  }
 
   useEffect(() => {
     if (recording) {
       recordButtonRef.current?.focus()
+    } else {
+      // Stale taps mustn't survive into the next recording session.
+      doubleTapDetectorRef.current?.reset()
     }
     window.api.ui.setShortcutRecorderFocused(recording)
     return () => window.api.ui.setShortcutRecorderFocused(false)
   }, [recording])
 
   const statusMessage = error ?? (warnings.length > 0 ? warnings.join(' ') : '')
-  const recordingMessage = recording ? 'Listening for shortcut. Esc cancels recording.' : ''
+  const doubleTapHint = platform === 'darwin' ? '⇧⇧' : 'Shift Shift'
+  const recordingMessage = recording
+    ? translate(
+        'auto.components.settings.ShortcutBindingRow.a98d551407',
+        'Press a shortcut, or double-tap a modifier (e.g. {{value0}}). Esc cancels.',
+        { value0: doubleTapHint }
+      )
+    : ''
   const helperMessage = statusMessage || recordingMessage
+  const hasBinding = effective.length > 0
 
   const handleRecordKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>): void => {
     if (!recording) {
@@ -103,11 +113,37 @@ export function ShortcutBindingRow({
     event.stopPropagation()
 
     if (event.key === 'Escape') {
+      doubleTapDetectorRef.current?.reset()
       onClearError(item.id)
       onCancelRecording()
       return
     }
 
+    // A modifier press never captures on its own — the detector decides whether
+    // it completes a double-tap, leaving normal chords to capture on their key.
+    if (modifierFromKeyEvent(event.code, event.key) !== null) {
+      const detected = doubleTapDetectorRef.current?.process(
+        toModifierDoubleTapEvent({
+          type: 'keyDown',
+          code: event.code,
+          key: event.key,
+          shift: event.shiftKey,
+          control: event.ctrlKey,
+          alt: event.altKey,
+          meta: event.metaKey,
+          isAutoRepeat: event.repeat
+        }),
+        Date.now()
+      )
+      if (detected) {
+        onClearError(item.id)
+        onCapture(item.id, { doubleTapModifier: detected.modifier })
+        doubleTapDetectorRef.current?.reset()
+      }
+      return
+    }
+
+    doubleTapDetectorRef.current?.reset()
     onClearError(item.id)
     onCapture(item.id, {
       key: event.key,
@@ -119,19 +155,54 @@ export function ShortcutBindingRow({
     })
   }
 
+  const handleRecordKeyUp = (event: React.KeyboardEvent<HTMLButtonElement>): void => {
+    if (!recording) {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    doubleTapDetectorRef.current?.process(
+      toModifierDoubleTapEvent({
+        type: 'keyUp',
+        code: event.code,
+        key: event.key,
+        shift: event.shiftKey,
+        control: event.ctrlKey,
+        alt: event.altKey,
+        meta: event.metaKey
+      }),
+      Date.now()
+    )
+  }
+
+  // Why: the recorder is the row's primary control — clicking the keys (or the
+  // "Add shortcut" placeholder) records a new binding in place, so the whole
+  // affordance lives inline rather than in a detached popover.
+  const recorderLabel = recording
+    ? `Press shortcut keys for ${item.title}. Escape cancels.`
+    : hasBinding
+      ? `Change shortcut for ${item.title}`
+      : `Add shortcut for ${item.title}`
+
+  const isDigitIndex = isDigitIndexActionId(item.id)
+
   return (
     <SearchableSetting
       title={item.title}
-      description={`${groupTitle} shortcut`}
+      description={translate(
+        'auto.components.settings.ShortcutBindingRow.3b11ef3a43',
+        '{{value0}} shortcut',
+        { value0: groupTitle }
+      )}
       keywords={[...item.searchKeywords]}
-      className="grid min-h-[54px] grid-cols-1 gap-x-3 rounded-md px-2 py-1.5 transition-colors hover:bg-accent/40 lg:grid-cols-[minmax(0,1.1fr)_minmax(10rem,0.8fr)_10rem_4rem] lg:items-center"
+      className="group/shortcut relative flex min-h-[44px] max-w-none items-center gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-accent/40 focus-within:bg-accent/40"
     >
-      <div className="min-w-0">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-sm text-foreground">{item.title}</span>
           {modified ? (
             <Badge variant="outline" className="shrink-0 text-[11px]">
-              Modified
+              {translate('auto.components.settings.ShortcutBindingRow.97dccee14e', 'Modified')}
             </Badge>
           ) : null}
           {terminalStatus ? (
@@ -151,79 +222,149 @@ export function ShortcutBindingRow({
             </Tooltip>
           ) : null}
         </div>
-        <div
-          className={cn(
-            'h-[16px] overflow-hidden text-[11px] leading-4',
-            error ? 'text-destructive' : 'text-muted-foreground'
-          )}
-          aria-live="polite"
-        >
-          {helperMessage ? <span className="block truncate">{helperMessage}</span> : null}
-        </div>
+        {helperMessage ? (
+          <span
+            className={cn(
+              'block truncate text-[11px] leading-4',
+              error ? 'text-destructive' : 'text-muted-foreground'
+            )}
+            aria-live="polite"
+          >
+            {helperMessage}
+          </span>
+        ) : null}
       </div>
 
-      <div className="mt-1 min-w-0 lg:mt-0">
-        <BindingPreview bindings={effective} platform={platform} />
-      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        {/* Reset/Disable reveal on hover or keyboard focus to keep the row calm;
+            they stay reachable via focus-within for keyboard users. */}
+        {hasBinding ? (
+          <div className="flex items-center gap-0.5 can-hover:opacity-0 transition-opacity group-hover/shortcut:opacity-100 group-focus-within/shortcut:opacity-100">
+            {modified ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label={translate(
+                      'auto.components.settings.ShortcutBindingRow.4f2c9b2a05',
+                      'Reset {{value0}} to default',
+                      { value0: item.title }
+                    )}
+                    onClick={() => onReset(item.id)}
+                  >
+                    <RotateCcw className="size-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={4}>
+                  {translate(
+                    'auto.components.settings.ShortcutBindingRow.f75335b155',
+                    'Reset to default'
+                  )}
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="text-muted-foreground hover:text-destructive"
+                  aria-label={translate(
+                    'auto.components.settings.ShortcutBindingRow.3b62c142fa',
+                    'Disable {{value0}}',
+                    { value0: item.title }
+                  )}
+                  onClick={() => onDisable(item.id)}
+                >
+                  <Ban className="size-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top" sideOffset={4}>
+                {translate(
+                  'auto.components.settings.ShortcutBindingRow.9cdaaa3d8f',
+                  'Disable shortcut'
+                )}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        ) : null}
 
-      <Button
-        ref={recordButtonRef}
-        type="button"
-        variant={recording ? 'secondary' : 'outline'}
-        size="sm"
-        aria-invalid={Boolean(error)}
-        aria-pressed={recording}
-        data-shortcut-recorder=""
-        data-shortcut-recorder-active={recording ? '' : undefined}
-        onClick={() => {
-          if (recording) {
-            return
-          }
-          onStartRecording(item.id)
-        }}
-        onKeyDown={handleRecordKeyDown}
-        className={cn(
-          'mt-2 h-8 w-full justify-start px-2.5 text-xs lg:mt-0 lg:w-40',
-          !recording &&
-            'border-border/70 bg-background/60 text-foreground/80 shadow-none hover:border-border hover:bg-accent/70 hover:text-foreground dark:text-foreground dark:shadow-xs',
-          recording && 'border-ring bg-accent text-accent-foreground ring-[3px] ring-ring/30'
-        )}
-      >
-        <Keyboard className="size-3.5" />
-        <span className="truncate">{recording ? 'Press keys...' : 'Change shortcut'}</span>
-      </Button>
-
-      <div className="mt-2 flex items-center gap-1 lg:mt-0 lg:justify-end">
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
+            <button
+              ref={recordButtonRef}
               type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Disable ${item.title}`}
-              onClick={() => onDisable(item.id)}
+              aria-label={recorderLabel}
+              aria-invalid={Boolean(error)}
+              aria-pressed={recording}
+              data-shortcut-recorder=""
+              data-shortcut-recorder-active={recording ? '' : undefined}
+              onClick={() => {
+                if (!recording) {
+                  onStartRecording(item.id)
+                }
+              }}
+              onKeyDown={handleRecordKeyDown}
+              onKeyUp={handleRecordKeyUp}
+              className={cn(
+                'flex min-h-7 min-w-[5.5rem] items-center justify-center gap-1.5 rounded-md border px-2 py-1 text-xs outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                recording
+                  ? 'border-ring bg-accent text-accent-foreground ring-[3px] ring-ring/30'
+                  : hasBinding
+                    ? 'border-transparent hover:border-border/70 hover:bg-background'
+                    : 'border-dashed border-border/70 text-muted-foreground hover:border-border hover:text-foreground'
+              )}
             >
-              <Ban className="size-3" />
-            </Button>
+              {recording ? (
+                <span className="px-1 text-muted-foreground">
+                  {translate(
+                    'auto.components.settings.ShortcutBindingRow.87381fd8f8',
+                    'Press keys…'
+                  )}
+                </span>
+              ) : hasBinding ? (
+                <span className="flex flex-wrap items-center justify-end gap-1.5">
+                  {effective.map((binding) => {
+                    const keys = formatKeybinding(binding, platform)
+                    return (
+                      <ShortcutKeyCombo
+                        key={binding}
+                        keys={isDigitIndex ? toDigitRangeKeys(keys) : keys}
+                        doubleTap={isDoubleTapBinding(binding)}
+                      />
+                    )
+                  })}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1">
+                  <Plus className="size-3" />
+                  {translate(
+                    'auto.components.settings.ShortcutBindingRow.4a4c2c9d32',
+                    'Add shortcut'
+                  )}
+                </span>
+              )}
+            </button>
           </TooltipTrigger>
           <TooltipContent side="top" sideOffset={4}>
-            Disable
-          </TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Reset ${item.title}`}
-              onClick={() => onReset(item.id)}
-            >
-              <RotateCcw className="size-3" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top" sideOffset={4}>
-            Reset
+            {recording
+              ? translate(
+                  'auto.components.settings.ShortcutBindingRow.6a7848fdac',
+                  'Listening for shortcut'
+                )
+              : hasBinding
+                ? translate(
+                    'auto.components.settings.ShortcutBindingRow.f6579be67b',
+                    'Change shortcut'
+                  )
+                : translate(
+                    'auto.components.settings.ShortcutBindingRow.4a4c2c9d32',
+                    'Add shortcut'
+                  )}
           </TooltipContent>
         </Tooltip>
       </div>

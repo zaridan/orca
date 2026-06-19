@@ -1,35 +1,19 @@
 import type { GlobalSettings } from '../../../../shared/types'
 import { Label } from '../ui/label'
 import { SearchableSetting } from './SearchableSetting'
-import { matchesSettingsSearch, type SettingsSearchEntry } from './settings-search'
+import { matchesSettingsSearch } from './settings-search'
 import { useAppStore } from '../../store'
-import { MobilePane, MOBILE_PANE_SEARCH_ENTRIES } from './MobilePane'
+import { MobilePane } from './MobilePane'
+import {
+  getMobileEnableSearchEntry,
+  getMobileSettingsPaneSearchEntries
+} from './mobile-settings-search'
+import { translate } from '@/i18n/i18n'
+export { getMobileSettingsPaneSearchEntries }
 
 const ORCA_IOS_APP_STORE_URL = 'https://apps.apple.com/app/orca-ide/id6766130217'
-const ORCA_ANDROID_RELEASE_URL = 'https://github.com/stablyai/orca/releases/tag/mobile-v0.0.9'
-
-const MOBILE_ENABLE_SEARCH_ENTRY: SettingsSearchEntry = {
-  title: 'Mobile',
-  description: 'Control terminals and agents from your phone.',
-  keywords: [
-    'mobile',
-    'phone',
-    'pair',
-    'qr',
-    'code',
-    'scan',
-    'remote',
-    'android',
-    'apk',
-    'beta',
-    'experimental'
-  ]
-}
-
-export const MOBILE_SETTINGS_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
-  MOBILE_ENABLE_SEARCH_ENTRY,
-  ...MOBILE_PANE_SEARCH_ENTRIES
-]
+const ORCA_ANDROID_APK_URL =
+  'https://github.com/stablyai/orca/releases/download/mobile-android-v0.0.14/app-release.apk'
 
 type MobileSettingsPaneProps = {
   settings: GlobalSettings
@@ -42,40 +26,53 @@ export function MobileSettingsPane({
 }: MobileSettingsPaneProps): React.JSX.Element {
   const searchQuery = useAppStore((s) => s.settingsSearchQuery)
   const showEnableSetting =
-    !settings.experimentalMobile || matchesSettingsSearch(searchQuery, [MOBILE_ENABLE_SEARCH_ENTRY])
+    !settings.experimentalMobile ||
+    matchesSettingsSearch(searchQuery, [getMobileEnableSearchEntry()])
 
   return (
     <div className="space-y-4">
       {showEnableSetting ? (
         <SearchableSetting
-          title="Mobile"
-          description="Control terminals and agents from your phone."
-          keywords={MOBILE_ENABLE_SEARCH_ENTRY.keywords}
+          title={translate('auto.components.settings.MobileSettingsPane.e7a3ae8c4e', 'Mobile')}
+          description={translate(
+            'auto.components.settings.MobileSettingsPane.174f4a3c6d',
+            'Control terminals and agents from your phone.'
+          )}
+          keywords={getMobileEnableSearchEntry().keywords}
           className="space-y-3 py-2"
         >
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 shrink space-y-1.5">
-              <Label>Mobile</Label>
+              <Label>
+                {translate('auto.components.settings.MobileSettingsPane.e7a3ae8c4e', 'Mobile')}
+              </Label>
               <p className="text-xs text-muted-foreground">
-                Control Orca from your phone by scanning a QR code. Beta / early preview &mdash;
-                expect bugs and breaking changes. Get the iOS app from the{' '}
+                {translate(
+                  'auto.components.settings.MobileSettingsPane.c8491c17ef',
+                  'Control Orca from your phone by scanning a QR code. Beta / early preview - expect bugs and breaking changes. Get the iOS app from the'
+                )}{' '}
                 <button
                   type="button"
                   onClick={() => void window.api.shell.openUrl(ORCA_IOS_APP_STORE_URL)}
                   className="cursor-pointer underline underline-offset-2 hover:text-foreground"
                 >
-                  App Store
+                  {translate('auto.components.settings.MobileSettingsPane.b5a2ed83ff', 'App Store')}
                 </button>{' '}
-                or the Android APK from{' '}
+                {translate(
+                  'auto.components.settings.MobileSettingsPane.b0088412a1',
+                  'or the Android APK from'
+                )}{' '}
                 <button
                   type="button"
                   // Why: Android is moving to Google Play soon, but until then
-                  // link directly to the current mobile release tag instead of
-                  // the noisy desktop-dominated releases index.
-                  onClick={() => void window.api.shell.openUrl(ORCA_ANDROID_RELEASE_URL)}
+                  // link directly to the pinned APK asset for the current mobile release.
+                  onClick={() => void window.api.shell.openUrl(ORCA_ANDROID_APK_URL)}
                   className="cursor-pointer underline underline-offset-2 hover:text-foreground"
                 >
-                  GitHub Releases page
+                  {translate(
+                    'auto.components.settings.MobileSettingsPane.9a3c280e49',
+                    'GitHub Releases'
+                  )}
                 </button>
                 .
               </p>
@@ -84,11 +81,15 @@ export function MobileSettingsPane({
               type="button"
               role="switch"
               aria-checked={settings.experimentalMobile}
-              onClick={() =>
+              onClick={() => {
+                const nextEnabled = !settings.experimentalMobile
+                if (nextEnabled) {
+                  useAppStore.getState().recordFeatureInteraction('mobile-pairing')
+                }
                 updateSettings({
-                  experimentalMobile: !settings.experimentalMobile
+                  experimentalMobile: nextEnabled
                 })
-              }
+              }}
               className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors ${
                 settings.experimentalMobile ? 'bg-foreground' : 'bg-muted-foreground/30'
               }`}

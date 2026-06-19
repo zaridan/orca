@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { create } from 'zustand'
 import {
   arePullRequestGenerationFieldsEqual,
+  createPullRequestGenerationSlice,
   createRunningPullRequestGenerationRecord,
   getPullRequestGenerationRecordKey,
   getPullRequestGenerationWorktreeKey,
@@ -8,14 +10,22 @@ import {
   resolvePullRequestGenerationSuccess,
   shouldApplyPullRequestGenerationResult,
   shouldHydratePullRequestGenerationResult,
+  type PullRequestGenerationSlice,
   type PullRequestGenerationRecord
-} from './SourceControl'
+} from '@/store/slices/pull-request-generation'
 
 const seed = {
   base: 'main',
   title: 'feat: add worktree-safe generation',
   body: 'Body',
   draft: false
+}
+
+const fieldRevisions = {
+  base: 0,
+  title: 0,
+  body: 0,
+  draft: 0
 }
 
 function runningRecord(overrides: Partial<PullRequestGenerationRecord> = {}) {
@@ -29,12 +39,21 @@ function runningRecord(overrides: Partial<PullRequestGenerationRecord> = {}) {
       branch: 'feature-a'
     },
     seed,
+    seedFieldRevisions: fieldRevisions,
     status: 'running' as const,
     result: null,
     error: null,
     hydrated: false,
     ...overrides
   }
+}
+
+function createPullRequestGenerationTestStore() {
+  return create<PullRequestGenerationSlice>()((...args) =>
+    createPullRequestGenerationSlice(
+      ...(args as unknown as Parameters<typeof createPullRequestGenerationSlice>)
+    )
+  )
 }
 
 describe('SourceControl pull request generation records', () => {
@@ -59,28 +78,25 @@ describe('SourceControl pull request generation records', () => {
     )
   })
 
-  it('applies generated PR fields only to the original running request with unchanged seed', () => {
+  it('applies generated PR fields only to the original running request', () => {
     expect(
       shouldApplyPullRequestGenerationResult({
         record: runningRecord(),
-        requestId: 3,
-        currentFields: seed
+        requestId: 3
       })
     ).toBe(true)
 
     expect(
       shouldApplyPullRequestGenerationResult({
         record: runningRecord(),
-        requestId: 4,
-        currentFields: seed
+        requestId: 4
       })
     ).toBe(false)
 
     expect(
       shouldApplyPullRequestGenerationResult({
-        record: runningRecord(),
-        requestId: 3,
-        currentFields: { ...seed, base: 'release' }
+        record: runningRecord({ status: 'succeeded' }),
+        requestId: 3
       })
     ).toBe(false)
   })
@@ -89,7 +105,7 @@ describe('SourceControl pull request generation records', () => {
     expect(arePullRequestGenerationFieldsEqual(seed, { ...seed, draft: true })).toBe(false)
   })
 
-  it('rehydrates a completed result only when the seed still matches', () => {
+  it('rehydrates a completed result until it is marked hydrated', () => {
     const record = runningRecord({
       status: 'succeeded',
       result: { ...seed, title: 'Generated title' }
@@ -97,22 +113,13 @@ describe('SourceControl pull request generation records', () => {
 
     expect(
       shouldHydratePullRequestGenerationResult({
-        record,
-        currentFields: seed
+        record
       })
     ).toBe(true)
 
     expect(
       shouldHydratePullRequestGenerationResult({
-        record,
-        currentFields: { ...seed, body: 'Edited body' }
-      })
-    ).toBe(false)
-
-    expect(
-      shouldHydratePullRequestGenerationResult({
-        record: { ...record, hydrated: true },
-        currentFields: seed
+        record: { ...record, hydrated: true }
       })
     ).toBe(false)
   })
@@ -127,7 +134,8 @@ describe('SourceControl pull request generation records', () => {
         repoId: 'repo-1',
         branch: 'feature-a'
       },
-      seed
+      seed,
+      fieldRevisions
     )
     const records: Record<string, PullRequestGenerationRecord> = {
       'wt-a': worktreeA
@@ -147,7 +155,6 @@ describe('SourceControl pull request generation records', () => {
     const completedA = resolvePullRequestGenerationSuccess({
       record: records['wt-a'],
       requestId: 1,
-      currentFields: seed,
       result: generated
     })
 
@@ -158,9 +165,167 @@ describe('SourceControl pull request generation records', () => {
     })
     expect(
       shouldHydratePullRequestGenerationResult({
-        record: completedA,
-        currentFields: seed
+        record: completedA
       })
     ).toBe(true)
+  })
+
+  it('keeps PR generation results in the store after the composer unmounts', () => {
+    const store = createPullRequestGenerationTestStore()
+    const key = getPullRequestGenerationRecordKey({
+      worktreeId: 'wt-a',
+      worktreePath: '/repo/a',
+      repoId: 'repo-1',
+      branch: 'feature-a'
+    })
+    expect(key).not.toBeNull()
+    const record = createRunningPullRequestGenerationRecord(
+      {
+        worktreeId: 'wt-a',
+        worktreePath: '/repo/a',
+        connectionId: 'conn-a',
+        requestId: 1,
+        repoId: 'repo-1',
+        branch: 'feature-a',
+        runtimeTargetSettings: { activeRuntimeEnvironmentId: 'runtime-a' }
+      },
+      seed,
+      fieldRevisions
+    )
+    store.getState().setPullRequestGenerationRecord(key!, record)
+
+    const generated = {
+      base: 'main',
+      title: 'Generated after tab switch',
+      body: 'Generated body',
+      draft: false
+    }
+    store.getState().updatePullRequestGenerationRecord(key!, (current) =>
+      resolvePullRequestGenerationSuccess({
+        record: current,
+        requestId: 1,
+        result: generated
+      })
+    )
+
+    expect(store.getState().pullRequestGenerationRecords[key!]).toMatchObject({
+      context: { runtimeTargetSettings: { activeRuntimeEnvironmentId: 'runtime-a' } },
+      status: 'succeeded',
+      result: generated,
+      hydrated: false
+    })
+  })
+
+  it('prunes PR generation records for removed worktrees', () => {
+    const store = createPullRequestGenerationTestStore()
+    const keyA = getPullRequestGenerationRecordKey({
+      worktreeId: 'wt-a',
+      worktreePath: '/repo/a',
+      repoId: 'repo-1',
+      branch: 'feature-a'
+    })!
+    const keyB = getPullRequestGenerationRecordKey({
+      worktreeId: 'wt-b',
+      worktreePath: '/repo/b',
+      repoId: 'repo-1',
+      branch: 'feature-b'
+    })!
+    store.getState().setPullRequestGenerationRecord(
+      keyA,
+      createRunningPullRequestGenerationRecord(
+        {
+          worktreeId: 'wt-a',
+          worktreePath: '/repo/a',
+          requestId: 1,
+          repoId: 'repo-1',
+          branch: 'feature-a'
+        },
+        seed,
+        fieldRevisions
+      )
+    )
+    store.getState().setPullRequestGenerationRecord(
+      keyB,
+      createRunningPullRequestGenerationRecord(
+        {
+          worktreeId: 'wt-b',
+          worktreePath: '/repo/b',
+          requestId: 2,
+          repoId: 'repo-1',
+          branch: 'feature-b'
+        },
+        seed,
+        fieldRevisions
+      )
+    )
+
+    store.getState().prunePullRequestGenerationRecords(new Set(['wt-a']))
+
+    expect(Object.keys(store.getState().pullRequestGenerationRecords)).toEqual([keyA])
+  })
+
+  it('does not reuse PR generation request ids across composer remounts', () => {
+    const store = createPullRequestGenerationTestStore()
+    const key = getPullRequestGenerationRecordKey({
+      worktreeId: 'wt-a',
+      worktreePath: '/repo/a',
+      repoId: 'repo-1',
+      branch: 'feature-a'
+    })
+    expect(key).not.toBeNull()
+    const firstRequestId = store.getState().allocatePullRequestGenerationRequestId()
+    store.getState().setPullRequestGenerationRecord(
+      key!,
+      createRunningPullRequestGenerationRecord(
+        {
+          worktreeId: 'wt-a',
+          worktreePath: '/repo/a',
+          connectionId: 'conn-a',
+          requestId: firstRequestId,
+          repoId: 'repo-1',
+          branch: 'feature-a'
+        },
+        seed,
+        fieldRevisions
+      )
+    )
+    store.getState().updatePullRequestGenerationRecord(key!, resolvePullRequestGenerationCancel)
+
+    const secondRequestId = store.getState().allocatePullRequestGenerationRequestId()
+    expect(secondRequestId).toBeGreaterThan(firstRequestId)
+    store.getState().setPullRequestGenerationRecord(
+      key!,
+      createRunningPullRequestGenerationRecord(
+        {
+          worktreeId: 'wt-a',
+          worktreePath: '/repo/a',
+          connectionId: 'conn-a',
+          requestId: secondRequestId,
+          repoId: 'repo-1',
+          branch: 'feature-a'
+        },
+        seed,
+        fieldRevisions
+      )
+    )
+
+    const staleResult = {
+      base: 'main',
+      title: 'Stale generated title',
+      body: 'Stale body',
+      draft: false
+    }
+    store.getState().updatePullRequestGenerationRecord(key!, (current) =>
+      resolvePullRequestGenerationSuccess({
+        record: current,
+        requestId: firstRequestId,
+        result: staleResult
+      })
+    )
+
+    expect(store.getState().pullRequestGenerationRecords[key!]).toMatchObject({
+      status: 'running',
+      result: null
+    })
   })
 })

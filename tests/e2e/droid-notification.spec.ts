@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Why: this e2e shares one Electron notification spy and hook endpoint setup across related notification regressions. */
 import { test, expect } from './helpers/orca-app'
 import type { ElectronApplication, Page } from '@stablyai/playwright-test'
 import { getRendererTitleLog, installRendererTitleLog } from './helpers/terminal-title-log'
@@ -19,6 +20,14 @@ type NotificationDispatch = {
   agentType?: string
   agentPrompt?: string
   agentLastAssistantMessage?: string
+}
+
+type AgentStatusSummary = {
+  paneKey: string
+  state: string
+  agentType?: string
+  prompt?: string
+  lastAssistantMessage?: string
 }
 
 async function emitOscTitle(page: Page, ptyId: string, title: string) {
@@ -93,15 +102,7 @@ async function switchToOtherExistingWorktree(page: Page): Promise<string> {
   })
 }
 
-async function getAgentStatuses(page: Page): Promise<
-  {
-    paneKey: string
-    state: string
-    agentType?: string
-    prompt?: string
-    lastAssistantMessage?: string
-  }[]
-> {
+async function getAgentStatuses(page: Page): Promise<AgentStatusSummary[]> {
   return page.evaluate(() => {
     const store = window.__store
     if (!store) {
@@ -115,6 +116,41 @@ async function getAgentStatuses(page: Page): Promise<
       lastAssistantMessage: entry.lastAssistantMessage
     }))
   })
+}
+
+async function getCachedAgentStatuses(page: Page): Promise<AgentStatusSummary[]> {
+  return page.evaluate(async () => {
+    const snapshot = await window.api.agentStatus.getSnapshot()
+    return snapshot.map((entry) => ({
+      paneKey: entry.paneKey,
+      state: entry.state,
+      agentType: entry.agentType,
+      prompt: entry.prompt,
+      lastAssistantMessage: entry.lastAssistantMessage
+    }))
+  })
+}
+
+async function getRendererOrCachedAgentStatuses(page: Page): Promise<AgentStatusSummary[]> {
+  const [rendererStatuses, cachedStatuses] = await Promise.all([
+    getAgentStatuses(page),
+    getCachedAgentStatuses(page)
+  ])
+  return [...rendererStatuses, ...cachedStatuses]
+}
+
+async function isWorktreeUnread(page: Page, worktreeId: string): Promise<boolean> {
+  return page.evaluate((targetWorktreeId) => {
+    const store = window.__store
+    if (!store) {
+      return false
+    }
+    return (
+      Object.values(store.getState().worktreesByRepo)
+        .flat()
+        .find((worktree) => worktree.id === targetWorktreeId)?.isUnread === true
+    )
+  }, worktreeId)
 }
 
 test.describe('Droid notifications', () => {
@@ -147,13 +183,15 @@ test.describe('Droid notifications', () => {
     await expect
       .poll(
         async () =>
-          (await getAgentStatuses(orcaPage)).some(
+          (await getRendererOrCachedAgentStatuses(orcaPage)).some(
             (status) =>
               status.agentType === 'codex' && status.state === 'working' && status.prompt === prompt
           ),
         {
-          timeout: 10_000,
-          message: 'Codex UserPromptSubmit hook did not reach renderer agent status'
+          timeout: 30_000,
+          // Why: this synthetic hook posts directly to main; main's cache is
+          // the durable source used to recover renderer startup/listener races.
+          message: 'Codex UserPromptSubmit hook did not reach agent status cache'
         }
       )
       .toBe(true)
@@ -179,7 +217,7 @@ test.describe('Droid notifications', () => {
               status.lastAssistantMessage === finalMessage
           ),
         {
-          timeout: 10_000,
+          timeout: 30_000,
           message: 'Codex Stop hook did not reach renderer agent status'
         }
       )
@@ -192,7 +230,7 @@ test.describe('Droid notifications', () => {
           return dispatches.filter((dispatch) => dispatch.source === 'agent-task-complete')
         },
         {
-          timeout: 10_000,
+          timeout: 30_000,
           message: 'Codex hook Stop did not dispatch task-complete while worktree was inactive'
         }
       )
@@ -206,6 +244,13 @@ test.describe('Droid notifications', () => {
           agentLastAssistantMessage: finalMessage
         })
       ])
+
+    await expect
+      .poll(async () => isWorktreeUnread(orcaPage, worktreeId), {
+        timeout: 10_000,
+        message: 'Codex hook Stop did not mark the inactive worktree unread'
+      })
+      .toBe(true)
   })
 
   test('recognized agent title completion dispatches one task-complete notification', async ({

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import type { AutomationRun } from '../../../../shared/automations-types'
@@ -14,6 +14,7 @@ import {
   getAutomationUsageStatusLabel
 } from './automation-usage-model'
 import { getAutomationRunWorkspaceDisplay } from './automation-run-workspace-display'
+import { translate } from '@/i18n/i18n'
 
 type AutomationRunHistoryProps = {
   runs: AutomationRun[]
@@ -28,33 +29,47 @@ export function AutomationRunHistory({
   worktreeMap,
   onOpenRun
 }: AutomationRunHistoryProps): React.JSX.Element {
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [selectedRunState, setSelectedRunState] = useState<{
+    automationId: string
+    runId: string | null
+  }>(() => ({
+    automationId,
+    runId: null
+  }))
   const runCountLabel = useMemo(() => {
     const completed = runs.filter((run) => run.status === 'completed').length
     return `${runs.length} ${runs.length === 1 ? 'run' : 'runs'} · ${completed} completed`
   }, [runs])
 
-  useEffect(() => {
-    setSelectedRunId((current) =>
-      current && runs.some((run) => run.id === current) ? current : (runs[0]?.id ?? null)
-    )
-  }, [automationId, runs])
-
+  const selectedRunId =
+    selectedRunState.automationId === automationId ? selectedRunState.runId : null
   const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null
 
   return (
     <div className="rounded-md border border-border/50 bg-muted/20 shadow-sm">
       <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
-        <div className="text-sm font-medium">Run history</div>
+        <div className="text-sm font-medium">
+          {translate('auto.components.automations.AutomationRunHistory.53fc5f07ab', 'Run history')}
+        </div>
         <div className="text-xs text-muted-foreground">{runCountLabel}</div>
       </div>
       <div className="min-h-[18rem] min-w-0">
         <div className="grid grid-cols-[minmax(9rem,1fr)_minmax(10rem,1.1fr)_minmax(5rem,.55fr)_minmax(5rem,.55fr)_minmax(6rem,auto)] gap-3 border-b border-border/50 px-3 py-1.5 text-[11px] font-medium uppercase text-muted-foreground">
-          <div>Run</div>
-          <div>Workspace</div>
-          <div>Spend</div>
-          <div>Tokens</div>
-          <div>Status</div>
+          <div>
+            {translate('auto.components.automations.AutomationRunHistory.8faaa00726', 'Run')}
+          </div>
+          <div>
+            {translate('auto.components.automations.AutomationRunHistory.149c0b49c7', 'Workspace')}
+          </div>
+          <div>
+            {translate('auto.components.automations.AutomationRunHistory.86a248187e', 'Spend')}
+          </div>
+          <div>
+            {translate('auto.components.automations.AutomationRunHistory.13988187b3', 'Tokens')}
+          </div>
+          <div>
+            {translate('auto.components.automations.AutomationRunHistory.9974a2b429', 'Status')}
+          </div>
         </div>
         <div className="divide-y divide-border/50">
           {runs.map((run) => {
@@ -74,7 +89,7 @@ export function AutomationRunHistory({
                   selectedRun?.id === run.id && 'bg-accent text-accent-foreground'
                 )}
                 onClick={() => {
-                  setSelectedRunId(run.id)
+                  setSelectedRunState({ automationId, runId: run.id })
                   onOpenRun(run)
                 }}
               >
@@ -114,7 +129,10 @@ export function AutomationRunHistory({
                 >
                   {run.usage?.status === 'known'
                     ? formatAutomationTokens(run.usage.totalTokens)
-                    : 'n/a'}
+                    : translate(
+                        'auto.components.automations.AutomationRunHistory.a00e38d1a3',
+                        'n/a'
+                      )}
                 </div>
                 <div className="flex justify-start">
                   <Badge variant={getAutomationRunStatusVariant(run.status)}>
@@ -125,7 +143,12 @@ export function AutomationRunHistory({
             )
           })}
           {runs.length === 0 ? (
-            <div className="px-3 py-6 text-center text-sm text-muted-foreground">No runs yet.</div>
+            <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+              {translate(
+                'auto.components.automations.AutomationRunHistory.402651bfb6',
+                'No runs yet.'
+              )}
+            </div>
           ) : null}
         </div>
       </div>

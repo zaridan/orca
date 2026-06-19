@@ -1,19 +1,28 @@
 import { execFileSync, spawn, spawnSync } from 'child_process'
+import { join } from 'path'
 import { RuntimeClientError } from './runtime-client-error'
-import {
-  resolveMacOSComputerUseAppPath,
-  resolveMacOSComputerUseExecutablePath
-} from './macos-native-provider-paths'
+import { resolveMacOSComputerUseAppPath } from './macos-native-provider-paths'
+import { getComputerUsePermissionStatus } from './macos-computer-use-permission-status'
 import type {
   ComputerUsePermissionId,
+  ComputerUsePermissionResetResult,
   ComputerUsePermissionSetupResult,
-  ComputerUsePermissionStatus,
   ComputerUsePermissionStatusResult
 } from '../../shared/computer-use-permissions-types'
 
+const DEFAULT_COMPUTER_USE_BUNDLE_ID = 'com.stablyai.orca.computer-use'
+
+export { getComputerUsePermissionStatus } from './macos-computer-use-permission-status'
+
 export function openComputerUsePermissions(
   permissionId?: ComputerUsePermissionId
-): ComputerUsePermissionSetupResult {
+): Promise<ComputerUsePermissionSetupResult> {
+  return openComputerUsePermissionsAsync(permissionId)
+}
+
+async function openComputerUsePermissionsAsync(
+  permissionId?: ComputerUsePermissionId
+): Promise<ComputerUsePermissionSetupResult> {
   if (process.platform !== 'darwin') {
     return {
       platform: process.platform,
@@ -33,7 +42,7 @@ export function openComputerUsePermissions(
   if (!helperAppPath) {
     throw new RuntimeClientError('accessibility_error', 'Orca Computer Use.app was not found')
   }
-  const status = getComputerUsePermissionStatus()
+  const status = await getComputerUsePermissionStatus()
   if (status.helperUnavailableReason) {
     throw new RuntimeClientError('accessibility_error', status.helperUnavailableReason)
   }
@@ -70,21 +79,17 @@ export function openComputerUsePermissions(
   }
 }
 
-function closeExistingPermissionHelpers(): void {
-  spawnSync('/usr/bin/pkill', ['-f', 'orca-computer-use-macos --permission'], {
-    stdio: 'ignore'
-  })
-  spawnSync('/usr/bin/pkill', ['-f', 'orca-computer-use-macos --permissions'], {
-    stdio: 'ignore'
-  })
+export function resetComputerUsePermissions(): Promise<ComputerUsePermissionResetResult> {
+  return resetComputerUsePermissionsAsync()
 }
 
-export function getComputerUsePermissionStatus(): ComputerUsePermissionStatusResult {
+async function resetComputerUsePermissionsAsync(): Promise<ComputerUsePermissionResetResult> {
   if (process.platform !== 'darwin') {
     return {
       platform: process.platform,
       helperAppPath: null,
       helperUnavailableReason: null,
+      bundleId: null,
       permissions: [
         { id: 'accessibility', status: 'unsupported' },
         { id: 'screenshots', status: 'unsupported' }
@@ -94,55 +99,69 @@ export function getComputerUsePermissionStatus(): ComputerUsePermissionStatusRes
 
   const helperAppPath = resolveMacOSComputerUseAppPath()
   if (!helperAppPath) {
-    return createUnavailablePermissionStatus('Orca Computer Use.app was not found', null)
+    throw new RuntimeClientError('accessibility_error', 'Orca Computer Use.app was not found')
   }
 
-  const executablePath = resolveMacOSComputerUseExecutablePath()
-  if (!executablePath) {
-    return createUnavailablePermissionStatus(
-      `${helperAppPath}/Contents/MacOS/orca-computer-use-macos was not found`,
-      helperAppPath
-    )
+  const status = await getComputerUsePermissionStatus()
+  if (status.helperUnavailableReason) {
+    throw new RuntimeClientError('accessibility_error', status.helperUnavailableReason)
   }
 
-  const raw = readPermissionStatusFromHelperExecutable(executablePath)
+  const bundleId = readComputerUseBundleId(helperAppPath)
+  closeExistingPermissionHelpers()
+  resetTccPermission('Accessibility', bundleId)
+  resetTccPermission('ScreenCapture', bundleId)
 
   return {
-    platform: process.platform,
-    helperAppPath,
-    helperUnavailableReason: null,
-    permissions: [
-      { id: 'accessibility', status: raw.accessibility ?? 'not-granted' },
-      { id: 'screenshots', status: raw.screenshots ?? 'not-granted' }
-    ]
+    ...(await getComputerUsePermissionStatus()),
+    bundleId
   }
 }
 
-function createUnavailablePermissionStatus(
-  reason: string,
-  helperAppPath: string | null
-): ComputerUsePermissionStatusResult {
-  return {
-    platform: process.platform,
-    helperAppPath,
-    helperUnavailableReason: reason,
-    permissions: [
-      { id: 'accessibility', status: 'not-granted' },
-      { id: 'screenshots', status: 'not-granted' }
-    ]
+function closeExistingPermissionHelpers(): void {
+  // Why: status probes use --permission-status-file and must not be killed
+  // while setup helpers are being replaced.
+  const setupHelperPatterns = [
+    'orca-computer-use-macos[[:space:]]+--permission([[:space:]]|$)',
+    'orca-computer-use-macos[[:space:]]+--permissions([[:space:]]|$)'
+  ]
+  for (const pattern of setupHelperPatterns) {
+    spawnSync('/usr/bin/pkill', ['-f', pattern], {
+      stdio: 'ignore'
+    })
   }
 }
 
-function readPermissionStatusFromHelperExecutable(
-  executablePath: string
-): Partial<Record<ComputerUsePermissionId, ComputerUsePermissionStatus>> {
-  // Why: launching the nested helper via LaunchServices can make TCC evaluate
-  // Orca.app as responsible; the signed helper executable owns this grant.
-  const output = execFileSync(executablePath, ['--permission-status'], {
+function readComputerUseBundleId(helperAppPath: string): string {
+  const infoPlistPath = join(helperAppPath, 'Contents', 'Info.plist')
+  try {
+    const bundleId = execFileSync(
+      '/usr/libexec/PlistBuddy',
+      ['-c', 'Print :CFBundleIdentifier', infoPlistPath],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      }
+    ).trim()
+    return bundleId || DEFAULT_COMPUTER_USE_BUNDLE_ID
+  } catch {
+    return DEFAULT_COMPUTER_USE_BUNDLE_ID
+  }
+}
+
+function resetTccPermission(service: string, bundleId: string): void {
+  // Why: macOS keeps TCC rows after uninstall; users need an explicit way to
+  // clear stale grants or denials for the helper's stable bundle identity.
+  const result = spawnSync('/usr/bin/tccutil', ['reset', service, bundleId], {
     encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore']
+    stdio: ['ignore', 'pipe', 'pipe']
   })
-  return JSON.parse(output) as Partial<Record<ComputerUsePermissionId, ComputerUsePermissionStatus>>
+  if (result.status === 0) {
+    return
+  }
+  const detail =
+    result.stderr?.trim() || result.stdout?.trim() || `exit ${result.status ?? 'unknown'}`
+  throw new RuntimeClientError('accessibility_error', `Could not reset ${service}: ${detail}`)
 }
 
 function nextPermissionStep(

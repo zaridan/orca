@@ -1,3 +1,4 @@
+/* oxlint-disable react-doctor/no-adjust-state-on-prop-change -- Why: PDF loading drives pdf.js document/viewer instances and decode errors through an external worker lifecycle. */
 import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Image as ImageIcon, RotateCcw, Search, ZoomIn, ZoomOut } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -15,6 +16,7 @@ import { useAppStore } from '@/store'
 import { keybindingMatchesAction } from '../../../../shared/keybindings'
 
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import { translate } from '@/i18n/i18n'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -86,11 +88,12 @@ export default function PdfViewer({ content, filePath }: PdfViewerProps): JSX.El
 
     linkService.setViewer(viewer)
 
-    eventBus.on('scalechanging', (evt: { scale: number }) => {
+    const handleScaleChanging = (evt: { scale: number }): void => {
       if (!cancelled) {
         setScale(evt.scale)
       }
-    })
+    }
+    eventBus.on('scalechanging', handleScaleChanging)
 
     const loadingTask = pdfjsLib.getDocument({ data: bytes })
 
@@ -128,6 +131,9 @@ export default function PdfViewer({ content, filePath }: PdfViewerProps): JSX.El
       // renders, clears the find controller, and dispatches pagesdestroy.
       // The runtime accepts null but the types only declare PDFDocumentProxy.
       viewer.setDocument(null as unknown as pdfjsLib.PDFDocumentProxy)
+      // Why: pdf.js EventBus retains callbacks by event name; unregister the
+      // scale listener so repeated PDF opens do not retain stale component state.
+      eventBus.off('scalechanging', handleScaleChanging)
       eventBusRef.current = null
       findControllerRef.current = null
       pdfViewerRef.current = null
@@ -135,6 +141,10 @@ export default function PdfViewer({ content, filePath }: PdfViewerProps): JSX.El
   }, [cleanedContent])
 
   const closeFindBar = useCallback(() => {
+    const eventBus = eventBusRef.current
+    if (eventBus) {
+      eventBus.dispatch('findbarclose', { source: null })
+    }
     setFindOpen(false)
   }, [])
 
@@ -206,7 +216,7 @@ export default function PdfViewer({ content, filePath }: PdfViewerProps): JSX.El
           <span className="min-w-0 truncate" title={filename}>
             {filename}
           </span>
-          <span>PDF preview</span>
+          <span>{translate('auto.components.editor.PdfViewer.3e98d500d2', 'PDF preview')}</span>
         </div>
       </div>
     )
@@ -242,7 +252,7 @@ export default function PdfViewer({ content, filePath }: PdfViewerProps): JSX.El
             className="rounded p-1 hover:bg-accent hover:text-foreground disabled:opacity-50"
             onClick={zoomOut}
             disabled={scale <= MIN_SCALE}
-            title="Zoom out"
+            title={translate('auto.components.editor.PdfViewer.fa5d096b00', 'Zoom out')}
           >
             <ZoomOut size={14} />
           </button>
@@ -250,7 +260,7 @@ export default function PdfViewer({ content, filePath }: PdfViewerProps): JSX.El
             type="button"
             className="rounded p-1 hover:bg-accent hover:text-foreground"
             onClick={zoomReset}
-            title="Fit to width"
+            title={translate('auto.components.editor.PdfViewer.c0119616d6', 'Fit to width')}
           >
             <RotateCcw size={14} />
           </button>
@@ -259,7 +269,7 @@ export default function PdfViewer({ content, filePath }: PdfViewerProps): JSX.El
             className="rounded p-1 hover:bg-accent hover:text-foreground disabled:opacity-50"
             onClick={zoomIn}
             disabled={scale >= MAX_SCALE}
-            title="Zoom in"
+            title={translate('auto.components.editor.PdfViewer.2b6eb1ccd6', 'Zoom in')}
           >
             <ZoomIn size={14} />
           </button>
@@ -269,14 +279,18 @@ export default function PdfViewer({ content, filePath }: PdfViewerProps): JSX.El
           type="button"
           className="rounded p-1 hover:bg-accent hover:text-foreground"
           onClick={() => setFindOpen(true)}
-          title={`Find in PDF (${findShortcutLabel})`}
+          title={translate(
+            'auto.components.editor.PdfViewer.069ff59932',
+            'Find in PDF ({{value0}})',
+            { value0: findShortcutLabel }
+          )}
         >
           <Search size={14} />
         </button>
         <span className="min-w-0 truncate" title={filename}>
           {filename}
         </span>
-        <span>PDF preview</span>
+        <span>{translate('auto.components.editor.PdfViewer.3e98d500d2', 'PDF preview')}</span>
       </div>
     </div>
   )

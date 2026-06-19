@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useRef, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,6 +11,8 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { getRelativePathInsideRoot } from '@/lib/path'
+import { useMountedRef } from '@/hooks/useMountedRef'
+import { translate } from '@/i18n/i18n'
 
 type UntitledFileRenameDialogProps = {
   open: boolean
@@ -36,28 +38,56 @@ export function UntitledFileRenameDialog({
   const [dir, setDir] = useState(worktreePath)
   const [error, setError] = useState<string | null>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
+  const focusFrameRef = useRef<number | null>(null)
+  const seededOpenStateRef = useRef({ open: false, baseName, worktreePath })
+  const mountedRef = useMountedRef()
 
   const displayError = externalError ?? error
 
-  useEffect(() => {
-    if (open) {
+  const cancelFocusFrame = useCallback(() => {
+    if (focusFrameRef.current !== null) {
+      cancelAnimationFrame(focusFrameRef.current)
+      focusFrameRef.current = null
+    }
+  }, [])
+
+  const setNameInputNode = useCallback(
+    (node: HTMLInputElement | null): void => {
+      if (!node) {
+        // Why: on a quick close, Radix may unmount the input before the
+        // deferred focus frame runs. Cancel it from the ref cleanup path.
+        cancelFocusFrame()
+      }
+      nameInputRef.current = node
+    },
+    [cancelFocusFrame]
+  )
+
+  // Why: seed the drafts before the open dialog paints; focus is handled by
+  // Radix's open lifecycle below so this does not need a post-render Effect.
+  if (open) {
+    const seeded = seededOpenStateRef.current
+    if (!seeded.open || seeded.baseName !== baseName || seeded.worktreePath !== worktreePath) {
+      seededOpenStateRef.current = { open: true, baseName, worktreePath }
       setName(baseName)
       setDir(worktreePath)
       setError(null)
-      requestAnimationFrame(() => {
-        nameInputRef.current?.select()
-      })
     }
-  }, [open, baseName, worktreePath])
+  } else if (seededOpenStateRef.current.open) {
+    seededOpenStateRef.current = { open: false, baseName, worktreePath }
+  }
 
   const handleBrowse = useCallback(async () => {
     const picked = await window.api.shell.pickDirectory({ defaultPath: dir || worktreePath })
     if (!picked) {
       return
     }
+    if (!mountedRef.current) {
+      return
+    }
     setDir(picked)
     setError(null)
-  }, [dir, worktreePath])
+  }, [dir, mountedRef, worktreePath])
 
   const handleSubmit = useCallback(() => {
     const trimmedName = name.trim().replace(/\.md$/, '')
@@ -89,19 +119,38 @@ export function UntitledFileRenameDialog({
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContent showCloseButton={false} className="max-w-[340px]">
+      <DialogContent
+        showCloseButton={false}
+        className="max-w-[340px]"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          cancelFocusFrame()
+          focusFrameRef.current = requestAnimationFrame(() => {
+            focusFrameRef.current = null
+            nameInputRef.current?.focus()
+            nameInputRef.current?.select()
+          })
+        }}
+      >
         <DialogHeader>
-          <DialogTitle className="text-sm">Save as</DialogTitle>
+          <DialogTitle className="text-sm">
+            {translate('auto.components.editor.UntitledFileRenameDialog.674b046582', 'Save as')}
+          </DialogTitle>
           <DialogDescription className="text-xs">
-            Name your markdown file and pick a folder.
+            {translate(
+              'auto.components.editor.UntitledFileRenameDialog.e365f3c638',
+              'Name your markdown file and pick a folder.'
+            )}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
           <div>
-            <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Name</label>
+            <label className="text-[11px] font-medium text-muted-foreground mb-1 block">
+              {translate('auto.components.editor.UntitledFileRenameDialog.b6ed807cc6', 'Name')}
+            </label>
             <div className="flex items-center gap-1.5">
               <Input
-                ref={nameInputRef}
+                ref={setNameInputNode}
                 value={name}
                 onChange={(e) => {
                   setName(e.target.value)
@@ -113,16 +162,21 @@ export function UntitledFileRenameDialog({
                     handleSubmit()
                   }
                 }}
-                placeholder="file name"
+                placeholder={translate(
+                  'auto.components.editor.UntitledFileRenameDialog.c8ac7868e6',
+                  'file name'
+                )}
                 className="h-8 text-sm"
                 aria-invalid={!!displayError}
               />
-              <span className="text-xs text-muted-foreground shrink-0">.md</span>
+              <span className="text-xs text-muted-foreground shrink-0">
+                {translate('auto.components.editor.UntitledFileRenameDialog.2d7d39dc63', '.md')}
+              </span>
             </div>
           </div>
           <div>
             <label className="text-[11px] font-medium text-muted-foreground mb-1 block">
-              Folder
+              {translate('auto.components.editor.UntitledFileRenameDialog.30099dca46', 'Folder')}
             </label>
             <div className="flex items-center gap-1.5">
               <Input
@@ -147,7 +201,15 @@ export function UntitledFileRenameDialog({
                 disabled={disableBrowse}
                 onClick={() => void handleBrowse()}
                 title={
-                  disableBrowse ? 'Folder picker unavailable for remote files' : 'Browse folders'
+                  disableBrowse
+                    ? translate(
+                        'auto.components.editor.UntitledFileRenameDialog.5e7f0d8a80',
+                        'Folder picker unavailable for remote files'
+                      )
+                    : translate(
+                        'auto.components.editor.UntitledFileRenameDialog.725868c75d',
+                        'Browse folders'
+                      )
                 }
               >
                 <FolderOpen className="size-3.5" />
@@ -158,10 +220,10 @@ export function UntitledFileRenameDialog({
         {displayError && <p className="text-xs text-destructive mt-1">{displayError}</p>}
         <DialogFooter className="mt-1">
           <Button variant="outline" size="sm" onClick={onClose}>
-            Cancel
+            {translate('auto.components.editor.UntitledFileRenameDialog.949711deb4', 'Cancel')}
           </Button>
           <Button size="sm" onClick={handleSubmit}>
-            Save
+            {translate('auto.components.editor.UntitledFileRenameDialog.a7dd27b0bc', 'Save')}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -7,6 +7,7 @@ import type { SshConnection } from './ssh-connection'
 import type { Store } from '../persistence'
 import type { SshPortForwardManager } from './ssh-port-forward'
 import { AGENT_HOOK_INSTALL_PLUGINS_METHOD } from '../../shared/agent-hook-relay'
+import { SSH_RELAY_CONFIGURE_GRACE_TIME_METHOD } from '../../shared/ssh-types'
 
 const { muxRequestMock, installRemoteManagedAgentHooksMock } = vi.hoisted(() => ({
   muxRequestMock: vi.fn(),
@@ -17,12 +18,17 @@ vi.mock('./ssh-relay-deploy', () => ({
   deployAndLaunchRelay: vi.fn()
 }))
 
+vi.mock('./ssh-relay-deploy-helpers', () => ({
+  execCommand: vi.fn().mockResolvedValue('')
+}))
+
 vi.mock('./ssh-channel-multiplexer', () => {
   return {
     SshChannelMultiplexer: class MockSshChannelMultiplexer {
       notify = vi.fn()
       request = muxRequestMock
       onNotification = vi.fn().mockReturnValue(() => {})
+      onRequest = vi.fn().mockReturnValue(() => {})
       onDispose = vi.fn().mockReturnValue(() => {})
       dispose = vi.fn()
       isDisposed = vi.fn().mockReturnValue(false)
@@ -82,6 +88,8 @@ vi.mock('../providers/ssh-git-dispatch', () => ({
 }))
 
 const { deployAndLaunchRelay } = await import('./ssh-relay-deploy')
+const { execCommand } = await import('./ssh-relay-deploy-helpers')
+const { getRemoteHostPlatform } = await import('./ssh-remote-platform')
 const {
   registerSshPtyProvider,
   unregisterSshPtyProvider,
@@ -179,6 +187,11 @@ describe('SshRelaySession', () => {
       ([method]) => method === AGENT_HOOK_INSTALL_PLUGINS_METHOD
     )
     expect(installPluginsCallIndex).toBeGreaterThanOrEqual(0)
+    const installPluginsParams = muxRequestMock.mock.calls[installPluginsCallIndex]?.[1]
+    expect(installPluginsParams).toMatchObject({
+      piExtensionSource: expect.stringContaining('/hook/pi'),
+      ompExtensionSource: expect.stringContaining('/hook/omp')
+    })
     expect(mockConn.sftp).toHaveBeenCalledTimes(1)
     expect(installRemoteManagedAgentHooksMock).toHaveBeenCalledWith(sftp, '/home/orca')
     expect(sftp.end).toHaveBeenCalledTimes(1)
@@ -188,6 +201,35 @@ describe('SshRelaySession', () => {
     expect(muxRequestMock.mock.invocationCallOrder[installPluginsCallIndex]).toBeLessThan(
       vi.mocked(registerSshPtyProvider).mock.invocationCallOrder[0]
     )
+  })
+
+  it('does not run POSIX managed hook installers on Windows remotes', async () => {
+    process.env.ORCA_FEATURE_REMOTE_AGENT_HOOKS = '1'
+    const { mockStore, mockPortForward, getMainWindow } = createMockDeps()
+    const mockConn = {
+      writeFile: vi.fn().mockResolvedValue(undefined)
+    } as unknown as SshConnection
+    vi.mocked(deployAndLaunchRelay).mockResolvedValueOnce({
+      transport: {
+        write: vi.fn(),
+        onData: vi.fn(),
+        onClose: vi.fn()
+      },
+      platform: 'win32-x64',
+      hostPlatform: getRemoteHostPlatform('win32-x64'),
+      remoteHome: 'C:/Users/me',
+      remoteRelayDir: 'C:/Users/me/.orca-remote/relay-v1',
+      nodePath: 'C:/Program Files/nodejs/node.exe',
+      sockPath: '\\\\.\\pipe\\orca-relay-123'
+    })
+    const session = new SshRelaySession('target-1', getMainWindow, mockStore, mockPortForward)
+
+    await session.establish(mockConn)
+
+    expect(installRemoteManagedAgentHooksMock).not.toHaveBeenCalled()
+    expect(
+      muxRequestMock.mock.calls.some(([method]) => method === AGENT_HOOK_INSTALL_PLUGINS_METHOD)
+    ).toBe(true)
   })
 
   it('does not register providers if dispose wins during initial plugin sync', async () => {
@@ -257,6 +299,48 @@ describe('SshRelaySession', () => {
     expect(unregisterSshFilesystemProvider).toHaveBeenCalledWith('target-1')
     expect(unregisterSshGitProvider).toHaveBeenCalledWith('target-1')
     expect(registerSshPtyProvider).toHaveBeenCalledWith('target-1', expect.anything())
+  })
+
+  it('installs a native Windows Orca CLI bridge without POSIX shell commands', async () => {
+    const { mockStore, mockPortForward, getMainWindow } = createMockDeps()
+    const mockConn = {
+      writeFile: vi.fn().mockResolvedValue(undefined)
+    } as unknown as SshConnection
+    vi.mocked(deployAndLaunchRelay).mockResolvedValueOnce({
+      transport: {
+        write: vi.fn(),
+        onData: vi.fn(),
+        onClose: vi.fn()
+      },
+      platform: 'win32-x64',
+      hostPlatform: getRemoteHostPlatform('win32-x64'),
+      remoteHome: 'C:/Users/me',
+      remoteRelayDir: 'C:/Users/me/.orca-remote/relay-v1',
+      nodePath: 'C:/Program Files/nodejs/node.exe',
+      sockPath: '\\\\.\\pipe\\orca-relay-123'
+    })
+
+    const session = new SshRelaySession('target-1', getMainWindow, mockStore, mockPortForward)
+
+    await session.establish(mockConn)
+
+    expect(execCommand).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(execCommand).mock.calls[0]?.[1]).toContain('powershell.exe')
+    expect(vi.mocked(execCommand).mock.calls[0]?.[2]).toEqual({ wrapCommand: false })
+    expect(mockConn.writeFile).toHaveBeenCalledWith(
+      'C:/Users/me/.orca-relay/bin/orca.cmd',
+      expect.stringContaining('@echo off'),
+      { hostPlatform: getRemoteHostPlatform('win32-x64') }
+    )
+    const shim = vi.mocked(mockConn.writeFile).mock.calls[0]?.[1] as string
+    expect(shim).toContain('C:/Users/me/.orca-remote/relay-v1')
+    expect(shim).toContain('\\\\.\\pipe\\orca-relay-123')
+    expect(shim).not.toContain('if not exist "%ORCA_RELAY_SOCKET_PATH%"')
+    expect(shim).not.toContain('Orca SSH CLI bridge cannot find the relay socket')
+    expect(shim).not.toContain('#!/usr/bin/env sh')
+    expect(vi.mocked(execCommand).mock.calls.some(([, command]) => command.includes('chmod'))).toBe(
+      false
+    )
   })
 
   it('reconnect re-attaches live PTYs', async () => {
@@ -517,6 +601,30 @@ describe('SshRelaySession', () => {
     await session.establish(mockConn, 600)
 
     expect(deployAndLaunchRelay).toHaveBeenCalledWith(mockConn, undefined, 600, 'target-1')
+  })
+
+  it('restores the configured relay grace after establish', async () => {
+    const { mockConn, mockStore, mockPortForward, getMainWindow } = createMockDeps()
+    const session = new SshRelaySession('target-1', getMainWindow, mockStore, mockPortForward)
+
+    await session.establish(mockConn, 600)
+
+    expect(session.getMux()?.notify).toHaveBeenCalledWith(SSH_RELAY_CONFIGURE_GRACE_TIME_METHOD, {
+      graceTimeSeconds: 600
+    })
+  })
+
+  it('sets relay grace to unlimited before host sleep', async () => {
+    const { mockConn, mockStore, mockPortForward, getMainWindow } = createMockDeps()
+    const session = new SshRelaySession('target-1', getMainWindow, mockStore, mockPortForward)
+    await session.establish(mockConn)
+    vi.mocked(session.getMux()!.notify).mockClear()
+
+    session.prepareForHostSleep()
+
+    expect(session.getMux()?.notify).toHaveBeenCalledWith(SSH_RELAY_CONFIGURE_GRACE_TIME_METHOD, {
+      graceTimeSeconds: 0
+    })
   })
 
   it('cleans up port forwards on dispose', async () => {

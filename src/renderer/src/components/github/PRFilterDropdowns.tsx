@@ -2,7 +2,7 @@
 // containing Author / Label / Reviewer / Assignee sections, mirroring GitHub's
 // own collapsed Filters dropdown so the toolbar stays uncluttered when nothing
 // is set. Active filters surface as inline removable pills next to the button.
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { ListFilter, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -21,6 +21,7 @@ import type {
   GlobalSettings
 } from '../../../../shared/types'
 import type { ParsedTaskQuery } from '../../../../shared/task-query'
+import { translate } from '@/i18n/i18n'
 
 type Props = {
   parsed: ParsedTaskQuery
@@ -55,7 +56,11 @@ function ActivePill({
       <span className="max-w-[160px] truncate font-medium">{value}</span>
       <button
         type="button"
-        aria-label={`Remove ${label} filter`}
+        aria-label={translate(
+          'auto.components.github.PRFilterDropdowns.8a2ffbf9b3',
+          'Remove {{value0}} filter',
+          { value0: label }
+        )}
         onClick={onClear}
         className="rounded-full p-0.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
       >
@@ -118,11 +123,10 @@ export default function PRFilterDropdowns({
 
   const reviewerActive = parsed.reviewRequested ?? parsed.reviewedBy ?? null
   const reviewerKind: 'requested' | 'reviewed-by' = parsed.reviewedBy ? 'reviewed-by' : 'requested'
-  const [reviewerMode, setReviewerMode] = useState<'requested' | 'reviewed-by'>(reviewerKind)
-  // Why: keep mode in sync if the user types qualifier syntax directly.
-  useEffect(() => {
-    setReviewerMode(reviewerKind)
-  }, [reviewerKind])
+  const [reviewerModeOverride, setReviewerModeOverride] = useState<
+    'requested' | 'reviewed-by' | null
+  >(null)
+  const reviewerMode = reviewerModeOverride ?? reviewerKind
 
   // Why: treat anything other than the implicit "open" default as an active
   // status filter so the user can see (and clear) it via the inline pill.
@@ -177,7 +181,7 @@ export default function PRFilterDropdowns({
             )}
           >
             <ListFilter className="size-3.5" />
-            Filters
+            {translate('auto.components.github.PRFilterDropdowns.79c54552f7', 'Filters')}
             {activeCount > 0 ? (
               <span className="ml-0.5 rounded-full bg-muted px-1.5 text-[10px] font-medium text-foreground">
                 {activeCount}
@@ -192,7 +196,14 @@ export default function PRFilterDropdowns({
               kind={kind}
               reviewerActive={reviewerActive}
               reviewerKind={reviewerKind}
-              onPick={(s) => setOpenSection(s)}
+              onPick={(s) => {
+                // Why: each reviewer menu visit should start from the parsed
+                // query unless the user toggles mode during this visit.
+                if (s === 'reviewer') {
+                  setReviewerModeOverride(null)
+                }
+                setOpenSection(s)
+              }}
               onClearAll={
                 activeCount > 0
                   ? () => {
@@ -204,6 +215,7 @@ export default function PRFilterDropdowns({
                         state: 'open',
                         draft: false
                       })
+                      setReviewerModeOverride(null)
                       setPopoverOpen(false)
                     }
                   : null
@@ -222,7 +234,7 @@ export default function PRFilterDropdowns({
               usersLoading={hasPrimarySlug && assigneesState.loading}
               usersError={hasPrimarySlug ? assigneesState.error : null}
               reviewerMode={reviewerMode}
-              setReviewerMode={setReviewerMode}
+              setReviewerMode={setReviewerModeOverride}
               onBack={() => setOpenSection(null)}
               onSelect={handleSelect}
             />
@@ -231,35 +243,39 @@ export default function PRFilterDropdowns({
       </Popover>
       {statusPillValue ? (
         <ActivePill
-          label="Status"
+          label={translate('auto.components.github.PRFilterDropdowns.13b3ac0a84', 'Status')}
           value={statusPillValue}
           onClear={() => onChange({ state: 'open', draft: false })}
         />
       ) : null}
       {parsed.author ? (
         <ActivePill
-          label="Author"
+          label={translate('auto.components.github.PRFilterDropdowns.01f3f3d161', 'Author')}
           value={parsed.author}
           onClear={() => onChange({ author: null })}
         />
       ) : null}
       {parsed.labels.length > 0 ? (
         <ActivePill
-          label="Label"
+          label={translate('auto.components.github.PRFilterDropdowns.9d0f2eda6d', 'Label')}
           value={parsed.labels.length === 1 ? parsed.labels[0] : `${parsed.labels.length} labels`}
           onClear={() => onChange({ labels: [] })}
         />
       ) : null}
       {reviewerActive ? (
         <ActivePill
-          label={reviewerKind === 'reviewed-by' ? 'Reviewed by' : 'Review from'}
+          label={
+            reviewerKind === 'reviewed-by'
+              ? translate('auto.components.github.PRFilterDropdowns.7f1ba66c3e', 'Reviewed by')
+              : translate('auto.components.github.PRFilterDropdowns.b27b7e526c', 'Review from')
+          }
           value={reviewerActive}
           onClear={() => onChange({ reviewer: null })}
         />
       ) : null}
       {parsed.assignee ? (
         <ActivePill
-          label="Assignee"
+          label={translate('auto.components.github.PRFilterDropdowns.979be3cf6b', 'Assignee')}
           value={parsed.assignee}
           onClear={() => onChange({ assignee: null })}
         />

@@ -54,6 +54,7 @@ import type {
 const EXEC_TIMEOUT_MS = 90_000
 const CONSECUTIVE_TIMEOUT_LIMIT = 3
 const WAIT_PROCESS_TIMEOUT_GRACE_MS = 1_000
+const STALE_SESSION_CLOSE_TIMEOUT_MS = 3_000
 
 type SessionState = {
   proxy: CdpWsProxy
@@ -80,10 +81,17 @@ type ResolvedBrowserCommandTarget = {
   webContentsId: number
 }
 
+export type BrowserMouseModifier = 'cmd' | 'ctrl' | 'alt' | 'shift'
+
 type AgentBrowserExecOptions = {
   envOverrides?: NodeJS.ProcessEnv
   timeoutMs?: number
   timeoutError?: BrowserError
+}
+
+type EnqueueTargetedCommandOptions = {
+  ensureSession?: boolean
+  ensureVisible?: boolean
 }
 
 type AgentBrowserBridgeOptions = {
@@ -165,6 +173,22 @@ function parseShellArgs(input: string): string[] {
   return args
 }
 
+function stripAgentBrowserTargetArgs(args: string[]): string[] {
+  const stripped: string[] = []
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+    if (arg === '--cdp' || arg === '--session') {
+      index++
+      continue
+    }
+    if (arg.startsWith('--cdp=') || arg.startsWith('--session=')) {
+      continue
+    }
+    stripped.push(arg)
+  }
+  return stripped
+}
+
 // Why: agent-browser returns generic error messages for stale/unknown refs.
 // Map them to a specific code so agents can reliably detect and re-snapshot.
 function classifyErrorCode(message: string): string {
@@ -211,6 +235,25 @@ function cdpMouseButtonMask(button: CdpMouseButton): number {
   return 1
 }
 
+function cdpMouseModifierMask(modifiers: BrowserMouseModifier[] | undefined): number {
+  if (!modifiers || modifiers.length === 0) {
+    return 0
+  }
+  let mask = 0
+  for (const modifier of modifiers) {
+    if (modifier === 'alt') {
+      mask |= 1
+    } else if (modifier === 'ctrl') {
+      mask |= 2
+    } else if (modifier === 'cmd') {
+      mask |= 4
+    } else if (modifier === 'shift') {
+      mask |= 8
+    }
+  }
+  return mask
+}
+
 function readClickPoint(value: unknown, fallback: BrowserClickPoint): BrowserClickPoint {
   const point = value && typeof value === 'object' ? (value as Record<string, unknown>) : null
   const x = point?.x
@@ -226,11 +269,17 @@ function readClickPoint(value: unknown, fallback: BrowserClickPoint): BrowserCli
   return { x, y, adjusted: point?.adjusted === true, handled: point?.handled === true }
 }
 
-function mobileTouchClickExpression(x: number, y: number, radius: number): string {
+function mobileTouchClickExpression(
+  x: number,
+  y: number,
+  radius: number,
+  allowDomActivation: boolean
+): string {
   return `(() => {
     const inputX = ${JSON.stringify(x)};
     const inputY = ${JSON.stringify(y)};
     const radius = ${JSON.stringify(radius)};
+    const allowDomActivation = ${JSON.stringify(allowDomActivation)};
     const selector = [
       'a[href]',
       'button',
@@ -321,8 +370,11 @@ function mobileTouchClickExpression(x: number, y: number, radius: number): strin
         break;
       }
     }
-    if (best && dispatchClick(best.target, best.x, best.y)) {
+    if (best && allowDomActivation && dispatchClick(best.target, best.x, best.y)) {
       return { x: best.x, y: best.y, adjusted: true, handled: true };
+    }
+    if (best) {
+      return { x: best.x, y: best.y, adjusted: true, handled: false };
     }
     return { x: inputX, y: inputY, adjusted: false, handled: false };
   })()`
@@ -332,7 +384,8 @@ async function resolveMobileTouchClickPoint(
   dbg: WebContents['debugger'],
   x: number,
   y: number,
-  radius?: number
+  radius: number | undefined,
+  allowDomActivation: boolean
 ): Promise<BrowserClickPoint> {
   const fallback = { x, y, adjusted: false, handled: false }
   if (typeof radius !== 'number' || !Number.isFinite(radius) || radius <= 0) {
@@ -340,7 +393,7 @@ async function resolveMobileTouchClickPoint(
   }
   try {
     const result = await dbg.sendCommand('Runtime.evaluate', {
-      expression: mobileTouchClickExpression(x, y, radius),
+      expression: mobileTouchClickExpression(x, y, radius, allowDomActivation),
       returnByValue: true,
       silent: true
     })
@@ -388,10 +441,10 @@ export class AgentBrowserBridge {
   private readonly sessions = new Map<string, SessionState>()
   private readonly commandQueues = new Map<string, QueuedCommand[]>()
   private readonly processingQueues = new Set<string>()
-  // Why: screenshot prep temporarily changes shared renderer visibility/focus
-  // state. Per-session queues only serialize commands within one browser tab, so
-  // concurrent screenshots on different tabs can otherwise interleave
-  // ensureWebviewVisible()/restore and blank each other's capture.
+  // Why: screenshot prep temporarily changes shared renderer paintability state.
+  // Per-session queues only serialize commands within one browser tab, so
+  // concurrent screenshots on different tabs can otherwise interleave hidden
+  // surface leases and blank each other's capture.
   private screenshotTurn: Promise<void> = Promise.resolve()
   private readonly agentBrowserBin: string
   // Why: when a process swap destroys a session that had active intercept patterns,
@@ -492,7 +545,9 @@ export class AgentBrowserBridge {
       this.activeWebContentsId = nextWorktreeActiveWebContentsId
     }
     if (browserPageId) {
-      await this.destroySession(`orca-tab-${browserPageId}`)
+      const sessionName = `orca-tab-${browserPageId}`
+      await this.destroySession(sessionName)
+      this.pendingInterceptRestore.delete(sessionName)
     }
     this.options.onTabsChanged?.(owningWorktreeId)
   }
@@ -560,6 +615,7 @@ export class AgentBrowserBridge {
     for (const [tabId, wcId] of tabs) {
       const wc = this.getWebContents(wcId)
       if (!wc) {
+        this.browserManager.unregisterGuest(tabId)
         continue
       }
       if (firstLiveWcId === null) {
@@ -684,10 +740,10 @@ export class AgentBrowserBridge {
     // directly via JS and dispatch input/change events for React/framework compat.
     return this.enqueueTargetedCommand(worktreeId, browserPageId, async (sessionName) => {
       await this.execAgentBrowser(sessionName, ['focus', element])
-      const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      const serializedValue = JSON.stringify(value)
       await this.execAgentBrowser(sessionName, [
         'eval',
-        `(() => { const el = document.activeElement; if (el) { const nativeSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set; if (nativeSetter) { nativeSetter.call(el, '${escaped}'); } else { el.value = '${escaped}'; } el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } })()`
+        `(() => { const el = document.activeElement; if (el) { const nativeSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set; if (nativeSetter) { nativeSetter.call(el, ${serializedValue}); } else { el.value = ${serializedValue}; } el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } })()`
       ])
       return { filled: element } as BrowserFillResult
     })
@@ -814,7 +870,8 @@ export class AgentBrowserBridge {
     button?: string,
     worktreeId?: string,
     browserPageId?: string,
-    radius?: number
+    radius?: number,
+    modifiers?: BrowserMouseModifier[]
   ): Promise<unknown> {
     return this.enqueueTargetedCommand(
       worktreeId,
@@ -829,12 +886,15 @@ export class AgentBrowserBridge {
         }
         const cdpButton = normalizeCdpMouseButton(button)
         const buttons = cdpMouseButtonMask(cdpButton)
+        const cdpModifiers = cdpMouseModifierMask(modifiers)
         const lease = acquireElectronDebugger(wc)
         try {
           wc.focus()
           const point =
             cdpButton === 'left'
-              ? await resolveMobileTouchClickPoint(wc.debugger, x, y, radius)
+              ? // Why: DOM activation cannot carry Cmd/Ctrl/Alt/Shift, so modifier
+                // clicks use only the adjusted point and let CDP dispatch the event.
+                await resolveMobileTouchClickPoint(wc.debugger, x, y, radius, cdpModifiers === 0)
               : { x, y, adjusted: false, handled: false }
           // Why: mobile taps should land as one atomic input operation. Sending
           // move/down/up through separate CLI calls visibly hovers targets and can
@@ -848,6 +908,7 @@ export class AgentBrowserBridge {
               y: point.y,
               button: cdpButton,
               buttons,
+              modifiers: cdpModifiers,
               clickCount: 1
             })
             await wc.debugger.sendCommand('Input.dispatchMouseEvent', {
@@ -856,6 +917,7 @@ export class AgentBrowserBridge {
               y: point.y,
               button: cdpButton,
               buttons: 0,
+              modifiers: cdpModifiers,
               clickCount: 1
             })
           }
@@ -1114,19 +1176,33 @@ export class AgentBrowserBridge {
       }
       wc.reload()
       await new Promise<void>((resolve) => {
-        const onFinish = (): void => {
+        let settled = false
+        let fallbackTimer: ReturnType<typeof setTimeout> | null = null
+
+        const finish = (): void => {
+          if (settled) {
+            return
+          }
+          settled = true
           wc.removeListener('did-finish-load', onFinish)
           wc.removeListener('did-fail-load', onFail)
+          if (fallbackTimer) {
+            clearTimeout(fallbackTimer)
+            fallbackTimer = null
+          }
           resolve()
         }
-        const onFail = (): void => {
-          wc.removeListener('did-finish-load', onFinish)
-          wc.removeListener('did-fail-load', onFail)
-          resolve()
-        }
+        const onFinish = (): void => finish()
+        const onFail = (): void => finish()
+
         wc.on('did-finish-load', onFinish)
         wc.on('did-fail-load', onFail)
-        setTimeout(onFinish, 10_000)
+        // Why: successful reloads must clear the fallback timer; otherwise each
+        // reload retains the webContents and listeners until the 10s timeout fires.
+        fallbackTimer = setTimeout(finish, 10_000)
+        if (typeof fallbackTimer.unref === 'function') {
+          fallbackTimer.unref()
+        }
       })
       return { url: wc.getURL(), title: wc.getTitle() }
     })
@@ -1139,9 +1215,14 @@ export class AgentBrowserBridge {
   ): Promise<BrowserScreenshotResult> {
     // Why: agent-browser writes the screenshot to a temp file and returns
     // { "path": "/tmp/screenshot-xxx.png" }. We read the file and return base64.
-    return this.enqueueTargetedCommand(worktreeId, browserPageId, async (sessionName) => {
-      return this.captureScreenshotCommand(sessionName, ['screenshot'], 300, format)
-    })
+    return this.enqueueTargetedCommand(
+      worktreeId,
+      browserPageId,
+      async (sessionName) => {
+        return this.captureScreenshotCommand(sessionName, ['screenshot'], 300, format)
+      },
+      { ensureVisible: false }
+    )
   }
 
   async fullPageScreenshot(
@@ -1149,14 +1230,19 @@ export class AgentBrowserBridge {
     worktreeId?: string,
     browserPageId?: string
   ): Promise<BrowserScreenshotResult> {
-    return this.enqueueTargetedCommand(worktreeId, browserPageId, async (sessionName, target) => {
-      return this.captureFullPageScreenshotCommand(
-        sessionName,
-        target.webContentsId,
-        500,
-        format === 'jpeg' ? 'jpeg' : 'png'
-      )
-    })
+    return this.enqueueTargetedCommand(
+      worktreeId,
+      browserPageId,
+      async (sessionName, target) => {
+        return this.captureFullPageScreenshotCommand(
+          sessionName,
+          target.webContentsId,
+          500,
+          format === 'jpeg' ? 'jpeg' : 'png'
+        )
+      },
+      { ensureVisible: false }
+    )
   }
 
   private readScreenshotFromResult(raw: unknown, format?: string): BrowserScreenshotResult {
@@ -1180,12 +1266,12 @@ export class AgentBrowserBridge {
     return this.withSerializedScreenshotAccess(async () => {
       const session = this.sessions.get(sessionName)
       const restore = session
-        ? await this.browserManager.ensureWebviewVisible(session.webContentsId)
+        ? await this.browserManager.acquireAutomationVisibility(session.webContentsId)
         : () => {}
       try {
-        // Why: after focusing the window and unhiding the webview, the compositor
+        // Why: after acquiring the hidden paintability lease, the compositor
         // needs a short settle period to produce a painted frame. Waiting inside
-        // the global screenshot lock prevents another tab from stealing visible
+        // the global screenshot lock prevents another tab from changing lease
         // state before the current capture actually hits CDP.
         await new Promise((r) => setTimeout(r, settleMs))
         const raw = await this.execAgentBrowser(sessionName, commandArgs)
@@ -1205,11 +1291,11 @@ export class AgentBrowserBridge {
     return this.withSerializedScreenshotAccess(async () => {
       const session = this.sessions.get(sessionName)
       const restore = session
-        ? await this.browserManager.ensureWebviewVisible(session.webContentsId)
+        ? await this.browserManager.acquireAutomationVisibility(session.webContentsId)
         : () => {}
       try {
         // Why: full-page capture still depends on the guest compositor producing
-        // a fresh frame. Wait after activating the target webview so the direct
+        // a fresh frame. Wait after the target webview is paintable so the direct
         // CDP capture sees the live page instead of a stale surface.
         await new Promise((r) => setTimeout(r, settleMs))
         const wc = this.getWebContents(webContentsId)
@@ -1665,12 +1751,9 @@ export class AgentBrowserBridge {
 
   async exec(command: string, worktreeId?: string, browserPageId?: string): Promise<unknown> {
     return this.enqueueTargetedCommand(worktreeId, browserPageId, async (sessionName) => {
-      // Why: strip --cdp and --session from raw command to prevent session/target injection
-      const sanitized = command
-        .replace(/--cdp\s+\S+/g, '')
-        .replace(/--session\s+\S+/g, '')
-        .trim()
-      const args = parseShellArgs(sanitized)
+      // Why: strip target/session flags from raw passthrough commands so a
+      // caller cannot override Orca's selected browser page or CDP proxy.
+      const args = stripAgentBrowserTargetArgs(parseShellArgs(command.trim()))
       return await this.execAgentBrowser(sessionName, args)
     })
   }
@@ -1683,6 +1766,7 @@ export class AgentBrowserBridge {
       promises.push(this.destroySession(sessionName))
     }
     await Promise.allSettled(promises)
+    this.pendingInterceptRestore.clear()
   }
 
   // ── Internal ──
@@ -1691,8 +1775,11 @@ export class AgentBrowserBridge {
     worktreeId: string | undefined,
     execute: (sessionName: string) => Promise<T>
   ): Promise<T> {
-    return this.enqueueTargetedCommand(worktreeId, undefined, async (sessionName) =>
-      execute(sessionName)
+    return this.enqueueTargetedCommand(
+      worktreeId,
+      undefined,
+      async (sessionName) => execute(sessionName),
+      { ensureVisible: false }
     )
   }
 
@@ -1700,7 +1787,7 @@ export class AgentBrowserBridge {
     worktreeId: string | undefined,
     browserPageId: string | undefined,
     execute: (sessionName: string, target: ResolvedBrowserCommandTarget) => Promise<T>,
-    options: { ensureSession?: boolean } = {}
+    options: EnqueueTargetedCommandOptions = {}
   ): Promise<T> {
     const target = this.resolveCommandTarget(worktreeId, browserPageId)
     const sessionName = `orca-tab-${target.browserPageId}`
@@ -1716,12 +1803,78 @@ export class AgentBrowserBridge {
         this.commandQueues.set(sessionName, queue)
       }
       queue.push({
-        execute: (() => execute(sessionName, target)) as () => Promise<unknown>,
+        execute: (() =>
+          this.executeWithVisibleTarget(
+            sessionName,
+            worktreeId,
+            target,
+            execute,
+            options
+          )) as () => Promise<unknown>,
         resolve: resolve as (value: unknown) => void,
         reject
       })
       this.processQueue(sessionName)
     })
+  }
+
+  private async executeWithVisibleTarget<T>(
+    sessionName: string,
+    worktreeId: string | undefined,
+    target: ResolvedBrowserCommandTarget,
+    execute: (sessionName: string, target: ResolvedBrowserCommandTarget) => Promise<T>,
+    options: EnqueueTargetedCommandOptions
+  ): Promise<T> {
+    if (options.ensureVisible === false) {
+      return execute(sessionName, target)
+    }
+
+    // Why: inactive browser panes are display:none in the renderer; the
+    // automation lease makes only this target paintable without selecting it.
+    const restore = await this.browserManager.acquireAutomationVisibility(target.webContentsId)
+    try {
+      const visibleTarget = await this.refreshTargetAfterAutomationVisibility(
+        sessionName,
+        worktreeId,
+        target,
+        options
+      )
+      return await execute(sessionName, visibleTarget)
+    } finally {
+      restore()
+    }
+  }
+
+  private async refreshTargetAfterAutomationVisibility(
+    sessionName: string,
+    worktreeId: string | undefined,
+    target: ResolvedBrowserCommandTarget,
+    options: EnqueueTargetedCommandOptions
+  ): Promise<ResolvedBrowserCommandTarget> {
+    const visibleTarget = this.resolveCommandTarget(worktreeId, target.browserPageId)
+    if (visibleTarget.webContentsId === target.webContentsId) {
+      return visibleTarget
+    }
+
+    if (this.activeWebContentsId === target.webContentsId) {
+      this.activeWebContentsId = visibleTarget.webContentsId
+    }
+    if (worktreeId && this.activeWebContentsPerWorktree.get(worktreeId) === target.webContentsId) {
+      this.activeWebContentsPerWorktree.set(worktreeId, visibleTarget.webContentsId)
+    }
+
+    // Why: making a parked webview paintable can re-register the same browser
+    // page with a new guest webContents. Tear down any stale named session now;
+    // DOM commands recreate immediately, direct-CDP commands let the next DOM
+    // command recreate against the live guest.
+    await this.restartSessionForTarget(
+      sessionName,
+      visibleTarget.browserPageId,
+      visibleTarget.webContentsId,
+      { recreate: options.ensureSession !== false }
+    )
+
+    return visibleTarget
   }
 
   private async processQueue(sessionName: string): Promise<void> {
@@ -1741,6 +1894,9 @@ export class AgentBrowserBridge {
       }
     }
 
+    if (queue && queue.length === 0 && this.commandQueues.get(sessionName) === queue) {
+      this.commandQueues.delete(sessionName)
+    }
     this.processingQueues.delete(sessionName)
   }
 
@@ -1771,6 +1927,7 @@ export class AgentBrowserBridge {
     }
 
     if (!this.getWebContents(webContentsId)) {
+      this.browserManager.unregisterGuest(browserPageId)
       throw new BrowserError(
         'browser_tab_not_found',
         `Browser page ${browserPageId} is no longer available`
@@ -1797,6 +1954,15 @@ export class AgentBrowserBridge {
         if (wcId === preferredWcId && this.getWebContents(wcId)) {
           return { browserPageId: tabId, webContentsId: wcId }
         }
+        if (wcId === preferredWcId) {
+          this.browserManager.unregisterGuest(tabId)
+          if (this.activeWebContentsId === wcId) {
+            this.activeWebContentsId = null
+          }
+          if (worktreeId && this.activeWebContentsPerWorktree.get(worktreeId) === wcId) {
+            this.activeWebContentsPerWorktree.delete(worktreeId)
+          }
+        }
       }
     }
 
@@ -1812,6 +1978,7 @@ export class AgentBrowserBridge {
         }
         return { browserPageId: tabId, webContentsId: wcId }
       }
+      this.browserManager.unregisterGuest(tabId)
     }
 
     throw new BrowserError(
@@ -1859,11 +2026,7 @@ export class AgentBrowserBridge {
       // across Orca restarts. A stale session ignores --cdp (already initialized) and
       // connects to the dead port. Must await close so the daemon forgets the session
       // before we pass --cdp with the new port.
-      await new Promise<void>((resolve) => {
-        execFile(this.agentBrowserBin, ['--session', sessionName, 'close'], { timeout: 3000 }, () =>
-          resolve()
-        )
-      })
+      await this.closeStaleAgentBrowserSession(sessionName)
 
       const proxy = new CdpWsProxy(wc)
       const cdpEndpoint = await proxy.start()
@@ -1889,6 +2052,55 @@ export class AgentBrowserBridge {
     }
   }
 
+  private async restartSessionForTarget(
+    sessionName: string,
+    browserPageId: string,
+    webContentsId: number,
+    options: { recreate: boolean } = { recreate: true }
+  ): Promise<void> {
+    const pendingCreation = this.pendingSessionCreation.get(sessionName)
+    if (pendingCreation) {
+      await pendingCreation.catch(() => {})
+    }
+
+    const session = this.sessions.get(sessionName)
+    if (session) {
+      if (session.activeInterceptPatterns.length > 0) {
+        this.pendingInterceptRestore.set(sessionName, [...session.activeInterceptPatterns])
+      }
+      this.sessions.delete(sessionName)
+      this.pendingSessionCreation.delete(sessionName)
+      if (session.activeProcess) {
+        this.cancelledProcesses.add(session.activeProcess)
+        try {
+          session.activeProcess.kill()
+        } catch {
+          // Process may already be exiting.
+        }
+        session.activeProcess = null
+      }
+
+      const destroy = (async (): Promise<void> => {
+        try {
+          await this.runAgentBrowserRaw(sessionName, ['--session', sessionName, 'close'])
+        } catch {
+          // Session may already be dead.
+        }
+        await session.proxy.stop()
+      })()
+      this.pendingSessionDestruction.set(sessionName, destroy)
+      try {
+        await destroy
+      } finally {
+        this.pendingSessionDestruction.delete(sessionName)
+      }
+    }
+
+    if (options.recreate) {
+      await this.ensureSession(sessionName, browserPageId, webContentsId)
+    }
+  }
+
   private async destroySession(sessionName: string): Promise<void> {
     const pendingDestruction = this.pendingSessionDestruction.get(sessionName)
     if (pendingDestruction) {
@@ -1896,8 +2108,21 @@ export class AgentBrowserBridge {
       return
     }
 
+    const pendingCreation = this.pendingSessionCreation.get(sessionName)
+    if (pendingCreation) {
+      // Why: tab close can race with stale-session cleanup before sessions.set().
+      // Wait for creation to settle so a late proxy cannot survive the close.
+      try {
+        await pendingCreation
+      } catch {
+        // Creation failures are handled by the original caller; teardown still
+        // needs to reject queued work and clear any partial state below.
+      }
+    }
+
     const session = this.sessions.get(sessionName)
     if (!session) {
+      this.rejectQueuedCommandsForClosedSession(sessionName)
       return
     }
 
@@ -1906,19 +2131,7 @@ export class AgentBrowserBridge {
 
     // Why: queued commands would hang forever if we just delete the queue —
     // their promises would never resolve or reject. Drain and reject them.
-    const queue = this.commandQueues.get(sessionName)
-    this.commandQueues.delete(sessionName)
-    this.processingQueues.delete(sessionName)
-    if (queue) {
-      const err = new BrowserError(
-        'browser_tab_closed',
-        'Tab was closed while commands were queued'
-      )
-      for (const cmd of queue) {
-        cmd.reject(err)
-      }
-      queue.length = 0
-    }
+    this.rejectQueuedCommandsForClosedSession(sessionName)
 
     if (session.activeProcess) {
       // Why: queued command rejection is not enough when a daemon command is
@@ -1953,6 +2166,22 @@ export class AgentBrowserBridge {
     }
   }
 
+  private rejectQueuedCommandsForClosedSession(sessionName: string): void {
+    const queue = this.commandQueues.get(sessionName)
+    this.commandQueues.delete(sessionName)
+    this.processingQueues.delete(sessionName)
+    if (queue) {
+      const err = new BrowserError(
+        'browser_tab_closed',
+        'Tab was closed while commands were queued'
+      )
+      for (const cmd of queue) {
+        cmd.reject(err)
+      }
+      queue.length = 0
+    }
+  }
+
   private async execAgentBrowser(
     sessionName: string,
     commandArgs: string[],
@@ -1970,6 +2199,7 @@ export class AgentBrowserBridge {
     // could be destroyed. Check here to give a clear error instead of letting the
     // proxy fail with cryptic Electron debugger errors.
     if (!this.getWebContents(session.webContentsId)) {
+      await this.destroySession(sessionName)
       throw this.createPageUnavailableError(sessionName)
     }
 
@@ -1987,7 +2217,12 @@ export class AgentBrowserBridge {
       args.push('--cdp', String(port))
     }
 
-    args.push(...commandArgs, '--json')
+    // Why: exec passthrough can produce a large argv array; spreading it into
+    // push risks V8 argument limits before execFile receives the command.
+    for (const commandArg of commandArgs) {
+      args.push(commandArg)
+    }
+    args.push('--json')
 
     const stdout = await this.runAgentBrowserRaw(sessionName, args, execOptions)
     const translated = translateResult(stdout)
@@ -2037,6 +2272,40 @@ export class AgentBrowserBridge {
 
   private createPageUnavailableError(sessionName: string): BrowserError {
     return new BrowserError('browser_tab_not_found', pageUnavailableMessageForSession(sessionName))
+  }
+
+  private closeStaleAgentBrowserSession(sessionName: string): Promise<void> {
+    return new Promise((resolve) => {
+      let child: ReturnType<typeof execFile> | null = null
+      let settled = false
+
+      const finish = (): void => {
+        if (settled) {
+          return
+        }
+        settled = true
+        clearTimeout(timeout)
+        resolve()
+      }
+
+      // Why: this is best-effort daemon cleanup before creating a fresh session;
+      // a wedged close command must not block the real browser action.
+      const timeout = setTimeout(() => {
+        child?.kill()
+        finish()
+      }, STALE_SESSION_CLOSE_TIMEOUT_MS)
+
+      try {
+        child = execFile(
+          this.agentBrowserBin,
+          ['--session', sessionName, 'close'],
+          { timeout: STALE_SESSION_CLOSE_TIMEOUT_MS },
+          finish
+        )
+      } catch {
+        finish()
+      }
+    })
   }
 
   private createCommandError(

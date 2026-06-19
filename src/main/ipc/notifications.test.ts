@@ -11,6 +11,7 @@ const {
   notificationCloseMock,
   notificationOnMock,
   notificationOnceMock,
+  notificationRemoveListenerMock,
   notificationCtorMock,
   notificationIsSupportedMock,
   getAllWindowsMock,
@@ -22,12 +23,14 @@ const {
   const notificationCloseMock = vi.fn()
   const notificationOnMock = vi.fn()
   const notificationOnceMock = vi.fn()
+  const notificationRemoveListenerMock = vi.fn()
   const notificationCtorMock = vi.fn(function () {
     return {
       show: notificationShowMock,
       close: notificationCloseMock,
       on: notificationOnMock,
-      once: notificationOnceMock
+      once: notificationOnceMock,
+      removeListener: notificationRemoveListenerMock
     }
   })
   const notificationIsSupportedMock = vi.fn(() => true)
@@ -40,6 +43,7 @@ const {
     notificationCloseMock,
     notificationOnMock,
     notificationOnceMock,
+    notificationRemoveListenerMock,
     notificationCtorMock,
     notificationIsSupportedMock,
     getAllWindowsMock,
@@ -91,6 +95,7 @@ describe('registerNotificationHandlers', () => {
     notificationCloseMock.mockClear()
     notificationOnMock.mockClear()
     notificationOnceMock.mockClear()
+    notificationRemoveListenerMock.mockClear()
     notificationIsSupportedMock.mockReset()
     notificationIsSupportedMock.mockReturnValue(true)
     getAllWindowsMock.mockReset()
@@ -106,6 +111,14 @@ describe('registerNotificationHandlers', () => {
     const call = handleMock.mock.calls.find((c: unknown[]) => c[0] === 'notifications:dispatch')
     if (!call) {
       throw new Error('notifications:dispatch handler not registered')
+    }
+    return call[1] as (event: unknown, args: unknown) => unknown
+  }
+
+  function getDismissHandler(): (event: unknown, args: unknown) => unknown {
+    const call = handleMock.mock.calls.find((c: unknown[]) => c[0] === 'notifications:dismiss')
+    if (!call) {
+      throw new Error('notifications:dismiss handler not registered')
     }
     return call[1] as (event: unknown, args: unknown) => unknown
   }
@@ -138,12 +151,12 @@ describe('registerNotificationHandlers', () => {
     return call[1] as (event: unknown) => unknown
   }
 
-  function getNotificationEventHandler(eventName: string): () => void {
+  function getNotificationEventHandler(eventName: string): (...args: unknown[]) => void {
     const call = notificationOnMock.mock.calls.find((c: unknown[]) => c[0] === eventName)
     if (!call) {
       throw new Error(`Notification ${eventName} handler not registered`)
     }
-    return call[1] as () => void
+    return call[1] as (...args: unknown[]) => void
   }
 
   function getNotificationOnceEventHandler(eventName: string): () => void {
@@ -385,11 +398,14 @@ describe('registerNotificationHandlers', () => {
     expect(
       handler({}, { source: 'agent-task-complete', worktreeId: 'repo::wt1', paneKey })
     ).toEqual({ delivered: true })
+    expect(vi.getTimerCount()).toBe(1)
 
     getNotificationEventHandler('click')()
 
     expect(restore).toHaveBeenCalledTimes(1)
     expect(focus).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(notificationRemoveListenerMock).toHaveBeenCalledWith('click', expect.any(Function))
     expect(webContentsSend).toHaveBeenCalledWith('ui:activateWorktree', {
       repoId: 'repo',
       worktreeId: 'repo::wt1'
@@ -402,6 +418,60 @@ describe('registerNotificationHandlers', () => {
       flashFocusedPane: true,
       scrollToBottomIfOutputSinceLastView: true
     })
+  })
+
+  it('clears the retained notification fallback timer when the native notification closes', () => {
+    registerNotificationHandlers({
+      getSettings: () => ({
+        notifications: {
+          enabled: true,
+          agentTaskComplete: true,
+          terminalBell: true,
+          suppressWhenFocused: true
+        }
+      })
+    } as never)
+
+    const handler = getDispatchHandler()
+    expect(handler({}, { source: 'agent-task-complete' })).toEqual({ delivered: true })
+    expect(vi.getTimerCount()).toBe(1)
+
+    const closeHandler = getNotificationEventHandler('close')
+    closeHandler()
+
+    expect(vi.getTimerCount()).toBe(0)
+    expect(notificationRemoveListenerMock).toHaveBeenCalledWith('close', closeHandler)
+  })
+
+  it('releases retained notifications when native delivery fails', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      registerNotificationHandlers({
+        getSettings: () => ({
+          notifications: {
+            enabled: true,
+            agentTaskComplete: true,
+            terminalBell: true,
+            suppressWhenFocused: true
+          }
+        })
+      } as never)
+
+      const handler = getDispatchHandler()
+      expect(handler({}, { source: 'agent-task-complete' })).toEqual({ delivered: true })
+      expect(vi.getTimerCount()).toBe(1)
+
+      const failedHandler = getNotificationEventHandler('failed')
+      failedHandler({}, 'Application is not code signed')
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('agent-task-complete notification failed to show')
+      )
+      expect(vi.getTimerCount()).toBe(0)
+      expect(notificationRemoveListenerMock).toHaveBeenCalledWith('failed', failedHandler)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('formats agent-task-complete with the agent response when a status snapshot is present', () => {
@@ -652,7 +722,7 @@ describe('registerNotificationHandlers', () => {
     )
   })
 
-  it('uses rich formatter output for mobile notifications before desktop guards', () => {
+  it('uses rich formatter output for mobile notifications before the native support guard', () => {
     notificationIsSupportedMock.mockReturnValue(false)
     const dispatchMobileNotification = vi.fn()
     registerNotificationHandlers(
@@ -686,12 +756,231 @@ describe('registerNotificationHandlers', () => {
     ).toEqual({ delivered: false, reason: 'not-supported' })
 
     expect(dispatchMobileNotification).toHaveBeenCalledWith({
+      type: 'notification',
       source: 'agent-task-complete',
       title: 'feat/notis - Hermes finished',
       body: 'The diff updates notification formatting.',
       worktreeId: 'repo::wt1'
     })
     expect(notificationCtorMock).not.toHaveBeenCalled()
+  })
+
+  it('does not dispatch mobile notifications when notifications are disabled', () => {
+    const dispatchMobileNotification = vi.fn()
+    registerNotificationHandlers(
+      {
+        getSettings: () => ({
+          notifications: {
+            enabled: false,
+            agentTaskComplete: true,
+            terminalBell: true,
+            suppressWhenFocused: false
+          }
+        })
+      } as never,
+      { dispatchMobileNotification } as never
+    )
+
+    const handler = getDispatchHandler()
+    expect(handler({}, { source: 'agent-task-complete', worktreeId: 'repo::wt1' })).toEqual({
+      delivered: false,
+      reason: 'disabled'
+    })
+
+    expect(dispatchMobileNotification).not.toHaveBeenCalled()
+  })
+
+  it('does not dispatch mobile notifications when the source is disabled', () => {
+    const dispatchMobileNotification = vi.fn()
+    registerNotificationHandlers(
+      {
+        getSettings: () => ({
+          notifications: {
+            enabled: true,
+            agentTaskComplete: false,
+            terminalBell: true,
+            suppressWhenFocused: false
+          }
+        })
+      } as never,
+      { dispatchMobileNotification } as never
+    )
+
+    const handler = getDispatchHandler()
+    expect(handler({}, { source: 'agent-task-complete', worktreeId: 'repo::wt1' })).toEqual({
+      delivered: false,
+      reason: 'source-disabled'
+    })
+
+    expect(dispatchMobileNotification).not.toHaveBeenCalled()
+  })
+
+  it('does not dispatch mobile notifications for focused active-worktree notifications', () => {
+    getAllWindowsMock.mockReturnValue([
+      {
+        isDestroyed: () => false,
+        isFocused: () => true
+      } as never
+    ])
+    const dispatchMobileNotification = vi.fn()
+    registerNotificationHandlers(
+      {
+        getSettings: () => ({
+          notifications: {
+            enabled: true,
+            agentTaskComplete: true,
+            terminalBell: true,
+            suppressWhenFocused: true
+          }
+        })
+      } as never,
+      { dispatchMobileNotification } as never
+    )
+
+    const handler = getDispatchHandler()
+    expect(
+      handler(
+        {},
+        { source: 'agent-task-complete', worktreeId: 'repo::wt1', isActiveWorktree: true }
+      )
+    ).toEqual({
+      delivered: false,
+      reason: 'suppressed-focus'
+    })
+
+    expect(dispatchMobileNotification).not.toHaveBeenCalled()
+  })
+
+  it('does not dispatch mobile notifications for cooldown-suppressed bursts', () => {
+    const dispatchMobileNotification = vi.fn()
+    registerNotificationHandlers(
+      {
+        getSettings: () => ({
+          notifications: {
+            enabled: true,
+            agentTaskComplete: true,
+            terminalBell: true,
+            suppressWhenFocused: false
+          }
+        })
+      } as never,
+      { dispatchMobileNotification } as never
+    )
+
+    const handler = getDispatchHandler()
+    expect(handler({}, { source: 'agent-task-complete', worktreeId: 'repo::wt1' })).toEqual({
+      delivered: true
+    })
+    expect(handler({}, { source: 'terminal-bell', worktreeId: 'repo::wt1' })).toEqual({
+      delivered: false,
+      reason: 'cooldown'
+    })
+
+    expect(dispatchMobileNotification).toHaveBeenCalledTimes(1)
+    expect(dispatchMobileNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'agent-task-complete', worktreeId: 'repo::wt1' })
+    )
+  })
+
+  it('does not forward explicit desktop test notifications to mobile clients', () => {
+    const dispatchMobileNotification = vi.fn()
+    registerNotificationHandlers(
+      {
+        getSettings: () => ({
+          notifications: {
+            enabled: true,
+            agentTaskComplete: true,
+            terminalBell: true,
+            suppressWhenFocused: false
+          }
+        })
+      } as never,
+      { dispatchMobileNotification } as never
+    )
+
+    const handler = getDispatchHandler()
+    expect(handler({}, { source: 'test' })).toEqual({ delivered: true })
+
+    expect(dispatchMobileNotification).not.toHaveBeenCalled()
+  })
+
+  it('dismisses active native notifications and fans out mobile dismissal once per id', () => {
+    const dispatchMobileNotification = vi.fn()
+    const dismissMobileNotification = vi.fn()
+    registerNotificationHandlers(
+      {
+        getSettings: () => ({
+          notifications: {
+            enabled: true,
+            agentTaskComplete: true,
+            terminalBell: true,
+            suppressWhenFocused: false
+          }
+        })
+      } as never,
+      { dispatchMobileNotification, dismissMobileNotification } as never
+    )
+
+    const dispatchHandler = getDispatchHandler()
+    expect(
+      dispatchHandler({}, { source: 'agent-task-complete', notificationId: 'agent:one' })
+    ).toEqual({ delivered: true })
+
+    const dismissHandler = getDismissHandler()
+    expect(dismissHandler({}, ['agent:one', 'agent:one', ''])).toEqual({ dismissed: 1 })
+
+    expect(notificationCloseMock).toHaveBeenCalledTimes(1)
+    expect(notificationRemoveListenerMock).toHaveBeenCalledWith('close', expect.any(Function))
+    expect(dismissMobileNotification).toHaveBeenCalledTimes(1)
+    expect(dismissMobileNotification).toHaveBeenCalledWith('agent:one')
+  })
+
+  it('fans out mobile dismissal even when there is no active native notification', () => {
+    const dismissMobileNotification = vi.fn()
+    registerNotificationHandlers(
+      {
+        getSettings: () => ({
+          notifications: {
+            enabled: true,
+            agentTaskComplete: true,
+            terminalBell: true,
+            suppressWhenFocused: false
+          }
+        })
+      } as never,
+      { dismissMobileNotification } as never
+    )
+
+    const dismissHandler = getDismissHandler()
+    expect(dismissHandler({}, ['agent:missing'])).toEqual({ dismissed: 0 })
+
+    expect(notificationCloseMock).not.toHaveBeenCalled()
+    expect(dismissMobileNotification).toHaveBeenCalledWith('agent:missing')
+  })
+
+  it('closes the previous native notification when replacing the same id', () => {
+    registerNotificationHandlers({
+      getSettings: () => ({
+        notifications: {
+          enabled: true,
+          agentTaskComplete: true,
+          terminalBell: true,
+          suppressWhenFocused: false
+        }
+      })
+    } as never)
+
+    const dispatchHandler = getDispatchHandler()
+    expect(
+      dispatchHandler({}, { source: 'agent-task-complete', notificationId: 'agent:replace' })
+    ).toEqual({ delivered: true })
+    vi.advanceTimersByTime(5001)
+    expect(
+      dispatchHandler({}, { source: 'agent-task-complete', notificationId: 'agent:replace' })
+    ).toEqual({ delivered: true })
+
+    expect(notificationCloseMock).toHaveBeenCalledTimes(1)
+    expect(notificationShowMock).toHaveBeenCalledTimes(2)
   })
 
   it('silences the native notification when a custom sound is configured', () => {
@@ -764,6 +1053,38 @@ describe('registerNotificationHandlers', () => {
     expect(notificationShowMock).toHaveBeenCalledTimes(2)
   })
 
+  it('bounds notification cooldown keys during unique worktree bursts', () => {
+    notificationIsSupportedMock.mockReturnValue(false)
+    registerNotificationHandlers({
+      getSettings: () => ({
+        notifications: {
+          enabled: true,
+          agentTaskComplete: true,
+          terminalBell: true,
+          suppressWhenFocused: false
+        }
+      })
+    } as never)
+
+    const handler = getDispatchHandler()
+    for (let i = 0; i < 75; i++) {
+      expect(handler({}, { source: 'terminal-bell', worktreeId: `repo::wt-${i}` })).toEqual({
+        delivered: false,
+        reason: 'not-supported'
+      })
+    }
+
+    expect(handler({}, { source: 'terminal-bell', worktreeId: 'repo::wt-0' })).toEqual({
+      delivered: false,
+      reason: 'not-supported'
+    })
+    expect(handler({}, { source: 'terminal-bell', worktreeId: 'repo::wt-74' })).toEqual({
+      delivered: false,
+      reason: 'cooldown'
+    })
+    expect(notificationCtorMock).not.toHaveBeenCalled()
+  })
+
   it('deduplicates agent-task-complete and terminal-bell for the same worktree', () => {
     registerNotificationHandlers({
       getSettings: () => ({
@@ -822,10 +1143,14 @@ describe('registerNotificationHandlers', () => {
     const handler = getDispatchHandler()
 
     const result = handler({}, { source: 'test', requireDisplayConfirmation: true })
-    getNotificationOnceEventHandler('show')()
+    const showHandler = getNotificationOnceEventHandler('show')
+    const failedHandler = getNotificationOnceEventHandler('failed')
+    showHandler()
 
     await expect(result).resolves.toEqual({ delivered: true })
     expect(notificationShowMock).toHaveBeenCalledTimes(1)
+    expect(notificationRemoveListenerMock).toHaveBeenCalledWith('show', showHandler)
+    expect(notificationRemoveListenerMock).toHaveBeenCalledWith('failed', failedHandler)
   })
 
   it('reports not-displayed when explicit test notifications never show', async () => {
@@ -843,10 +1168,14 @@ describe('registerNotificationHandlers', () => {
     const handler = getDispatchHandler()
 
     const result = handler({}, { source: 'test', requireDisplayConfirmation: true })
+    const showHandler = getNotificationOnceEventHandler('show')
+    const failedHandler = getNotificationOnceEventHandler('failed')
     await vi.advanceTimersByTimeAsync(2501)
 
     await expect(result).resolves.toEqual({ delivered: false, reason: 'not-displayed' })
     expect(notificationShowMock).toHaveBeenCalledTimes(1)
+    expect(notificationRemoveListenerMock).toHaveBeenCalledWith('show', showHandler)
+    expect(notificationRemoveListenerMock).toHaveBeenCalledWith('failed', failedHandler)
   })
 
   it('loads allowed custom sound files for preload playback', async () => {
@@ -934,11 +1263,22 @@ describe('registerNotificationHandlers', () => {
 describe('triggerStartupNotificationRegistration', () => {
   const originalPlatform = process.platform
 
+  function getStartupNotificationEventHandler(eventName: string): (...args: unknown[]) => void {
+    const call = notificationOnMock.mock.calls.find((c: unknown[]) => c[0] === eventName)
+    if (!call) {
+      throw new Error(`Startup notification ${eventName} handler not registered`)
+    }
+    return call[1] as (...args: unknown[]) => void
+  }
+
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.clearAllTimers()
     notificationCtorMock.mockClear()
     notificationShowMock.mockClear()
     notificationCloseMock.mockClear()
     notificationOnMock.mockClear()
+    notificationRemoveListenerMock.mockClear()
     notificationIsSupportedMock.mockReset()
     notificationIsSupportedMock.mockReturnValue(true)
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
@@ -985,5 +1325,48 @@ describe('triggerStartupNotificationRegistration', () => {
     triggerStartupNotificationRegistration(store as never)
 
     expect(notificationCtorMock).not.toHaveBeenCalled()
+  })
+
+  it('clears startup notification timers when the notification is clicked', () => {
+    const store = {
+      getUI: () => ({ notificationPermissionRequested: undefined }),
+      updateUI: vi.fn()
+    }
+
+    triggerStartupNotificationRegistration(store as never)
+    expect(vi.getTimerCount()).toBe(1)
+
+    getStartupNotificationEventHandler('click')()
+
+    expect(notificationCloseMock).toHaveBeenCalledTimes(1)
+    expect(shellOpenExternalMock).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(notificationRemoveListenerMock).toHaveBeenCalledWith('click', expect.any(Function))
+    expect(notificationRemoveListenerMock).toHaveBeenCalledWith('show', expect.any(Function))
+  })
+
+  it('cleans up startup notification registration when native delivery fails', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const store = {
+        getUI: () => ({ notificationPermissionRequested: undefined }),
+        updateUI: vi.fn()
+      }
+
+      triggerStartupNotificationRegistration(store as never)
+      expect(vi.getTimerCount()).toBe(1)
+
+      const failedHandler = getStartupNotificationEventHandler('failed')
+      failedHandler({}, 'Application is not code signed')
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('startup registration notification failed to show')
+      )
+      expect(notificationCloseMock).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(notificationRemoveListenerMock).toHaveBeenCalledWith('failed', failedHandler)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

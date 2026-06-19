@@ -25,17 +25,27 @@
   width: 100%;
 }
 
-.pane-manager-root .xterm.terminal-foreground-write-pending .xterm-cursor,
-.pane-manager-root .xterm.terminal-foreground-write-pending .xterm-cursor-layer {
-  /* Why: Windows PowerShell / ConPTY repaint bursts can briefly expose xterm's
-     intermediate cursor position; hide it only while foreground output settles. */
-  visibility: hidden;
-}
-
 .pane-manager-root .xterm-viewport {
   /* Why: xterm/VS Code keep the scrollbar gutter stable. `auto` lets Linux
      DOM scrollbars appear/disappear, which can feed resize/reflow jitter. */
   overflow-y: scroll;
+}
+
+/* xterm.css hard-codes the viewport background to #000 (for opaque macOS
+   scrollbars). On light-themed terminals at fractional-pixel positions (e.g.
+   the install terminals inside centered setup modals), that black layer
+   anti-aliases into a faint 1px line above/below the themed .xterm. Match
+   xterm's own selector so this also covers terminals mounted outside the pane
+   manager, and let the themed .xterm background show through; our scrollbar is
+   already custom-styled below. */
+.xterm:not(.allow-transparency) .xterm-viewport {
+  background-color: transparent;
+}
+
+/* Round the xterm DOM scrollbar thumb; xterm has no option for this, and its
+   default .xterm-slider has square corners. */
+.xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
+  border-radius: 4px;
 }
 
 /* xterm.css sets position:absolute;top:0 on .xterm-helpers but omits left,
@@ -155,6 +165,22 @@
   animation: pane-focus-rim-flash 1.5s ease-out forwards;
 }
 
+.pane[data-terminal-attention] .xterm-container {
+  box-shadow: none;
+}
+
+.pane[data-terminal-attention] .xterm-container::after {
+  content: '';
+  position: absolute;
+  inset: 0 4px 4px 0;
+  z-index: 5;
+  pointer-events: none;
+  border-radius: 2px;
+  box-shadow:
+    inset 0 0 0 1.5px color-mix(in srgb, var(--terminal-pane-locate) 64%, transparent),
+    inset 0 0 0 3px color-mix(in srgb, var(--terminal-pane-locate) 18%, transparent);
+}
+
 @keyframes pane-focus-rim-flash {
   0% {
     opacity: 1;
@@ -241,7 +267,7 @@
   align-items: center;
   padding: 0 8px;
   font-size: 13px;
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   color: var(--orca-pane-title-fg, rgb(255 255 255 / 0.52));
   background: var(--orca-pane-title-bg, #000);
   border-bottom: 1px solid var(--orca-pane-title-separator, rgb(255 255 255 / 0.06));
@@ -266,7 +292,7 @@
 }
 
 .pane-title-drag-handle::after {
-  content: '···';
+  content: '...';
   font-size: 10px;
   line-height: 1;
   letter-spacing: 0;
@@ -279,6 +305,22 @@
 
 .pane-title-drag-handle:active {
   cursor: grabbing;
+}
+
+.session-restored-banner {
+  position: absolute;
+  top: 0;
+  left: 8px;
+  z-index: 5;
+  height: var(--orca-pane-title-height);
+  display: flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--orca-pane-title-fg);
+  background: transparent;
+  user-select: none;
+  pointer-events: none;
 }
 
 .pane-title-text {
@@ -376,7 +418,11 @@
   margin-left: var(--pane-padding-x, 4px);
 }
 
+/* When a pane has a title, shift the terminal content down to make room.
+   The .pane container uses position: relative, so the absolutely-positioned
+   title bar occupies the top title-height pixels. Height is reduced by the
+   same amount to prevent overflow/clipping. */
 .pane[data-has-title] .xterm-container {
   margin-top: var(--orca-pane-title-height);
-  height: calc(100% - var(--orca-pane-title-height));
+  height: calc(100% - var(--orca-pane-title-height)); /* match margin-top */
 }

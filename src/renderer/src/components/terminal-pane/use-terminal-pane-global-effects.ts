@@ -7,10 +7,14 @@ import {
   type PasteTerminalTextDetail
 } from '@/constants/terminal'
 import type { PaneManager } from '@/lib/pane-manager/pane-manager'
+import { resetAllTerminalWebglAtlases } from '@/lib/pane-manager/pane-manager-registry'
 import { fitAndFocusPanes, fitPanes } from './pane-helpers'
 import type { PtyTransport } from './pty-transport'
 import { handleTerminalFileDrop } from './terminal-drop-handler'
-import { flushTerminalOutput } from '@/lib/pane-manager/pane-terminal-output-scheduler'
+import {
+  flushTerminalOutput,
+  requestTerminalBacklogRecovery
+} from '@/lib/pane-manager/pane-terminal-output-scheduler'
 import { handleFocusTerminalPaneDetail } from './focus-terminal-pane-event'
 import { surfaceStaleAgentRow } from './stale-agent-row'
 import { useAppStore } from '@/store'
@@ -18,6 +22,9 @@ import { restoreScrollStateAfterLayout } from '@/lib/pane-manager/pane-scroll'
 import { useTerminalScrollVisibilityMemory } from './use-terminal-scroll-visibility-memory'
 import { useTerminalContainerFitSync } from './use-terminal-container-fit-sync'
 import { pasteTerminalText } from './terminal-bracketed-paste'
+import { recordTerminalUserInputForLeaf } from './terminal-input-activity'
+
+const VISIBLE_RESUME_FLUSH_CHARS = 256 * 1024
 
 type UseTerminalPaneGlobalEffectsArgs = {
   tabId: string
@@ -25,6 +32,7 @@ type UseTerminalPaneGlobalEffectsArgs = {
   cwd?: string
   isActive: boolean
   isVisible: boolean
+  isSyncFitEnabled: boolean
   paneCount: number
   managerRef: React.RefObject<PaneManager | null>
   containerRef: React.RefObject<HTMLDivElement | null>
@@ -40,6 +48,7 @@ export function useTerminalPaneGlobalEffects({
   cwd,
   isActive,
   isVisible,
+  isSyncFitEnabled,
   paneCount,
   managerRef,
   containerRef,
@@ -68,7 +77,7 @@ export function useTerminalPaneGlobalEffects({
     visibleResumeCompleteRef: wasVisibleRef,
     paneCount
   })
-  useTerminalContainerFitSync({ isVisible, managerRef, containerRef })
+  useTerminalContainerFitSync({ isVisible, isSyncFitEnabled, managerRef, containerRef })
 
   useEffect(() => {
     const manager = managerRef.current
@@ -84,10 +93,13 @@ export function useTerminalPaneGlobalEffects({
       // not jump to the wrong history entry.
       const viewportPositions = captureViewportPositions(!wasVisibleRef.current)
       withSuppressedScrollTracking(() => {
-        // Why: background PTY output is throttled while a pane is not focused;
-        // flush it before fitting so newly visible terminals paint current state.
+        // Why: hidden panes can accumulate large PTY bursts while Chromium is
+        // occluded. Drain a bounded slice before fitting; the scheduler keeps
+        // ordering and continues the rest asynchronously so return-to-app does
+        // not beachball behind an entire backlog.
         for (const pane of manager.getPanes()) {
-          flushTerminalOutput(pane.terminal)
+          requestTerminalBacklogRecovery(pane.terminal)
+          flushTerminalOutput(pane.terminal, { maxChars: VISIBLE_RESUME_FLUSH_CHARS })
         }
         // Resume WebGL immediately so the terminal shows its last-known state
         // on the first painted frame. macOS context creation is ~5 ms; on
@@ -108,6 +120,9 @@ export function useTerminalPaneGlobalEffects({
             restoreScrollStateAfterLayout(pane.terminal, position)
           }
         }
+        // Why: this clear wipes the glyph atlas shared with other same-config
+        // terminals; the global reset rebuilds their render models too.
+        resetAllTerminalWebglAtlases()
       })
       wasVisibleRef.current = true
       applyPendingFollowOutputRequests()
@@ -124,6 +139,49 @@ export function useTerminalPaneGlobalEffects({
     wasVisibleRef.current = false
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, isVisible])
+
+  useEffect(() => {
+    if (!isVisible) {
+      return
+    }
+    const recoverWebglAtlases = (): void => {
+      // Why: WebGL atlas corruption does not always raise context loss; window
+      // foregrounding is a low-cost recovery point. Visible terminals can be
+      // inactive in split groups, and same-config terminals share the atlas.
+      resetAllTerminalWebglAtlases()
+    }
+    const onFocus = (): void => recoverWebglAtlases()
+    const onVisibilityChange = (): void => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        recoverWebglAtlases()
+      }
+    }
+    window.addEventListener('focus', onFocus)
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', onVisibilityChange)
+    }
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+        document.removeEventListener('visibilitychange', onVisibilityChange)
+      }
+    }
+  }, [isVisible])
+
+  useEffect(() => {
+    const manager = managerRef.current
+    const activePane = isActive && isVisible ? manager?.getActivePane() : null
+    const ptyId = activePane
+      ? (paneTransportsRef.current.get(activePane.id)?.getPtyId() ?? null)
+      : null
+    if (!ptyId || ptyId.startsWith('remote:')) {
+      return
+    }
+    // Why: main uses this as a scheduler hint only, so the foreground pane's
+    // renderer output gets first chance at the bounded ACK reserve.
+    window.api.pty.setActiveRendererPty?.(ptyId, true)
+    return () => window.api.pty.setActiveRendererPty?.(ptyId, false)
+  }, [isActive, isVisible, managerRef, paneTransportsRef])
 
   useEffect(() => {
     const onToggleExpand = (event: Event): void => {
@@ -180,6 +238,7 @@ export function useTerminalPaneGlobalEffects({
         return
       }
       pasteTerminalText(pane.terminal, detail.text)
+      recordTerminalUserInputForLeaf(tabId, pane.leafId)
       pane.terminal.focus()
     }
     window.addEventListener(PASTE_TERMINAL_TEXT_EVENT, onPasteText)
@@ -219,8 +278,8 @@ export function useTerminalPaneGlobalEffects({
       if (!transport) {
         return
       }
-      if (text) {
-        transport.sendInput(text)
+      if (text && transport.sendInput(text)) {
+        recordTerminalUserInputForLeaf(tabId, pane.leafId)
       }
     }
     document.addEventListener('dictation:insertText', onDictationInsert)
@@ -257,6 +316,7 @@ export function useTerminalPaneGlobalEffects({
         manager,
         paneTransports: paneTransportsRef.current,
         worktreeId: wtId,
+        tabId,
         cwd: cwdRef.current,
         data
       })

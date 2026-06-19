@@ -3,6 +3,7 @@
 export const MIN_SSH_RELAY_GRACE_PERIOD_SECONDS = 60
 export const MAX_SSH_RELAY_GRACE_PERIOD_SECONDS = 7 * 24 * 60 * 60
 export const DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS = 3 * 60 * 60
+export const SSH_RELAY_CONFIGURE_GRACE_TIME_METHOD = 'relay.configureGraceTime'
 
 export type SshTarget = {
   id: string
@@ -22,6 +23,13 @@ export type SshTarget = {
   proxyCommand?: string
   /** Jump host (ProxyJump), if any. */
   jumpHost?: string
+  /** Where this target came from. `ssh-config` targets are kept in sync with
+   *  `~/.ssh/config` on import — their config-derived fields (host, port,
+   *  username, jump host, identity, proxy) are refreshed on each import.
+   *  `manual` targets are never overwritten by import. Legacy persisted targets
+   *  predate this field (undefined) and are adopted into config-sync on next
+   *  import. */
+  source?: 'ssh-config' | 'manual'
   /** Grace period in seconds before relay shuts down after disconnect.
    *  0 disables expiry. Default: 10800 (3 hours). Max: 604800 (7 days). */
   relayGracePeriodSeconds?: number
@@ -93,7 +101,7 @@ export type PortForwardEntry = {
   advertisedProtocol?: 'http' | 'https'
 }
 
-/** A listening port detected on the remote host via /proc/net/tcp scanning.
+/** A listening port detected on the remote host by the relay.
  *  Keep in sync with src/relay/port-scan-handler.ts — DetectedPort.
  *  The relay is deployed as a standalone bundle and cannot import from shared. */
 export type DetectedPort = {

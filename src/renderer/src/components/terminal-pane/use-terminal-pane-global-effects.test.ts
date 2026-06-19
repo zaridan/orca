@@ -1,5 +1,11 @@
+/* eslint-disable max-lines -- Why: these hook tests share a mocked React lifecycle harness with global event cases. */
 import type * as ReactModule from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PASTE_TERMINAL_TEXT_EVENT, SYNC_FIT_PANES_EVENT } from '@/constants/terminal'
+import {
+  registerLivePaneManager,
+  unregisterLivePaneManager
+} from '@/lib/pane-manager/pane-manager-registry'
 import { useTerminalPaneGlobalEffects } from './use-terminal-pane-global-effects'
 
 const mocks = vi.hoisted(() => ({
@@ -9,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   flushTerminalOutput: vi.fn(),
   getTerminalOutputEpoch: vi.fn(() => 0),
   handleTerminalFileDrop: vi.fn(),
+  pasteTerminalText: vi.fn(),
+  recordTerminalUserInputForLeaf: vi.fn(),
+  requestTerminalBacklogRecovery: vi.fn(),
   restoreScrollState: vi.fn(),
   restoreScrollStateAfterLayout: vi.fn()
 }))
@@ -52,7 +61,8 @@ vi.mock('./pane-helpers', () => ({
 }))
 
 vi.mock('@/lib/pane-manager/pane-terminal-output-scheduler', () => ({
-  flushTerminalOutput: mocks.flushTerminalOutput
+  flushTerminalOutput: mocks.flushTerminalOutput,
+  requestTerminalBacklogRecovery: mocks.requestTerminalBacklogRecovery
 }))
 
 vi.mock('@/lib/pane-manager/pane-scroll', () => ({
@@ -64,6 +74,14 @@ vi.mock('@/lib/pane-manager/pane-scroll', () => ({
 
 vi.mock('./terminal-drop-handler', () => ({
   handleTerminalFileDrop: mocks.handleTerminalFileDrop
+}))
+
+vi.mock('./terminal-bracketed-paste', () => ({
+  pasteTerminalText: mocks.pasteTerminalText
+}))
+
+vi.mock('./terminal-input-activity', () => ({
+  recordTerminalUserInputForLeaf: mocks.recordTerminalUserInputForLeaf
 }))
 
 class MockResizeObserver {
@@ -80,6 +98,7 @@ function useMountForFileDrop(
     cwd?: string
     isActive?: boolean
     isVisible?: boolean
+    isSyncFitEnabled?: boolean
     paneCount?: number
   } = {}
 ): {
@@ -87,6 +106,7 @@ function useMountForFileDrop(
   manager: {
     getPanes: ReturnType<typeof vi.fn>
     resumeRendering: ReturnType<typeof vi.fn>
+    resetWebglTextureAtlases: ReturnType<typeof vi.fn>
     suspendRendering: ReturnType<typeof vi.fn>
     getActivePane: ReturnType<typeof vi.fn>
   }
@@ -102,6 +122,7 @@ function useMountForFileDrop(
   const manager = {
     getPanes: vi.fn(() => []),
     resumeRendering: vi.fn(),
+    resetWebglTextureAtlases: vi.fn(),
     suspendRendering: vi.fn(),
     getActivePane: vi.fn(() => null)
   }
@@ -114,6 +135,7 @@ function useMountForFileDrop(
     cwd: options.cwd,
     isActive: options.isActive ?? true,
     isVisible: options.isVisible ?? true,
+    isSyncFitEnabled: options.isSyncFitEnabled ?? options.isVisible ?? true,
     paneCount: options.paneCount ?? 0,
     managerRef: { current: manager as never },
     containerRef: { current: null },
@@ -127,6 +149,16 @@ function useMountForFileDrop(
 }
 
 describe('useTerminalPaneGlobalEffects', () => {
+  // Why: the live-manager registry is module-global; unregister in afterEach
+  // so a failed assertion cannot leak fake managers into later tests.
+  const registeredManagers: { resetWebglTextureAtlases(): void }[] = []
+
+  function registerManagerForReset<T extends { resetWebglTextureAtlases(): void }>(manager: T): T {
+    registerLivePaneManager(manager)
+    registeredManagers.push(manager)
+    return manager
+  }
+
   beforeEach(() => {
     resetHookRefs()
     vi.clearAllMocks()
@@ -136,6 +168,9 @@ describe('useTerminalPaneGlobalEffects', () => {
       api: {
         ui: {
           onFileDrop: vi.fn(() => vi.fn())
+        },
+        pty: {
+          setActiveRendererPty: vi.fn()
         }
       }
     }
@@ -143,6 +178,10 @@ describe('useTerminalPaneGlobalEffects', () => {
   })
 
   afterEach(() => {
+    for (const manager of registeredManagers.splice(0)) {
+      unregisterLivePaneManager(manager)
+    }
+    vi.unstubAllGlobals()
     delete (globalThis as unknown as { window?: unknown }).window
     delete (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver
   })
@@ -157,6 +196,7 @@ describe('useTerminalPaneGlobalEffects', () => {
         { id: 2, terminal: terminalB }
       ]),
       resumeRendering: vi.fn(() => order.push('resume')),
+      resetWebglTextureAtlases: vi.fn(() => order.push('reset-atlas')),
       suspendRendering: vi.fn(),
       fitAllPanes: vi.fn(),
       getActivePane: vi.fn(() => null),
@@ -164,6 +204,9 @@ describe('useTerminalPaneGlobalEffects', () => {
     }
     mocks.flushTerminalOutput.mockImplementation((terminal: { name: string }) => {
       order.push(`flush:${terminal.name}`)
+    })
+    mocks.requestTerminalBacklogRecovery.mockImplementation((terminal: { name: string }) => {
+      order.push(`recover:${terminal.name}`)
     })
     mocks.captureScrollState.mockImplementation((terminal: { name: string }) => {
       order.push(`capture:${terminal.name}`)
@@ -174,6 +217,10 @@ describe('useTerminalPaneGlobalEffects', () => {
     })
     mocks.fitAndFocusPanes.mockImplementation(() => order.push('fit-focus'))
 
+    // Why: the resume path resets atlases through the live-manager registry
+    // (shared glyph atlas), so the fake manager must be registered to observe
+    // its reset in the ordering assertion.
+    registerManagerForReset(manager)
     const isActiveRef = { current: false }
     const isVisibleRef = { current: false }
     beginHookRender()
@@ -182,6 +229,7 @@ describe('useTerminalPaneGlobalEffects', () => {
       worktreeId: 'wt-1',
       isActive: true,
       isVisible: true,
+      isSyncFitEnabled: true,
       paneCount: 2,
       managerRef: { current: manager as never },
       containerRef: { current: null },
@@ -194,16 +242,55 @@ describe('useTerminalPaneGlobalEffects', () => {
     expect(order).toEqual([
       'capture:terminal-a',
       'capture:terminal-b',
+      'recover:terminal-a',
       'flush:terminal-a',
+      'recover:terminal-b',
       'flush:terminal-b',
       'resume',
       'fit-focus',
       'restore:terminal-a',
-      'restore:terminal-b'
+      'restore:terminal-b',
+      'reset-atlas'
     ])
+    expect(mocks.flushTerminalOutput).toHaveBeenNthCalledWith(1, terminalA, {
+      maxChars: 256 * 1024
+    })
+    expect(mocks.flushTerminalOutput).toHaveBeenNthCalledWith(2, terminalB, {
+      maxChars: 256 * 1024
+    })
     expect(mocks.fitPanes).not.toHaveBeenCalled()
     expect(isActiveRef.current).toBe(true)
     expect(isVisibleRef.current).toBe(true)
+  })
+
+  it('reports the active local PTY to the main output scheduler', () => {
+    const manager = {
+      getPanes: vi.fn(() => [{ id: 1, terminal: { name: 'terminal-a' } }]),
+      resumeRendering: vi.fn(),
+      resetWebglTextureAtlases: vi.fn(),
+      suspendRendering: vi.fn(),
+      getActivePane: vi.fn(() => ({ id: 1, terminal: { name: 'terminal-a' } }))
+    }
+    const transport = { getPtyId: vi.fn(() => 'pty-active') }
+    const paneTransports = new Map([[1, transport]])
+
+    beginHookRender()
+    useTerminalPaneGlobalEffects({
+      tabId: 'tab-1',
+      worktreeId: 'wt-1',
+      isActive: true,
+      isVisible: true,
+      isSyncFitEnabled: true,
+      paneCount: 1,
+      managerRef: { current: manager as never },
+      containerRef: { current: null },
+      paneTransportsRef: { current: paneTransports as never },
+      isActiveRef: { current: false },
+      isVisibleRef: { current: false },
+      toggleExpandPane: vi.fn()
+    })
+
+    expect(window.api.pty.setActiveRendererPty).toHaveBeenCalledWith('pty-active', true)
   })
 
   it('restores from the pre-hide scroll state when hidden layout changes the viewport', () => {
@@ -211,6 +298,7 @@ describe('useTerminalPaneGlobalEffects', () => {
     const manager = {
       getPanes: vi.fn(() => [{ id: 1, terminal: terminalA }]),
       resumeRendering: vi.fn(),
+      resetWebglTextureAtlases: vi.fn(),
       suspendRendering: vi.fn(),
       fitAllPanes: vi.fn(),
       getActivePane: vi.fn(() => null),
@@ -231,6 +319,7 @@ describe('useTerminalPaneGlobalEffects', () => {
       isActiveRef: { current: false },
       isVisibleRef: { current: false },
       paneCount: 1,
+      isSyncFitEnabled: true,
       toggleExpandPane: vi.fn()
     }
 
@@ -262,6 +351,202 @@ describe('useTerminalPaneGlobalEffects', () => {
     expect(mocks.restoreScrollStateAfterLayout).toHaveBeenLastCalledWith(terminalA, preHideState)
   })
 
+  it('clears WebGL texture atlases when the active visible terminal regains focus', () => {
+    const manager = {
+      getPanes: vi.fn(() => []),
+      resumeRendering: vi.fn(),
+      resetWebglTextureAtlases: vi.fn(),
+      suspendRendering: vi.fn(),
+      getActivePane: vi.fn(() => null)
+    }
+
+    // Why: focus recovery resets every registered manager (shared glyph
+    // atlas), so the fake manager observes the reset through the registry.
+    registerManagerForReset(manager)
+    beginHookRender()
+    useTerminalPaneGlobalEffects({
+      tabId: 'tab-1',
+      worktreeId: 'wt-1',
+      isActive: true,
+      isVisible: true,
+      isSyncFitEnabled: true,
+      paneCount: 0,
+      managerRef: { current: manager as never },
+      containerRef: { current: null },
+      paneTransportsRef: { current: new Map() },
+      isActiveRef: { current: false },
+      isVisibleRef: { current: false },
+      toggleExpandPane: vi.fn()
+    })
+
+    const focusListener = vi
+      .mocked(window.addEventListener)
+      .mock.calls.find(([eventName]) => eventName === 'focus')
+
+    expect(focusListener).toBeDefined()
+    const listener = focusListener?.[1]
+    if (typeof listener !== 'function') {
+      throw new Error('expected focus listener')
+    }
+    manager.resetWebglTextureAtlases.mockClear()
+    listener(new Event('focus'))
+
+    expect(manager.resetWebglTextureAtlases).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears WebGL texture atlases when the active visible terminal document becomes visible', () => {
+    let visibilityState: DocumentVisibilityState = 'hidden'
+    const documentListeners = new Map<string, EventListenerOrEventListenerObject>()
+    vi.stubGlobal('document', {
+      get visibilityState() {
+        return visibilityState
+      },
+      addEventListener: vi.fn((eventName: string, listener: EventListenerOrEventListenerObject) => {
+        documentListeners.set(eventName, listener)
+      }),
+      removeEventListener: vi.fn()
+    })
+    const manager = {
+      getPanes: vi.fn(() => []),
+      resumeRendering: vi.fn(),
+      resetWebglTextureAtlases: vi.fn(),
+      suspendRendering: vi.fn(),
+      getActivePane: vi.fn(() => null)
+    }
+    const siblingManager = {
+      resetWebglTextureAtlases: vi.fn()
+    }
+
+    registerManagerForReset(manager)
+    registerManagerForReset(siblingManager)
+    beginHookRender()
+    useTerminalPaneGlobalEffects({
+      tabId: 'tab-1',
+      worktreeId: 'wt-1',
+      isActive: true,
+      isVisible: true,
+      isSyncFitEnabled: true,
+      paneCount: 0,
+      managerRef: { current: manager as never },
+      containerRef: { current: null },
+      paneTransportsRef: { current: new Map() },
+      isActiveRef: { current: false },
+      isVisibleRef: { current: false },
+      toggleExpandPane: vi.fn()
+    })
+
+    const listener = documentListeners.get('visibilitychange')
+    expect(listener).toBeDefined()
+    if (typeof listener !== 'function') {
+      throw new Error('expected visibilitychange listener')
+    }
+    manager.resetWebglTextureAtlases.mockClear()
+    siblingManager.resetWebglTextureAtlases.mockClear()
+    listener(new Event('visibilitychange'))
+    expect(manager.resetWebglTextureAtlases).not.toHaveBeenCalled()
+    expect(siblingManager.resetWebglTextureAtlases).not.toHaveBeenCalled()
+
+    visibilityState = 'visible'
+    listener(new Event('visibilitychange'))
+
+    expect(manager.resetWebglTextureAtlases).toHaveBeenCalledTimes(1)
+    expect(siblingManager.resetWebglTextureAtlases).toHaveBeenCalledTimes(1)
+  })
+
+  it('registers document visibility recovery for visible inactive terminals but not hidden ones', () => {
+    const addEventListener = vi.fn()
+    vi.stubGlobal('document', {
+      visibilityState: 'visible',
+      addEventListener,
+      removeEventListener: vi.fn()
+    })
+    const manager = {
+      getPanes: vi.fn(() => []),
+      resumeRendering: vi.fn(),
+      resetWebglTextureAtlases: vi.fn(),
+      suspendRendering: vi.fn(),
+      getActivePane: vi.fn(() => null)
+    }
+    const useMountForVisibilityRecovery = (options: {
+      isActive: boolean
+      isVisible: boolean
+    }): void => {
+      resetHookRefs()
+      beginHookRender()
+      useTerminalPaneGlobalEffects({
+        tabId: 'tab-1',
+        worktreeId: 'wt-1',
+        isActive: options.isActive,
+        isVisible: options.isVisible,
+        isSyncFitEnabled: options.isVisible,
+        paneCount: 0,
+        managerRef: { current: manager as never },
+        containerRef: { current: null },
+        paneTransportsRef: { current: new Map() },
+        isActiveRef: { current: false },
+        isVisibleRef: { current: false },
+        toggleExpandPane: vi.fn()
+      })
+    }
+
+    useMountForVisibilityRecovery({ isActive: false, isVisible: true })
+    expect(
+      addEventListener.mock.calls.some(([eventName]) => eventName === 'visibilitychange')
+    ).toBe(true)
+
+    addEventListener.mockClear()
+    useMountForVisibilityRecovery({ isActive: true, isVisible: false })
+
+    expect(
+      addEventListener.mock.calls.some(([eventName]) => eventName === 'visibilitychange')
+    ).toBe(false)
+  })
+
+  it('records terminal input for targeted paste events', () => {
+    const terminal = { name: 'terminal-a', focus: vi.fn() }
+    const pane = { id: 1, leafId: 'leaf-1', terminal }
+    const manager = {
+      getPanes: vi.fn(() => [pane]),
+      resumeRendering: vi.fn(),
+      resetWebglTextureAtlases: vi.fn(),
+      suspendRendering: vi.fn(),
+      getActivePane: vi.fn(() => pane)
+    }
+
+    beginHookRender()
+    useTerminalPaneGlobalEffects({
+      tabId: 'tab-1',
+      worktreeId: 'wt-1',
+      isActive: true,
+      isVisible: true,
+      isSyncFitEnabled: true,
+      paneCount: 1,
+      managerRef: { current: manager as never },
+      containerRef: { current: null },
+      paneTransportsRef: { current: new Map() },
+      isActiveRef: { current: false },
+      isVisibleRef: { current: false },
+      toggleExpandPane: vi.fn()
+    })
+
+    const pasteListener = vi
+      .mocked(window.addEventListener)
+      .mock.calls.find(([eventName]) => eventName === PASTE_TERMINAL_TEXT_EVENT)
+
+    expect(pasteListener).toBeDefined()
+    const listener = pasteListener?.[1]
+    if (typeof listener !== 'function') {
+      throw new Error('expected paste listener')
+    }
+    listener(
+      new CustomEvent(PASTE_TERMINAL_TEXT_EVENT, { detail: { tabId: 'tab-1', text: 'git status' } })
+    )
+
+    expect(mocks.pasteTerminalText).toHaveBeenCalledWith(terminal, 'git status')
+    expect(mocks.recordTerminalUserInputForLeaf).toHaveBeenCalledWith('tab-1', 'leaf-1')
+    expect(terminal.focus).toHaveBeenCalledOnce()
+  })
+
   it('ignores terminal file drops for another terminal tab', () => {
     const { onFileDrop } = useMountForFileDrop()
 
@@ -282,6 +567,7 @@ describe('useTerminalPaneGlobalEffects', () => {
       manager,
       paneTransports,
       worktreeId: 'wt-1',
+      tabId: 'tab-1',
       cwd: '/worktree',
       data
     })
@@ -297,6 +583,7 @@ describe('useTerminalPaneGlobalEffects', () => {
       manager,
       paneTransports,
       worktreeId: 'wt-1',
+      tabId: 'tab-1',
       cwd: undefined,
       data
     })
@@ -316,5 +603,77 @@ describe('useTerminalPaneGlobalEffects', () => {
     onFileDrop({ paths: ['/tmp/image.png'], target: 'terminal' })
 
     expect(mocks.handleTerminalFileDrop).not.toHaveBeenCalled()
+  })
+
+  it('skips global sync-fit registration for hidden non-measurable terminal panes', () => {
+    const manager = {
+      getPanes: vi.fn(() => []),
+      resumeRendering: vi.fn(),
+      resetWebglTextureAtlases: vi.fn(),
+      suspendRendering: vi.fn(),
+      fitAllPanes: vi.fn(),
+      getActivePane: vi.fn(() => null)
+    }
+
+    beginHookRender()
+    useTerminalPaneGlobalEffects({
+      tabId: 'tab-1',
+      worktreeId: 'wt-1',
+      isActive: false,
+      isVisible: false,
+      isSyncFitEnabled: false,
+      paneCount: 0,
+      managerRef: { current: manager as never },
+      containerRef: { current: null },
+      paneTransportsRef: { current: new Map() },
+      isActiveRef: { current: false },
+      isVisibleRef: { current: false },
+      toggleExpandPane: vi.fn()
+    })
+
+    const syncFitListener = vi
+      .mocked(window.addEventListener)
+      .mock.calls.find(([eventName]) => eventName === SYNC_FIT_PANES_EVENT)
+
+    expect(syncFitListener).toBeUndefined()
+  })
+
+  it('registers global sync-fit for measurable hidden startup panes', () => {
+    const manager = {
+      getPanes: vi.fn(() => []),
+      resumeRendering: vi.fn(),
+      resetWebglTextureAtlases: vi.fn(),
+      suspendRendering: vi.fn(),
+      fitAllPanes: vi.fn(),
+      getActivePane: vi.fn(() => null)
+    }
+
+    beginHookRender()
+    useTerminalPaneGlobalEffects({
+      tabId: 'tab-1',
+      worktreeId: 'wt-1',
+      isActive: false,
+      isVisible: false,
+      isSyncFitEnabled: true,
+      paneCount: 0,
+      managerRef: { current: manager as never },
+      containerRef: { current: null },
+      paneTransportsRef: { current: new Map() },
+      isActiveRef: { current: false },
+      isVisibleRef: { current: false },
+      toggleExpandPane: vi.fn()
+    })
+
+    const syncFitListener = vi
+      .mocked(window.addEventListener)
+      .mock.calls.find(([eventName]) => eventName === SYNC_FIT_PANES_EVENT)
+
+    expect(syncFitListener).toBeDefined()
+    const listener = syncFitListener?.[1]
+    if (typeof listener !== 'function') {
+      throw new Error('expected sync-fit listener')
+    }
+    listener(new Event(SYNC_FIT_PANES_EVENT))
+    expect(manager.fitAllPanes).toHaveBeenCalledTimes(1)
   })
 })

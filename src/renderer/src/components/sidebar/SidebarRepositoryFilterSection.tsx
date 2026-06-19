@@ -13,6 +13,7 @@ import {
 import RepoBadgeLabel from '@/components/repo/RepoBadgeLabel'
 import { searchRepos } from '@/lib/repo-search'
 import type { Repo } from '../../../../shared/types'
+import { translate } from '@/i18n/i18n'
 
 function projectCommandFilter(_value: string, search: string, keywords?: string[]): number {
   const query = search.trim().toLowerCase()
@@ -79,7 +80,7 @@ const SidebarRepositoryFilterSection = React.memo(function SidebarRepositoryFilt
     [filterRepoIds, setFilterRepoIds]
   )
 
-  const handleRemoveRepo = useCallback(
+  const handleRemoveProject = useCallback(
     (repoId: string) => {
       setFilterRepoIds(filterRepoIds.filter((id) => id !== repoId))
     },
@@ -97,7 +98,7 @@ const SidebarRepositoryFilterSection = React.memo(function SidebarRepositoryFilt
         if (lastRepo) {
           event.preventDefault()
           event.stopPropagation()
-          handleRemoveRepo(lastRepo.id)
+          handleRemoveProject(lastRepo.id)
         }
         return
       }
@@ -119,7 +120,7 @@ const SidebarRepositoryFilterSection = React.memo(function SidebarRepositoryFilt
     },
     [
       availableRepos,
-      handleRemoveRepo,
+      handleRemoveProject,
       handleSelectRepo,
       highlightedRepoId,
       matchingAvailableRepos,
@@ -145,10 +146,20 @@ const SidebarRepositoryFilterSection = React.memo(function SidebarRepositoryFilt
         onValueChange={setHighlightedRepoId}
         className="bg-transparent"
       >
-        <SelectedProjectPills selectedRepos={selectedRepos} onRemoveRepo={handleRemoveRepo} />
+        <SelectedProjectPills selectedRepos={selectedRepos} onRemoveProject={handleRemoveProject} />
         <CommandInput
           autoFocus
-          placeholder={selectedRepos.length > 0 ? 'Add project...' : 'Filter projects...'}
+          placeholder={
+            selectedRepos.length > 0
+              ? translate(
+                  'auto.components.sidebar.SidebarRepositoryFilterSection.5a273fbfce',
+                  'Add project...'
+                )
+              : translate(
+                  'auto.components.sidebar.SidebarRepositoryFilterSection.83a820fa71',
+                  'Filter projects...'
+                )
+          }
           value={query}
           onValueChange={setQuery}
           onKeyDown={handleInputKeyDown}
@@ -158,7 +169,15 @@ const SidebarRepositoryFilterSection = React.memo(function SidebarRepositoryFilt
         />
         <CommandList className="max-h-40 py-1">
           <CommandEmpty className="py-4 text-[11px]">
-            {hasRepoFilter ? 'No unselected projects match' : 'No projects match'}
+            {hasRepoFilter
+              ? translate(
+                  'auto.components.sidebar.SidebarRepositoryFilterSection.bbbc6e8e3b',
+                  'No unselected projects match'
+                )
+              : translate(
+                  'auto.components.sidebar.SidebarRepositoryFilterSection.4815c70605',
+                  'No projects match'
+                )}
           </CommandEmpty>
           {availableRepos.map((repo) => (
             <CommandItem
@@ -177,7 +196,10 @@ const SidebarRepositoryFilterSection = React.memo(function SidebarRepositoryFilt
                 {repo.connectionId && (
                   <span className="shrink-0 inline-flex items-center gap-0.5 rounded bg-muted px-1 py-0.5 text-[9px] font-medium leading-none text-muted-foreground">
                     <Server className="size-2.5" />
-                    SSH
+                    {translate(
+                      'auto.components.sidebar.SidebarRepositoryFilterSection.2656053db4',
+                      'SSH'
+                    )}
                   </span>
                 )}
               </span>
@@ -191,10 +213,10 @@ const SidebarRepositoryFilterSection = React.memo(function SidebarRepositoryFilt
 
 function SelectedProjectPills({
   selectedRepos,
-  onRemoveRepo
+  onRemoveProject
 }: {
   selectedRepos: Repo[]
-  onRemoveRepo: (repoId: string) => void
+  onRemoveProject: (repoId: string) => void
 }) {
   if (selectedRepos.length === 0) {
     return null
@@ -218,10 +240,14 @@ function SelectedProjectPills({
             type="button"
             variant="ghost"
             size="icon-xs"
-            aria-label={`Remove ${repo.displayName} filter`}
+            aria-label={translate(
+              'auto.components.sidebar.SidebarRepositoryFilterSection.f10ca29601',
+              'Remove {{value0}} filter',
+              { value0: repo.displayName }
+            )}
             className="-mr-1 size-4 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => onRemoveRepo(repo.id)}
+            onClick={() => onRemoveProject(repo.id)}
           >
             <X className="size-2.5" strokeWidth={2.5} />
           </Button>
@@ -243,7 +269,7 @@ function ProjectFilterHeader({
   return (
     <div className="flex items-center justify-between px-2 py-1">
       <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
-        Projects
+        {translate('auto.components.sidebar.SidebarRepositoryFilterSection.7679f0c268', 'Projects')}
         {hasRepoFilter && (
           <Badge
             variant="outline"
@@ -259,7 +285,7 @@ function ProjectFilterHeader({
         className="rounded-full px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-40 disabled:hover:bg-transparent"
         disabled={!hasRepoFilter}
       >
-        Clear
+        {translate('auto.components.sidebar.SidebarRepositoryFilterSection.d3a9c4cea1', 'Clear')}
       </button>
     </div>
   )
