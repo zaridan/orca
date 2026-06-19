@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { toast } from 'sonner'
 import type { VoiceSettings } from '../../../../shared/speech-types'
 import type { SpeechModelManifest, SpeechModelState } from '../../../../shared/speech-types'
@@ -29,6 +30,7 @@ export function VoiceSpeechModelSection({
   onOpenOpenAiDialog,
   onRefreshModelStates
 }: VoiceSpeechModelSectionProps): React.JSX.Element {
+  const [pendingDeleteModelId, setPendingDeleteModelId] = useState<string | null>(null)
   const getModelState = (id: string): SpeechModelState | undefined =>
     modelStates.find((s) => s.id === id)
 
@@ -73,6 +75,7 @@ export function VoiceSpeechModelSection({
               mState?.status === 'downloading' || mState?.status === 'extracting'
             const isActive = voiceSettings.sttModel === manifest.id
             const isCloud = manifest.provider === 'openai'
+            const deletePending = pendingDeleteModelId === manifest.id
             const sizeMb = manifest.sizeBytes ? Math.round(manifest.sizeBytes / 1_000_000) : null
 
             return (
@@ -146,10 +149,28 @@ export function VoiceSpeechModelSection({
                     {manifest.description}
                   </p>
                 </div>
-                {!isCloud && isReady && !isActive ? (
+                {!isCloud && isReady ? (
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation()
+                    type="button"
+                    aria-label={translate(
+                      'auto.components.settings.VoicePane.6fa734ed95',
+                      'Delete {{value0}}',
+                      {
+                        value0: manifest.label
+                      }
+                    )}
+                    disabled={deletePending}
+                    onMouseDown={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                    }}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      if (deletePending) {
+                        return
+                      }
+                      setPendingDeleteModelId(manifest.id)
                       void window.api.speech
                         .deleteModel(manifest.id)
                         .then(onRefreshModelStates)
@@ -161,10 +182,15 @@ export function VoiceSpeechModelSection({
                             )
                           )
                         )
+                        .finally(() => setPendingDeleteModelId(null))
                     }}
-                    className="shrink-0 p-1 text-muted-foreground can-hover:opacity-0 group-hover:opacity-100 hover:text-destructive transition-all rounded"
+                    className="shrink-0 p-1 text-muted-foreground can-hover:opacity-0 group-hover:opacity-100 hover:text-destructive disabled:opacity-60 disabled:hover:text-muted-foreground transition-all rounded"
                   >
-                    <Trash2 className="size-3" />
+                    {deletePending ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="size-3" />
+                    )}
                   </button>
                 ) : !isCloud && !isReady && !isDownloading ? (
                   <span className="shrink-0 p-1 text-muted-foreground can-hover:opacity-0 group-hover:opacity-100 transition-opacity">

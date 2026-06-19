@@ -6274,6 +6274,7 @@
           "c2c64b24d0": "Reset"
         },
         "VoicePane": {
+          "6fa734ed95": "Delete {{value0}}",
           "68de13f72c": "Failed to delete model.",
           "1ba81c0ff0": "recommended",
           "cfde55c7b0": "Failed to download model.",

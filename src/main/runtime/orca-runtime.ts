@@ -625,6 +625,10 @@ import type { RateLimitState } from '../../shared/rate-limit-types'
 import type { VoiceSettings } from '../../shared/speech-types'
 import { getSpeechModelManager, getSpeechSttService } from '../speech/speech-runtime-service'
 import { getCatalogModel, isLocalSpeechModel, SPEECH_MODEL_CATALOG } from '../speech/model-catalog'
+import {
+  deleteLocalSpeechModel,
+  getSpeechModelDeletionErrorCode
+} from '../speech/speech-model-deletion'
 import type { CommitMessageAgentEnvironmentResolvers } from '../text-generation/commit-message-agent-environment'
 import { scanNestedRepos } from '../project-groups/nested-repo-discovery'
 import {
@@ -2980,7 +2984,9 @@ export class OrcaRuntimeService {
       .map((group) => {
         const tabOrder = retainedOrder.get(group.id) ?? []
         const keptActive =
-          group.activeTabId && tabOrder.includes(group.activeTabId) && liveTabIds.has(group.activeTabId)
+          group.activeTabId &&
+          tabOrder.includes(group.activeTabId) &&
+          liveTabIds.has(group.activeTabId)
             ? group.activeTabId
             : null
         return {
@@ -3370,8 +3376,7 @@ export class OrcaRuntimeService {
       groupIdByTabId.set(newTabAssignment!.tabId, newTabAssignment!.groupId)
     }
     const activeGroupId =
-      (activeTopLevelId ? groupIdByTabId.get(activeTopLevelId) : undefined) ??
-      existingGroups[0]!.id
+      (activeTopLevelId ? groupIdByTabId.get(activeTopLevelId) : undefined) ?? existingGroups[0]!.id
     const orderByGroup = new Map<string, string[]>(existingGroups.map((group) => [group.id, []]))
     for (const tabId of tabOrder) {
       const groupId = groupIdByTabId.get(tabId) ?? activeGroupId
@@ -4061,14 +4066,12 @@ export class OrcaRuntimeService {
   // Merge the client's pane structure into the persisted tab layout. PTY
   // bindings and active leaf stay host-owned; only ratios/expand/titles change.
   // terminalLayoutsByTabId is keyed by tab id (worktree-independent).
-  private persistHeadlessTerminalPaneLayout(
-    args: {
-      tabId: string
-      root: TerminalPaneLayoutNode | null
-      expandedLeafId: string | null
-      titlesByLeafId?: Record<string, string>
-    }
-  ): void {
+  private persistHeadlessTerminalPaneLayout(args: {
+    tabId: string
+    root: TerminalPaneLayoutNode | null
+    expandedLeafId: string | null
+    titlesByLeafId?: Record<string, string>
+  }): void {
     const session = this.store?.getWorkspaceSession?.()
     if (!session || !this.store?.setWorkspaceSession) {
       return
@@ -4167,11 +4170,7 @@ export class OrcaRuntimeService {
     })
     const active = nextTabs.find((candidate) => candidate.isActive) ?? nextTabs[0] ?? null
     const reorderedTargetActiveTabId =
-      active?.type === 'terminal'
-        ? active.parentTabId
-        : active
-          ? active.id
-          : (tabOrder[0] ?? null)
+      active?.type === 'terminal' ? active.parentTabId : active ? active.id : (tabOrder[0] ?? null)
     // Why: reorder only changes ONE group's order. Preserve every other group so
     // a multi-group split isn't deleted by re-sorting tabs in one of its groups.
     const existingGroups = snapshot.tabGroups ?? []
@@ -4323,9 +4322,7 @@ export class OrcaRuntimeService {
       ...session,
       tabsByWorktree: {
         ...session.tabsByWorktree,
-        [worktreeId]: tabs.map((tab) =>
-          tab.id === tabId ? { ...tab, customTitle: title } : tab
-        )
+        [worktreeId]: tabs.map((tab) => (tab.id === tabId ? { ...tab, customTitle: title } : tab))
       }
     })
   }
@@ -5547,6 +5544,27 @@ export class OrcaRuntimeService {
         console.error('[runtime] mobile speech model download failed', { modelId, err })
       })
     return { started: true }
+  }
+
+  async deleteMobileSpeechModel(modelId: string): Promise<RuntimeSpeechSetupState> {
+    if (!this.store?.getSettings || !this.store.updateSettings) {
+      throw new Error('voice_dictation_unavailable')
+    }
+    const store = this.store
+    try {
+      await deleteLocalSpeechModel({
+        store: {
+          getSettings: () => store.getSettings(),
+          updateSettings: (updates, options) => store.updateSettings?.(updates, options)
+        },
+        modelManager: getSpeechModelManager(store),
+        sttService: getSpeechSttService(store),
+        modelId
+      })
+    } catch (error) {
+      throw new Error(getSpeechModelDeletionErrorCode(error) ?? 'voice_model_delete_failed')
+    }
+    return this.listMobileSpeechModels()
   }
 
   // Enables/disables dictation and/or selects the model, merging into the
@@ -15118,8 +15136,7 @@ export class OrcaRuntimeService {
       } catch {
         warnings.push({
           code: 'LINEAGE_PARENT_CONTEXT_MISSING',
-          message:
-            'Worktree created, but Orca could not validate the environment parent context.',
+          message: 'Worktree created, but Orca could not validate the environment parent context.',
           details: { envParentWorkspace: input.envParentWorkspace }
         })
       }
