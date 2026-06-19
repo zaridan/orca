@@ -1,4 +1,3 @@
-import { Buffer } from 'buffer'
 import type { CheckStatus } from '../../shared/types'
 import {
   deriveBitbucketBuildStatus,
@@ -12,17 +11,23 @@ import {
   getHostedReviewLocalGitOptions,
   type HostedReviewExecutionOptions
 } from '../source-control/hosted-review-git-options'
+import {
+  authHeaders,
+  envValue,
+  getEnvAuthConfig,
+  hasAuth,
+  DEFAULT_API_BASE_URL,
+  type BitbucketAuthConfig
+} from './bitbucket-auth-config'
+import {
+  getStoredBitbucketMetadata,
+  hasStoredBitbucketCredential,
+  loadStoredBitbucketSecret
+} from './credential-store'
+import { accountNameFromUser, fetchBitbucketUser } from './user-request'
 
-const DEFAULT_API_BASE_URL = 'https://api.bitbucket.org/2.0'
 const REQUEST_TIMEOUT_MS = 5000
 const ALL_PULL_REQUEST_STATES = ['OPEN', 'MERGED', 'DECLINED', 'SUPERSEDED'] as const
-
-type BitbucketAuthConfig = {
-  baseUrl: string
-  accessToken: string | null
-  email: string | null
-  apiToken: string | null
-}
 
 export type BitbucketAuthStatus = {
   configured: boolean
@@ -35,42 +40,47 @@ type RequestOptions = {
   timeoutMs?: number
 }
 
-function envValue(name: string): string | null {
-  const value = process.env[name]?.trim() ?? ''
-  return value.length > 0 ? value : null
-}
-
-function getAuthConfig(): BitbucketAuthConfig {
-  return {
-    baseUrl: envValue('ORCA_BITBUCKET_API_BASE_URL') ?? DEFAULT_API_BASE_URL,
-    accessToken: envValue('ORCA_BITBUCKET_ACCESS_TOKEN'),
-    email: envValue('ORCA_BITBUCKET_EMAIL'),
-    apiToken: envValue('ORCA_BITBUCKET_API_TOKEN')
+// Resolves the auth used for API requests. Env vars take precedence (honored for
+// headless/SSH setups); the in-app encrypted credential fills in when env is
+// absent. The stored secret is decrypted lazily and cached by credential-store.
+function resolveRequestAuth(): BitbucketAuthConfig | null {
+  const env = getEnvAuthConfig()
+  if (hasAuth(env)) {
+    return env
   }
-}
-
-function hasAuth(config: BitbucketAuthConfig): boolean {
-  return Boolean(config.accessToken || (config.email && config.apiToken))
-}
-
-function authHeaders(config: BitbucketAuthConfig): Record<string, string> {
-  if (config.accessToken) {
-    return { Authorization: `Bearer ${config.accessToken}` }
+  if (!hasStoredBitbucketCredential()) {
+    return null
   }
-  if (config.email && config.apiToken) {
-    const encoded = Buffer.from(`${config.email}:${config.apiToken}`).toString('base64')
-    return { Authorization: `Basic ${encoded}` }
+  let secret
+  try {
+    secret = loadStoredBitbucketSecret({ force: true })
+  } catch {
+    // Decryption failed (e.g. keychain denied) — treat as unauthenticated.
+    return null
   }
-  return {}
+  if (!secret) {
+    return null
+  }
+  const metadata = getStoredBitbucketMetadata()
+  const config: BitbucketAuthConfig = {
+    baseUrl: envValue('ORCA_BITBUCKET_API_BASE_URL') ?? metadata?.baseUrl ?? DEFAULT_API_BASE_URL,
+    accessToken: secret.accessToken,
+    email: metadata?.email ?? null,
+    apiToken: secret.apiToken
+  }
+  return hasAuth(config) ? config : null
 }
 
 function isStringArray(value: string | readonly string[]): value is readonly string[] {
   return Array.isArray(value)
 }
 
-function apiUrl(path: string, searchParams?: RequestOptions['searchParams']): string {
-  const config = getAuthConfig()
-  const base = config.baseUrl.replace(/\/+$/, '')
+function apiUrl(
+  baseUrl: string,
+  path: string,
+  searchParams?: RequestOptions['searchParams']
+): string {
+  const base = baseUrl.replace(/\/+$/, '')
   const url = new URL(`${base}${path}`)
   if (searchParams) {
     for (const [key, value] of Object.entries(searchParams)) {
@@ -87,14 +97,17 @@ function apiUrl(path: string, searchParams?: RequestOptions['searchParams']): st
 }
 
 async function requestJson<T>(path: string, options: RequestOptions = {}): Promise<T | null> {
-  const config = getAuthConfig()
+  const auth = resolveRequestAuth()
+  if (!auth) {
+    return null
+  }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? REQUEST_TIMEOUT_MS)
   try {
-    const response = await fetch(apiUrl(path, options.searchParams), {
+    const response = await fetch(apiUrl(auth.baseUrl, path, options.searchParams), {
       headers: {
         Accept: 'application/json',
-        ...authHeaders(config)
+        ...authHeaders(auth)
       },
       signal: controller.signal
     })
@@ -145,20 +158,21 @@ async function normalizePullRequest(
 }
 
 export async function getBitbucketAuthStatus(): Promise<BitbucketAuthStatus> {
-  const config = getAuthConfig()
-  if (!hasAuth(config)) {
-    return { configured: false, authenticated: false, account: null }
+  const env = getEnvAuthConfig()
+  if (hasAuth(env)) {
+    const user = await fetchBitbucketUser(env)
+    return { configured: true, authenticated: user !== null, account: accountNameFromUser(user) }
   }
-  const user = await requestJson<{
-    username?: string | null
-    display_name?: string | null
-    account_id?: string | null
-  }>('/user', { timeoutMs: 4000 })
-  return {
-    configured: true,
-    authenticated: user !== null,
-    account: user?.username ?? user?.display_name ?? user?.account_id ?? null
+  if (hasStoredBitbucketCredential()) {
+    // Why: trust the validation performed when the user connected; reading the
+    // secret here would decrypt (risking a keychain prompt) on every preflight.
+    return {
+      configured: true,
+      authenticated: true,
+      account: getStoredBitbucketMetadata()?.account ?? null
+    }
   }
+  return { configured: false, authenticated: false, account: null }
 }
 
 export async function getBitbucketPullRequest(

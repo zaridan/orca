@@ -1301,6 +1301,28 @@ const api = {
   // upstream sync of this central preload file.
   gl: glApi,
 
+  bitbucket: {
+    connect: (args: {
+      authMode: 'token' | 'basic'
+      accessToken?: string | null
+      email?: string | null
+      apiToken?: string | null
+      baseUrl?: string | null
+    }): Promise<{ ok: true; account: string | null } | { ok: false; error: string }> =>
+      ipcRenderer.invoke('bitbucket:connect', args),
+
+    disconnect: (): Promise<void> => ipcRenderer.invoke('bitbucket:disconnect'),
+
+    status: (): Promise<{
+      configured: boolean
+      source: 'environment' | 'stored' | 'none'
+      account: string | null
+      authMode: 'token' | 'basic' | null
+      email: string | null
+      baseUrl: string | null
+    }> => ipcRenderer.invoke('bitbucket:status')
+  },
+
   linear: {
     connect: (args: {
       apiKey: string

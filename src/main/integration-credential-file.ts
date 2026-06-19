@@ -1,4 +1,4 @@
-import { statSync } from 'fs'
+import { statSync, writeFileSync } from 'fs'
 import { safeStorage } from 'electron'
 import {
   credentialDecryptionMessage,
@@ -13,6 +13,24 @@ export function credentialFileHasContent(path: string): boolean {
   } catch {
     return false
   }
+}
+
+// Writes a secret to disk encrypted via safeStorage when available, falling
+// back to 0600 plaintext (mirrors the Linear/Jira token-write behavior) so a
+// machine without an OS keyring still works. `service` only labels the warning.
+export function writeEncryptedCredential(
+  service: IntegrationCredentialService,
+  path: string,
+  value: string
+): void {
+  if (safeStorage.isEncryptionAvailable()) {
+    writeFileSync(path, safeStorage.encryptString(value), { mode: 0o600 })
+    return
+  }
+  console.warn(
+    `[${service.toLowerCase()}] safeStorage encryption unavailable — storing credential in plaintext`
+  )
+  writeFileSync(path, value, { encoding: 'utf-8', mode: 0o600 })
 }
 
 export class CredentialDecryptionError extends Error {

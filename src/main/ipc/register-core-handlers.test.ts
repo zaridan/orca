@@ -41,6 +41,7 @@ const {
   registerFilesystemWatcherHandlersMock,
   registerAppHandlersMock,
   registerLinearHandlersMock,
+  registerBitbucketHandlersMock,
   registerJiraHandlersMock,
   registerGitLabHandlersMock,
   registerHostedReviewHandlersMock,
@@ -90,6 +91,7 @@ const {
   registerFilesystemWatcherHandlersMock: vi.fn(),
   registerAppHandlersMock: vi.fn(),
   registerLinearHandlersMock: vi.fn(),
+  registerBitbucketHandlersMock: vi.fn(),
   registerJiraHandlersMock: vi.fn(),
   registerGitLabHandlersMock: vi.fn(),
   registerHostedReviewHandlersMock: vi.fn(),
@@ -276,6 +278,10 @@ vi.mock('./linear', () => ({
   registerLinearHandlers: registerLinearHandlersMock
 }))
 
+vi.mock('./bitbucket', () => ({
+  registerBitbucketHandlers: registerBitbucketHandlersMock
+}))
+
 vi.mock('./jira', () => ({
   registerJiraHandlers: registerJiraHandlersMock
 }))
@@ -330,6 +336,7 @@ describe('registerCoreHandlers', () => {
     registerFilesystemWatcherHandlersMock.mockReset()
     registerAppHandlersMock.mockReset()
     registerLinearHandlersMock.mockReset()
+    registerBitbucketHandlersMock.mockReset()
     registerJiraHandlersMock.mockReset()
     registerGitLabHandlersMock.mockReset()
     registerHostedReviewHandlersMock.mockReset()
@@ -385,6 +392,7 @@ describe('registerCoreHandlers', () => {
     expect(registerRateLimitHandlersMock).toHaveBeenCalledWith(rateLimits)
     expect(registerGitHubHandlersMock).toHaveBeenCalledWith(store, stats)
     expect(registerLinearHandlersMock).toHaveBeenCalled()
+    expect(registerBitbucketHandlersMock).toHaveBeenCalled()
     expect(registerJiraHandlersMock).toHaveBeenCalled()
     expect(registerGitLabHandlersMock).toHaveBeenCalledWith(store)
     expect(registerHostedReviewHandlersMock).toHaveBeenCalledWith(store, stats)

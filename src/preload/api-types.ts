@@ -1562,6 +1562,24 @@ export type PreloadApi = {
       }
     ) => Promise<Omit<GitLabWorkItem, 'repoId'> | null>
   }
+  bitbucket: {
+    connect: (args: {
+      authMode: 'token' | 'basic'
+      accessToken?: string | null
+      email?: string | null
+      apiToken?: string | null
+      baseUrl?: string | null
+    }) => Promise<{ ok: true; account: string | null } | { ok: false; error: string }>
+    disconnect: () => Promise<void>
+    status: () => Promise<{
+      configured: boolean
+      source: 'environment' | 'stored' | 'none'
+      account: string | null
+      authMode: 'token' | 'basic' | null
+      email: string | null
+      baseUrl: string | null
+    }>
+  }
   linear: {
     connect: (args: {
       apiKey: string

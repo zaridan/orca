@@ -1,0 +1,130 @@
+import { mkdtempSync } from 'fs'
+import { tmpdir } from 'os'
+import type * as Os from 'os'
+import { join } from 'path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const OLD_ENV = process.env
+const OLD_FETCH = globalThis.fetch
+let tempHome = ''
+
+async function loadModule() {
+  vi.resetModules()
+  vi.doMock('electron', () => ({
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      encryptString: (value: string) => Buffer.from(value),
+      decryptString: (value: Buffer) => value.toString('utf-8')
+    }
+  }))
+  vi.doMock('os', async () => {
+    const actual = await vi.importActual<typeof Os>('os')
+    return { ...actual, homedir: () => tempHome }
+  })
+  return import('./credential-connection')
+}
+
+beforeEach(() => {
+  process.env = { ...OLD_ENV }
+  for (const key of [
+    'ORCA_BITBUCKET_ACCESS_TOKEN',
+    'ORCA_BITBUCKET_EMAIL',
+    'ORCA_BITBUCKET_API_TOKEN',
+    'ORCA_BITBUCKET_API_BASE_URL'
+  ]) {
+    delete process.env[key]
+  }
+  tempHome = mkdtempSync(join(tmpdir(), 'orca-bitbucket-conn-'))
+})
+
+afterEach(() => {
+  process.env = OLD_ENV
+  globalThis.fetch = OLD_FETCH
+})
+
+describe('Bitbucket credential connection', () => {
+  it('verifies credentials before saving and reports a stored connection', async () => {
+    const conn = await loadModule()
+    globalThis.fetch = vi.fn(async () =>
+      Response.json({ username: 'ada' })
+    ) as unknown as typeof fetch
+
+    await expect(
+      conn.connectBitbucket({
+        authMode: 'basic',
+        email: 'ada@example.com',
+        apiToken: 'tok'
+      })
+    ).resolves.toEqual({ ok: true, account: 'ada' })
+
+    expect(conn.getBitbucketConnectionStatus()).toEqual({
+      configured: true,
+      source: 'stored',
+      account: 'ada',
+      authMode: 'basic',
+      email: 'ada@example.com',
+      baseUrl: null
+    })
+  })
+
+  it('rejects credentials that fail the /user check without saving them', async () => {
+    const conn = await loadModule()
+    globalThis.fetch = vi.fn(
+      async () => new Response(null, { status: 401 })
+    ) as unknown as typeof fetch
+
+    const result = await conn.connectBitbucket({
+      authMode: 'token',
+      accessToken: 'bad'
+    })
+    expect(result.ok).toBe(false)
+    expect(conn.getBitbucketConnectionStatus().source).toBe('none')
+  })
+
+  it('rejects an incomplete basic-auth credential before making a request', async () => {
+    const conn = await loadModule()
+    const fetchSpy = vi.fn()
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+
+    const result = await conn.connectBitbucket({
+      authMode: 'basic',
+      email: 'ada@example.com'
+    })
+    expect(result.ok).toBe(false)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('reports environment variables as the source and takes precedence over stored creds', async () => {
+    const conn = await loadModule()
+    globalThis.fetch = vi.fn(async () =>
+      Response.json({ username: 'ada' })
+    ) as unknown as typeof fetch
+    await conn.connectBitbucket({
+      authMode: 'basic',
+      email: 'ada@example.com',
+      apiToken: 'tok'
+    })
+
+    process.env.ORCA_BITBUCKET_ACCESS_TOKEN = 'env-token'
+    expect(conn.getBitbucketConnectionStatus()).toMatchObject({
+      configured: true,
+      source: 'environment',
+      authMode: 'token'
+    })
+  })
+
+  it('clears the stored connection on disconnect', async () => {
+    const conn = await loadModule()
+    globalThis.fetch = vi.fn(async () =>
+      Response.json({ username: 'ada' })
+    ) as unknown as typeof fetch
+    await conn.connectBitbucket({
+      authMode: 'basic',
+      email: 'ada@example.com',
+      apiToken: 'tok'
+    })
+
+    conn.disconnectBitbucket()
+    expect(conn.getBitbucketConnectionStatus().source).toBe('none')
+  })
+})

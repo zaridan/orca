@@ -8116,6 +8116,43 @@
           "d37e92a06b": "ORCA_DIAGNOSTICS_DISABLED=1 が設定されています — アプリ診断はオフです。",
           "5ebb31e1fb": "CI で実行中です — 診断はオフです。",
           "e27c8d45bf": "環境変数により診断は無効になっています。"
+        },
+        "bitbucket": {
+          "credentials": {
+            "dialog": {
+              "title": "Connect Bitbucket",
+              "description": "Connect a Bitbucket Cloud account to view pull requests and build statuses. Credentials are verified before they are saved.",
+              "remote": "The active remote runtime manages Bitbucket credentials through its environment variables. Set ORCA_BITBUCKET_* on the remote instead.",
+              "mode": {
+                "basic": "Email + API token",
+                "token": "Access token"
+              },
+              "email": "Atlassian account email",
+              "apiToken": "API token",
+              "accessToken": "Access token",
+              "baseUrl": "API base URL (optional)",
+              "docs": "How to create a Bitbucket API token",
+              "storage": "Stored on this device using Electron encrypted storage when available. Environment variables, if set, take precedence.",
+              "cancel": "Cancel",
+              "verifying": "Verifying...",
+              "connect": "Connect",
+              "emailPlaceholder": "you@example.com",
+              "apiTokenPlaceholder": "ATATT...",
+              "accessTokenPlaceholder": "bb_...",
+              "baseUrlPlaceholder": "https://api.bitbucket.org/2.0"
+            }
+          },
+          "integration": {
+            "card": {
+              "description": "Pull requests and build statuses for Bitbucket Cloud.",
+              "envManaged": "Configured via ORCA_BITBUCKET_* environment variables.",
+              "authFailed": "Saved Bitbucket credentials could not authenticate. Reconnect with a valid token.",
+              "notConfigured": "Connect a Bitbucket Cloud account to view pull requests and build statuses.",
+              "edit": "Edit credentials",
+              "connect": "Connect",
+              "disconnect": "Disconnect"
+            }
+          }
         }
       },
       "right": {
