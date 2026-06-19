@@ -931,6 +931,9 @@ export const DIGIT_INDEX_ACTION_IDS: readonly KeybindingActionId[] = [
 
 const DIGIT_INDEX_ACTION_ID_SET = new Set<KeybindingActionId>(DIGIT_INDEX_ACTION_IDS)
 
+// The representative key for a digit-index chord is a single 1-9 number key.
+const DIGIT_INDEX_KEY_PATTERN = /^[1-9]$/
+
 export function isDigitIndexActionId(actionId: KeybindingActionId): boolean {
   return DIGIT_INDEX_ACTION_ID_SET.has(actionId)
 }
@@ -1288,10 +1291,12 @@ function normalizeOptionsForAction(actionId: KeybindingActionId): NormalizeKeybi
 
 // Why: a digit-index row stores one representative chord. Rewrite the key to 1
 // so display and conflict detection stay stable across the 1-9 range, and
-// reject anything that is not a modifier + number key.
+// reject anything that is not a number key 1-9. Extra modifiers (e.g. Shift) are
+// intentionally allowed — only the key must be a digit; parseKeybinding has
+// already enforced that at least one modifier is present.
 function canonicalizeDigitIndexBinding(binding: string): KeybindingValidationResult {
   const parsed = parseKeybinding(binding)
-  if (!parsed || parsed.doubleTapModifier || parsed.key < '1' || parsed.key > '9') {
+  if (!parsed || parsed.doubleTapModifier || !DIGIT_INDEX_KEY_PATTERN.test(parsed.key)) {
     return {
       ok: false,
       error: 'Pick a number key 1–9 with a modifier, like Cmd+1 or Ctrl+1.'
@@ -1560,6 +1565,19 @@ export function getEffectiveKeybindingsForAction(
   }
   const override = overrides?.[actionId]
   if (Array.isArray(override)) {
+    // Why: digit-index overrides resolve to their canonical <mods>+1 representative
+    // (deduped) so effective bindings stay consistent for display and conflict
+    // detection even if a hand-edited file stored a different digit.
+    if (isDigitIndexActionId(actionId)) {
+      const canonical: string[] = []
+      for (const binding of override) {
+        const normalized = canonicalizeDigitIndexBinding(binding)
+        if (normalized.ok && !canonical.includes(normalized.value)) {
+          canonical.push(normalized.value)
+        }
+      }
+      return canonical
+    }
     return override.flatMap((binding) => {
       const normalized = normalizeKeybindingWithOptions(
         binding,
@@ -1849,6 +1867,8 @@ function digitFromInput(input: KeybindingInput): string | null {
 // Why: digit-index rows bind a representative chord but fire for 1-9. Reuse the
 // representative's modifier set with the pressed digit, then match it through the
 // normal input matcher so Mod/Cmd resolution and layout fallbacks stay shared.
+// Honors keybindingIsActiveInContext, so terminal-first focus disables the range
+// just like the scope-based gating for every other shortcut.
 export function matchKeybindingDigitIndex(
   actionId: KeybindingActionId,
   input: KeybindingInput,
@@ -1866,7 +1886,7 @@ export function matchKeybindingDigitIndex(
   }
   for (const binding of getEffectiveKeybindingsForAction(actionId, platform, overrides)) {
     const parsed = parseKeybinding(binding)
-    if (!parsed || parsed.doubleTapModifier || parsed.key < '1' || parsed.key > '9') {
+    if (!parsed || parsed.doubleTapModifier || !DIGIT_INDEX_KEY_PATTERN.test(parsed.key)) {
       continue
     }
     const candidate = canonicalizeParsedKeybinding({ ...parsed, key: digit })

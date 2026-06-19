@@ -1158,6 +1158,30 @@ describe('digit-index shortcuts', () => {
     ).toMatchObject({ ok: false })
   })
 
+  it('allows extra modifiers (e.g. Shift) on a digit-index chord', () => {
+    expect(
+      keybindingFromInputForAction(
+        'tab.selectByIndex',
+        digitInput('5', { control: true, shift: true }),
+        'darwin'
+      )
+    ).toEqual({ ok: true, value: 'Ctrl+Shift+1' })
+    expect(normalizeKeybindingListForAction('workspace.selectByIndex', 'Mod+Shift+5')).toEqual([
+      'Mod+Shift+1'
+    ])
+  })
+
+  it('matches via the physical-code fallback when the key value is unavailable', () => {
+    // macOS/IME edge cases can leave key empty while code carries the digit.
+    expect(
+      matchKeybindingDigitIndex(
+        'tab.selectByIndex',
+        { key: '', code: 'Digit5', meta: false, control: true, alt: false, shift: false },
+        'darwin'
+      )
+    ).toBe(4)
+  })
+
   it('canonicalizes stored bindings and rejects non-number chords', () => {
     expect(normalizeKeybindingListForAction('workspace.selectByIndex', 'Mod+5')).toEqual(['Mod+1'])
     expect(normalizeKeybindingArrayForAction('tab.selectByIndex', ['Ctrl+9'])).toEqual(['Ctrl+1'])

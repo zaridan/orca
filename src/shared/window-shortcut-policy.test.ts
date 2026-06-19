@@ -142,6 +142,26 @@ describe('resolveWindowShortcutAction', () => {
         { 'workspace.selectByIndex': [] }
       )
     ).toBeNull()
+
+    // Both ranges disabled: neither the workspace nor the tab digit chord resolves.
+    const bothDisabled: KeybindingOverrides = {
+      'workspace.selectByIndex': [],
+      'tab.selectByIndex': []
+    }
+    expect(
+      resolveWindowShortcutAction(
+        { code: 'Digit3', key: '3', meta: true, control: false, alt: false, shift: false },
+        'darwin',
+        bothDisabled
+      )
+    ).toBeNull()
+    expect(
+      resolveWindowShortcutAction(
+        { code: 'Digit3', key: '3', meta: false, control: true, alt: false, shift: false },
+        'darwin',
+        bothDisabled
+      )
+    ).toBeNull()
   })
 
   it('keeps Orca-first active in terminal context but lets Terminal-first pass risky app chords', () => {

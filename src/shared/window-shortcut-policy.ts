@@ -222,9 +222,10 @@ export function resolveWindowShortcutAction(
     return { type: 'switchRecentTab' }
   }
 
-  // Why: workspace jumps are checked first so that if a user maps both ranges
-  // onto the same modifier, the workspace chord wins deterministically (matching
-  // the historical Cmd-before-Ctrl precedence on macOS).
+  // Why: the two ranges live in different scopes (no shared conflictGroup), so a
+  // user is free to map both onto the same modifier without it being blocked as a
+  // conflict. Checking workspace first gives that overlap deterministic
+  // precedence — workspace wins — matching the historical Cmd-before-Ctrl order.
   const worktreeIndex = matchKeybindingDigitIndex(
     'workspace.selectByIndex',
     input,
