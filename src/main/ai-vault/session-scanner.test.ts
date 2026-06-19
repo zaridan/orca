@@ -28,7 +28,8 @@ function isolatedScanRoots(root: string) {
     openclawLegacyStateDir: join(root, 'openclaw-legacy-state'),
     piSessionsDir: join(root, 'pi-sessions'),
     droidSessionsDir: join(root, 'droid-sessions'),
-    droidProjectsDir: join(root, 'droid-projects')
+    droidProjectsDir: join(root, 'droid-projects'),
+    kimiSessionsDir: join(root, 'kimi-sessions')
   }
 }
 
@@ -574,6 +575,55 @@ describe('scanAiVaultSessions', () => {
       ])
     )
 
+    // Kimi: <sessions>/wd_*/session_*/state.json + sibling agents/main/wire.jsonl,
+    // with the work dir resolved from the top-level session_index.jsonl.
+    const kimiSessionDir = join(roots.kimiSessionsDir, 'wd_app_abc', 'session_kimi-session')
+    await mkdir(join(kimiSessionDir, 'agents', 'main'), { recursive: true })
+    await writeFile(
+      join(kimiSessionDir, 'state.json'),
+      JSON.stringify({
+        createdAt: '2026-05-01T10:11:00.000Z',
+        updatedAt: '2026-05-01T10:11:05.000Z',
+        title: 'Kimi vault title',
+        lastPrompt: 'Kimi vault title',
+        agents: { main: { type: 'main', parentAgentId: null } }
+      })
+    )
+    await writeFile(
+      join(root, 'session_index.jsonl'),
+      jsonLines([
+        { sessionId: 'session_kimi-session', sessionDir: kimiSessionDir, workDir: '/tmp/kimi' }
+      ])
+    )
+    await writeFile(
+      join(kimiSessionDir, 'agents', 'main', 'wire.jsonl'),
+      jsonLines([
+        { type: 'config.update', modelAlias: 'kimi-k2.6', time: 1781853559132 },
+        {
+          type: 'context.append_message',
+          message: {
+            role: 'user',
+            content: [{ type: 'text', text: 'Kimi vault title' }],
+            origin: { kind: 'user' }
+          },
+          time: 1781853559164
+        },
+        {
+          type: 'context.append_loop_event',
+          event: { type: 'content.part', part: { type: 'text', text: 'Kimi reply' } },
+          time: 1781853559177
+        },
+        { type: 'context.append_loop_event', event: { type: 'step.end' }, time: 1781853559178 },
+        {
+          type: 'usage.record',
+          model: 'kimi-k2.6',
+          usage: { inputOther: 4, output: 6, inputCacheRead: 0, inputCacheCreation: 0 },
+          usageScope: 'turn',
+          time: 1781853559178
+        }
+      ])
+    )
+
     const result = await scanAiVaultSessions({
       ...roots,
       platform: 'darwin',
@@ -615,6 +665,9 @@ describe('scanAiVaultSessions', () => {
     expect(commandByAgent.get('pi')).toBe("cd '/tmp/pi' && pi --session 'pi-session'")
     expect(commandByAgent.get('devin')).toBe("cd '/tmp/devin' && devin --resume 'devin-session'")
     expect(commandByAgent.get('droid')).toBe("cd '/tmp/droid' && droid --resume 'droid-session'")
+    expect(commandByAgent.get('kimi')).toBe(
+      "cd '/tmp/kimi' && kimi --session 'session_kimi-session'"
+    )
   })
 })
 

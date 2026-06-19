@@ -419,6 +419,67 @@ describe('shared agent-hook-listener', () => {
     expect(ended?.payload).toMatchObject({ agentType: 'devin', state: 'done' })
   })
 
+  it('normalizes Kimi Code Claude-compatible lifecycle events as kimi status', () => {
+    const submitted = normalizeHookPayload(
+      state,
+      'kimi',
+      {
+        paneKey: PANE_KEY,
+        payload: {
+          hook_event_name: 'UserPromptSubmit',
+          session_id: 'session_abc',
+          cwd: '/repo',
+          // Kimi sends the prompt as a content-block array, not a bare string.
+          prompt: [{ type: 'text', text: 'list the files here' }]
+        }
+      },
+      'production'
+    )
+    const tool = normalizeHookPayload(
+      state,
+      'kimi',
+      {
+        paneKey: PANE_KEY,
+        payload: {
+          hook_event_name: 'PreToolUse',
+          session_id: 'session_abc',
+          tool_name: 'Bash',
+          tool_input: { command: 'ls' }
+        }
+      },
+      'production'
+    )
+    const waiting = normalizeHookPayload(
+      state,
+      'kimi',
+      {
+        paneKey: PANE_KEY,
+        payload: { hook_event_name: 'PermissionRequest', session_id: 'session_abc' }
+      },
+      'production'
+    )
+    const stopped = normalizeHookPayload(
+      state,
+      'kimi',
+      {
+        paneKey: PANE_KEY,
+        payload: { hook_event_name: 'Stop', session_id: 'session_abc' }
+      },
+      'production'
+    )
+
+    expect(submitted?.payload).toMatchObject({
+      agentType: 'kimi',
+      state: 'working',
+      prompt: 'list the files here'
+    })
+    expect(tool?.payload).toMatchObject({ agentType: 'kimi', state: 'working', toolName: 'Bash' })
+    expect(waiting?.payload).toMatchObject({ agentType: 'kimi', state: 'waiting' })
+    expect(stopped?.payload).toMatchObject({ agentType: 'kimi', state: 'done' })
+    // The Claude-shaped session_id is captured for provider-session resume.
+    expect(stopped?.providerSession).toMatchObject({ key: 'session_id', id: 'session_abc' })
+  })
+
   it('rejects oversized paneKey', () => {
     const event = normalizeHookPayload(
       state,
