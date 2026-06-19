@@ -4316,15 +4316,19 @@
           "f97b986b7f": "wsl"
         },
         "AgentSkillSetupPanel": {
-          "0b810ec59f": "Enter を押してインストール コマンドを実行します。",
+          "0b810ec59f": "Press Enter to run the command.",
           "ed197f59a2": "コピーコマンド",
-          "817d3f9f18": "インストールコマンドのコピー",
+          "817d3f9f18": "Copy command",
           "5289300939": "未インストール",
           "9fcebceb2a": "インストール済み",
           "68a468752e": "確認中...",
           "c689392435": "再確認",
-          "a31e2aa302": "インストールコマンドのコピーに失敗しました。",
-          "378ad26865": "インストールコマンドをコピーしました。"
+          "a31e2aa302": "Failed to copy command.",
+          "378ad26865": "Copied command.",
+          "copiedCommand": "Copied command.",
+          "failedToCopyCommand": "Failed to copy command.",
+          "copyCommandAria": "Copy command",
+          "runCommandDescription": "Press Enter to run the command."
         },
         "AgentsPane": {
           "d83834f5e6": "インストールされている agents を検出しています…",

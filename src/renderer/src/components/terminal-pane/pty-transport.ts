@@ -35,6 +35,7 @@ export {
   ensurePtyDispatcher,
   getEagerPtyBufferHandle,
   registerEagerPtyBuffer,
+  restorePtyDataHandlersAfterFailedShutdown,
   subscribeToPtyExit,
   unregisterPtyDataHandlers
 } from './pty-dispatcher'

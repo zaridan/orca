@@ -72,6 +72,13 @@ const ptyExitSidecars = new Map<string, Set<(code: number) => void>>()
 export const ptyTeardownHandlers = new Map<string, () => void>()
 let ptyDispatcherAttached = false
 
+export type PtyDataHandlerShutdownSnapshot = {
+  ptyId: string
+  dataHandler?: (data: string, meta?: PtyDataMeta) => void
+  replayHandler?: (data: string) => void
+  teardownHandler?: () => void
+}
+
 /**
  * Remove data and status handlers for the given PTY IDs so that any final
  * data flushed by the main process during PTY teardown cannot trigger
@@ -82,12 +89,36 @@ let ptyDispatcherAttached = false
  * Exit handlers are intentionally kept alive so the normal exit-cleanup
  * path (unregister, clear stale timers, update store) still runs.
  */
-export function unregisterPtyDataHandlers(ptyIds: string[]): void {
+export function unregisterPtyDataHandlers(ptyIds: string[]): PtyDataHandlerShutdownSnapshot[] {
+  const snapshots: PtyDataHandlerShutdownSnapshot[] = []
   for (const id of ptyIds) {
+    snapshots.push({
+      ptyId: id,
+      dataHandler: ptyDataHandlers.get(id),
+      replayHandler: ptyReplayHandlers.get(id),
+      teardownHandler: ptyTeardownHandlers.get(id)
+    })
     ptyDataHandlers.delete(id)
     ptyReplayHandlers.delete(id)
     ptyTeardownHandlers.get(id)?.()
     ptyTeardownHandlers.delete(id)
+  }
+  return snapshots
+}
+
+export function restorePtyDataHandlersAfterFailedShutdown(
+  snapshots: readonly PtyDataHandlerShutdownSnapshot[]
+): void {
+  for (const snapshot of snapshots) {
+    if (snapshot.dataHandler) {
+      ptyDataHandlers.set(snapshot.ptyId, snapshot.dataHandler)
+    }
+    if (snapshot.replayHandler) {
+      ptyReplayHandlers.set(snapshot.ptyId, snapshot.replayHandler)
+    }
+    if (snapshot.teardownHandler) {
+      ptyTeardownHandlers.set(snapshot.ptyId, snapshot.teardownHandler)
+    }
   }
 }
 

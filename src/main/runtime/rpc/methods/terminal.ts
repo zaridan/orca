@@ -539,7 +539,8 @@ const TerminalStop = z.object({
 
 const TerminalStopExact = TerminalStop.extend({
   expectedPtyIds: z.array(requiredString('Missing PTY ID')).min(1),
-  keepHistory: z.boolean().optional()
+  keepHistory: z.boolean().optional(),
+  targetOnly: z.boolean().optional()
 })
 
 const AgentTeamsTmuxCompat = z.object({
@@ -813,7 +814,8 @@ export const TERMINAL_METHODS: RpcAnyMethod[] = [
     params: TerminalStopExact,
     handler: async (params, { runtime }) =>
       runtime.stopExactTerminalsForWorktree(params.worktree, params.expectedPtyIds, {
-        keepHistory: params.keepHistory
+        keepHistory: params.keepHistory,
+        targetOnly: params.targetOnly
       })
   }),
   defineMethod({

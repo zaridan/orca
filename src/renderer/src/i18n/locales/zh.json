@@ -4316,15 +4316,19 @@
           "f97b986b7f": "wsl"
         },
         "AgentSkillSetupPanel": {
-          "0b810ec59f": "按 Enter 运行安装命令。",
+          "0b810ec59f": "Press Enter to run the command.",
           "ed197f59a2": "复制命令",
-          "817d3f9f18": "复制安装命令",
+          "817d3f9f18": "Copy command",
           "5289300939": "未安装",
           "9fcebceb2a": "已安装",
           "68a468752e": "检查中...",
           "c689392435": "重新检查",
-          "a31e2aa302": "无法复制安装命令。",
-          "378ad26865": "复制安装命令。"
+          "a31e2aa302": "Failed to copy command.",
+          "378ad26865": "Copied command.",
+          "copiedCommand": "Copied command.",
+          "failedToCopyCommand": "Failed to copy command.",
+          "copyCommandAria": "Copy command",
+          "runCommandDescription": "Press Enter to run the command."
         },
         "AgentsPane": {
           "d83834f5e6": "检测已安装的 Agent...",

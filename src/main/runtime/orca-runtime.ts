@@ -13869,7 +13869,7 @@ export class OrcaRuntimeService {
   async stopExactTerminalsForWorktree(
     worktreeSelector: string,
     expectedPtyIds: readonly string[],
-    opts: { keepHistory?: boolean } = {}
+    opts: { keepHistory?: boolean; targetOnly?: boolean } = {}
   ): Promise<{
     stopped: number
     stoppedPtyIds: string[]
@@ -13878,8 +13878,8 @@ export class OrcaRuntimeService {
     postStopFailure?: string
     remainingLivePtyIds?: string[]
   }> {
-    // Why: hibernation may commit sleeping state only after the runtime proves
-    // the selected PTYs are still the complete live set for this worktree.
+    // Why: worktree sleep needs proof of the complete live set; pane hibernation
+    // only needs proof that its target PTY was live and is now gone.
     const graphEpoch = this.captureReadyGraphEpoch()
     const worktree = await this.resolveWorktreeSelector(worktreeSelector)
     this.assertStableReadyGraph(graphEpoch)
@@ -13894,7 +13894,9 @@ export class OrcaRuntimeService {
       throw new Error('terminal_liveness_unavailable')
     }
     const livePtyIds = this.getLivePtyIdsForWorktree(worktree.id, refreshedPtyLiveness)
-    if (!setsEqual(livePtyIds, expected)) {
+    const targetOnly = opts.targetOnly === true
+    const expectedIsLive = [...expected].every((ptyId) => livePtyIds.has(ptyId))
+    if (targetOnly ? !expectedIsLive : !setsEqual(livePtyIds, expected)) {
       const error = Object.assign(new Error('terminal_stop_pty_set_mismatch'), {
         livePtyIds: [...livePtyIds].sort(),
         expectedPtyIds: [...expected].sort()
@@ -13924,7 +13926,8 @@ export class OrcaRuntimeService {
       }
     }
     const remainingLivePtyIds = this.getLivePtyIdsForWorktree(worktree.id, postStopLiveness)
-    if (remainingLivePtyIds.size > 0) {
+    const stoppedTargetsStillLive = [...expected].filter((ptyId) => remainingLivePtyIds.has(ptyId))
+    if (targetOnly ? stoppedTargetsStillLive.length > 0 : remainingLivePtyIds.size > 0) {
       return {
         stopped: stoppedPtyIds.length,
         stoppedPtyIds,
@@ -13938,7 +13941,10 @@ export class OrcaRuntimeService {
       stopped: stoppedPtyIds.length,
       stoppedPtyIds,
       livePtyIds: [...livePtyIds].sort(),
-      postStopVerified: true
+      postStopVerified: true,
+      ...(targetOnly && remainingLivePtyIds.size > 0
+        ? { remainingLivePtyIds: [...remainingLivePtyIds].sort() }
+        : {})
     }
   }
 

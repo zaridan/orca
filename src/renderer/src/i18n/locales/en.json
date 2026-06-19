@@ -4331,15 +4331,19 @@
           "f97b986b7f": "wsl"
         },
         "AgentSkillSetupPanel": {
-          "0b810ec59f": "Press Enter to run the install command.",
+          "0b810ec59f": "Press Enter to run the command.",
           "ed197f59a2": "Copy command",
-          "817d3f9f18": "Copy install command",
+          "817d3f9f18": "Copy command",
           "5289300939": "Not installed",
           "9fcebceb2a": "Installed",
           "68a468752e": "Checking...",
           "c689392435": "Re-check",
-          "a31e2aa302": "Failed to copy install command.",
-          "378ad26865": "Copied install command."
+          "a31e2aa302": "Failed to copy command.",
+          "378ad26865": "Copied command.",
+          "copiedCommand": "Copied command.",
+          "failedToCopyCommand": "Failed to copy command.",
+          "copyCommandAria": "Copy command",
+          "runCommandDescription": "Press Enter to run the command."
         },
         "AgentsPane": {
           "d83834f5e6": "Detecting installed agents…",

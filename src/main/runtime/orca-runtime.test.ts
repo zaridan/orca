@@ -12949,6 +12949,80 @@ describe('OrcaRuntimeService', () => {
     expect(stopped).toEqual([])
   })
 
+  it('allows target-only exact terminal stop when sibling PTYs remain live', async () => {
+    const runtime = new OrcaRuntimeService(store)
+    const stopped: string[] = []
+    const processLists = [
+      [
+        { id: 'pty-1', cwd: TEST_WORKTREE_PATH, title: 'Claude' },
+        { id: 'pty-shell', cwd: TEST_WORKTREE_PATH, title: 'Shell' }
+      ],
+      [{ id: 'pty-shell', cwd: TEST_WORKTREE_PATH, title: 'Shell' }]
+    ]
+    runtime.setPtyController({
+      write: () => true,
+      kill: () => false,
+      stopAndWait: async (ptyId, opts) => {
+        stopped.push(ptyId)
+        expect(opts).toEqual({ keepHistory: true })
+        runtime.onPtyExit(ptyId, -1)
+        return true
+      },
+      getForegroundProcess: async () => null,
+      listProcesses: async () => processLists.shift() ?? []
+    })
+
+    runtime.attachWindow(1)
+    runtime.syncWindowGraph(1, {
+      tabs: [
+        {
+          tabId: 'tab-1',
+          worktreeId: TEST_WORKTREE_ID,
+          title: 'Claude',
+          activeLeafId: 'pane:1',
+          layout: null
+        },
+        {
+          tabId: 'tab-2',
+          worktreeId: TEST_WORKTREE_ID,
+          title: 'Shell',
+          activeLeafId: 'pane:1',
+          layout: null
+        }
+      ],
+      leaves: [
+        {
+          tabId: 'tab-1',
+          worktreeId: TEST_WORKTREE_ID,
+          leafId: 'pane:1',
+          paneRuntimeId: 1,
+          ptyId: 'pty-1'
+        },
+        {
+          tabId: 'tab-2',
+          worktreeId: TEST_WORKTREE_ID,
+          leafId: 'pane:1',
+          paneRuntimeId: 2,
+          ptyId: 'pty-shell'
+        }
+      ]
+    })
+
+    await expect(
+      runtime.stopExactTerminalsForWorktree(`id:${TEST_WORKTREE_ID}`, ['pty-1'], {
+        keepHistory: true,
+        targetOnly: true
+      })
+    ).resolves.toEqual({
+      stopped: 1,
+      stoppedPtyIds: ['pty-1'],
+      livePtyIds: ['pty-1', 'pty-shell'],
+      postStopVerified: true,
+      remainingLivePtyIds: ['pty-shell']
+    })
+    expect(stopped).toEqual(['pty-1'])
+  })
+
   it('rejects exact terminal stop for multiple expected PTYs before stopping anything', async () => {
     const runtime = new OrcaRuntimeService(store)
     const stopped: string[] = []
