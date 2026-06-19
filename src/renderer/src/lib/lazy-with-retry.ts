@@ -25,8 +25,12 @@ export type LazyWithRetryOptions = {
   reloadKey?: string
 }
 
-// sessionStorage (not localStorage) so the guard resets when the window closes,
-// letting a future session earn a fresh recovery reload for a new corrupt deploy.
+// One recovery reload per session. The guard survives the reload itself (so we
+// never loop) but resets when the window/app closes, so a later launch — e.g.
+// after an update ships fresh chunks — can earn another reload. sessionStorage
+// (not localStorage) gives exactly that lifetime; it is never cleared mid-session,
+// otherwise a sibling chunk's healthy load would re-arm the reload and an
+// auto-mounted corrupt chunk would loop.
 const RELOAD_GUARD_KEY = 'orca:lazy-chunk-reload-attempted'
 const DEFAULT_RETRIES = 2
 const DEFAULT_BASE_DELAY_MS = 250
@@ -46,14 +50,6 @@ function markChunkReloadAttempted(): void {
     window.sessionStorage.setItem(RELOAD_GUARD_KEY, '1')
   } catch {
     // Best-effort; if writing throws, hasAttemptedChunkReload() also fails closed.
-  }
-}
-
-function clearChunkReloadAttempted(): void {
-  try {
-    window.sessionStorage.removeItem(RELOAD_GUARD_KEY)
-  } catch {
-    // Best-effort; a stale guard only costs one missed future reload.
   }
 }
 
@@ -85,11 +81,7 @@ export async function loadLazyWithRetry<T extends AnyComponent>(
   let lastError: unknown
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
-      const loaded = await factory()
-      // A clean load means chunks are healthy; clear the guard so a later corrupt
-      // deploy can still earn its one recovery reload.
-      clearChunkReloadAttempted()
-      return loaded
+      return await factory()
     } catch (error) {
       lastError = error
       if (attempt < retries) {
