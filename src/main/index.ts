@@ -1328,7 +1328,15 @@ app.whenReady().then(async () => {
   rateLimits.setClaudeAuthPreparationResolver((target) =>
     claudeRuntimeAuth!.prepareForRateLimitFetch(target)
   )
-  rateLimits.setSettingsResolver(() => store!.getSettings())
+  rateLimits.setSettingsResolver(() => {
+    const settings = store!.getSettings()
+    // Why: RateLimitService should only depend on the settings fields it reads.
+    return {
+      opencodeSessionCookie: settings.opencodeSessionCookie,
+      opencodeWorkspaceId: settings.opencodeWorkspaceId,
+      geminiCliOAuthEnabled: settings.geminiCliOAuthEnabled
+    }
+  })
   keybindings = new KeybindingService({
     homePath: app.getPath('home'),
     getLegacyOverrides: () => store!.getSettings().keybindings

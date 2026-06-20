@@ -37,6 +37,12 @@ type ClaudeAuthPreparationResolver = (
   target?: ClaudeAccountSelectionTarget
 ) => Promise<ClaudeRuntimeAuthPreparation>
 
+export type RateLimitSettingsSnapshot = {
+  opencodeSessionCookie: string
+  opencodeWorkspaceId: string
+  geminiCliOAuthEnabled?: boolean
+}
+
 // Why: Claude's subscription usage endpoint has a tight request budget. Quota
 // state is informational, so prefer keeping a recent snapshot over polling it
 // into 429s during long focused Orca sessions.
@@ -98,13 +104,7 @@ export class RateLimitService {
     runtime: 'host',
     wslDistro: null
   }
-  private settingsResolver:
-    | (() => {
-        opencodeSessionCookie: string
-        opencodeWorkspaceId: string
-        geminiCliOAuthEnabled?: boolean
-      })
-    | null = null
+  private settingsResolver: (() => RateLimitSettingsSnapshot) | null = null
   private inactiveClaudeAccountsResolver: (() => InactiveClaudeAccountInfo[]) | null = null
   private inactiveCodexAccountsResolver: (() => InactiveCodexAccountInfo[]) | null = null
   private inactiveClaudeCache = new Map<string, ProviderRateLimits>()
@@ -142,13 +142,7 @@ export class RateLimitService {
     this.claudeFetchTarget = normalizeClaudeAccountSelectionTarget(target)
   }
 
-  setSettingsResolver(
-    resolver: () => {
-      opencodeSessionCookie: string
-      opencodeWorkspaceId: string
-      geminiCliOAuthEnabled?: boolean
-    }
-  ): void {
+  setSettingsResolver(resolver: () => RateLimitSettingsSnapshot): void {
     this.settingsResolver = resolver
   }
 
