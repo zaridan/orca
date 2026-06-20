@@ -937,6 +937,8 @@ describe('registerWorktreeHandlers', () => {
       {
         command: 'claude --prefill test',
         env: { ORCA_AGENT_MODE: 'direct' },
+        launchAgent: 'claude',
+        startupCommandDelivery: undefined,
         telemetry: {
           agent_kind: 'claude',
           launch_source: 'new_workspace_composer',
