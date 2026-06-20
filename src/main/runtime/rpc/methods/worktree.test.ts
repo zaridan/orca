@@ -469,10 +469,13 @@ describe('worktree RPC methods', () => {
     expect(response.ok).toBe(true)
     expect(runtime.createManagedWorktree).toHaveBeenCalledWith(
       expect.objectContaining({
-        startup: expect.not.objectContaining({
-          launchConfig: expect.anything()
+        startup: expect.objectContaining({
+          command: "codex 'summarize repo'"
         })
       })
+    )
+    expect(vi.mocked(runtime.createManagedWorktree).mock.calls[0]?.[0].startup).not.toHaveProperty(
+      'launchConfig'
     )
   })
 

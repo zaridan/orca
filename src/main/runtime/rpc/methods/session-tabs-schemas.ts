@@ -112,7 +112,7 @@ export const CreateTerminalTab = WorktreeTabSelector.extend({
   env: z.record(z.string(), z.string()).optional(),
   startupCommandDelivery: z.enum(['fast', 'shell-ready']).optional(),
   launchConfig: sleepingAgentLaunchConfigSchema,
-  launchToken: z.string().optional(),
+  launchToken: z.string().min(1).max(128).optional(),
   agent: z
     .custom<TuiAgent>(isTuiAgent, {
       message: 'Unknown agent preset'
