@@ -9067,6 +9067,10 @@
             "globalScope": "Global"
           },
           "AiVaultSessionDetails": {
+            "originalAsk": "Original ask",
+            "latestTurns": "Latest turns",
+            "noPreviewAvailable": "No conversation preview available",
+            "messageCount": "{{value0}} msgs",
             "updated": "Updated",
             "created": "Created",
             "workingDir": "Working dir",
@@ -9102,9 +9106,16 @@
             "hoursAgo": "{{value0}}h ago",
             "daysAgo": "{{value0}}d ago",
             "monthsAgo": "{{value0}}mo ago",
-            "yearsAgo": "{{value0}}y ago"
+            "yearsAgo": "{{value0}}y ago",
+            "userRole": "You",
+            "agentRole": "Agent",
+            "toolRole": "Tool",
+            "systemRole": "System",
+            "sessionRole": "Session"
           },
           "AiVaultSessionRow": {
+            "noPreviewAvailable": "No conversation preview available",
+            "dragToResume": "Drag to resume in a new tab",
             "resumeAgentSession": "Resume {{value0}} session",
             "resumeInNewTab": "Resume in New Tab",
             "toggleSessionDetails": "{{value0}} session details",
@@ -9119,7 +9130,12 @@
             "hideDetails": "Hide Details",
             "showDetails": "Show Details",
             "moreSessionActions": "More Session Actions",
-            "moreActions": "More Actions"
+            "moreActions": "More Actions",
+            "userRole": "You",
+            "agentRole": "Agent",
+            "toolRole": "Tool",
+            "systemRole": "System",
+            "sessionRole": "Session"
           },
           "FileExplorerNameFilter": {
             "26fb73c6e3": "Find files",

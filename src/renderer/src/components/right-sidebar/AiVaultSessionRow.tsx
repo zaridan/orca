@@ -1,5 +1,13 @@
 import type React from 'react'
-import { ChevronDown, Copy, FileJson, FolderOpen, MoreHorizontal, Play } from 'lucide-react'
+import {
+  ChevronDown,
+  Copy,
+  FileJson,
+  FolderOpen,
+  GripVertical,
+  MoreHorizontal,
+  Play
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -27,6 +35,7 @@ import type { AiVaultSession } from '../../../../shared/ai-vault-types'
 import { agentLabel } from './ai-vault-session-filters'
 import { translate } from '@/i18n/i18n'
 import { SessionInlineDetails, SessionTime } from './AiVaultSessionDetails'
+import { latestSessionConversationTurn } from './ai-vault-session-display'
 
 export function VaultSessionRow({
   session,
@@ -57,59 +66,102 @@ export function VaultSessionRow({
 }): React.JSX.Element {
   const updatedAt = session.updatedAt ?? session.modifiedAt
   const detailsId = getSessionDetailsId(session.id)
+  const latestTurn = latestSessionConversationTurn(session)
   const detailsTooltip = detailsExpanded
     ? translate('auto.components.right.sidebar.AiVaultSessionRow.hideDetails', 'Hide Details')
     : translate('auto.components.right.sidebar.AiVaultSessionRow.showDetails', 'Show Details')
+  const startResumeDrag = (event: React.DragEvent<HTMLButtonElement>): void => {
+    event.stopPropagation()
+    if (resumeDisabled) {
+      event.preventDefault()
+      return
+    }
+    writeAiVaultSessionDragData(event.dataTransfer, {
+      agent: session.agent,
+      sessionId: session.sessionId,
+      title: session.title,
+      command: resumeCommand
+    })
+    window.dispatchEvent(new Event(AI_VAULT_SESSION_DRAG_START_EVENT))
+  }
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
-          draggable={!resumeDisabled}
-          className={cn(
-            'group relative flex min-h-[64px] w-full flex-col border-b border-sidebar-border px-3 py-2 text-left transition-colors hover:bg-sidebar-accent/55',
-            !resumeDisabled && 'cursor-grab active:cursor-grabbing'
-          )}
-          onDragStart={(event) => {
-            if (resumeDisabled) {
-              event.preventDefault()
-              return
-            }
-            writeAiVaultSessionDragData(event.dataTransfer, {
-              agent: session.agent,
-              sessionId: session.sessionId,
-              title: session.title,
-              command: resumeCommand
-            })
-            window.dispatchEvent(new Event(AI_VAULT_SESSION_DRAG_START_EVENT))
-          }}
-          onDragEnd={() => {
-            window.dispatchEvent(new Event(AI_VAULT_SESSION_DRAG_END_EVENT))
-          }}
-          onDoubleClick={() => {
-            if (!resumeDisabled) {
-              onResume()
-            }
+          className="group relative flex min-h-[82px] w-full cursor-pointer flex-col border-b border-sidebar-border px-3 py-2 text-left transition-colors hover:bg-sidebar-accent/55"
+          onClick={() => {
+            onToggleDetails()
           }}
         >
-          <div className="min-w-0 flex-1 pr-24">
-            <div className="flex min-w-0 items-start gap-1.5">
-              <div className="min-w-0 flex-1 truncate text-[13px] font-medium leading-5 text-foreground">
+          <div className="min-w-0 flex-1 pr-32">
+            <div className="min-w-0">
+              <div
+                className={cn(
+                  'text-[13px] font-medium leading-5 text-foreground',
+                  detailsExpanded
+                    ? 'min-w-0 break-words [overflow-wrap:anywhere]'
+                    : 'line-clamp-1'
+                )}
+              >
                 {session.title}
               </div>
-              <SessionTime value={updatedAt} className="mt-0.5 @max-[300px]/ai-vault:hidden" />
             </div>
-            <SessionMetadata session={session} />
+            <div className="mt-0.5 line-clamp-2 text-[12px] leading-4 text-muted-foreground">
+              {latestTurn ? (
+                <>
+                  <span className="font-medium text-foreground/80">
+                    {conversationRoleLabel(latestTurn.role)}
+                  </span>
+                  <span>: {latestTurn.text}</span>
+                </>
+              ) : (
+                translate(
+                  'auto.components.right.sidebar.AiVaultSessionRow.noPreviewAvailable',
+                  'No conversation preview available'
+                )
+              )}
+            </div>
+            <SessionMetadata session={session} updatedAt={updatedAt} />
           </div>
           <div
             className="pointer-events-none absolute right-2 top-1.5 flex items-center gap-1 rounded-md bg-sidebar/95"
             onPointerDown={(event) => event.stopPropagation()}
             onDoubleClick={(event) => event.stopPropagation()}
-            onDragStart={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-            }}
           >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={translate(
+                    'auto.components.right.sidebar.AiVaultSessionRow.dragToResume',
+                    'Drag to resume in a new tab'
+                  )}
+                  disabled={resumeDisabled}
+                  draggable={!resumeDisabled}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                  }}
+                  onDragStart={startResumeDrag}
+                  onDragEnd={() => {
+                    window.dispatchEvent(new Event(AI_VAULT_SESSION_DRAG_END_EVENT))
+                  }}
+                  // Why: the card is for inspection. Drag-to-resume lives on a
+                  // quiet handle so the row does not look movable by default.
+                  className="pointer-events-auto cursor-grab can-hover:pointer-events-none can-hover:opacity-0 transition-opacity active:cursor-grabbing group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
+                >
+                  <GripVertical className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top" sideOffset={4}>
+                {translate(
+                  'auto.components.right.sidebar.AiVaultSessionRow.dragToResume',
+                  'Drag to resume in a new tab'
+                )}
+              </TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -318,9 +370,15 @@ function getSessionDetailsId(sessionId: string): string {
   return `ai-vault-session-details-${sessionId.replace(/[^A-Za-z0-9_-]/g, '-')}`
 }
 
-function SessionMetadata({ session }: { session: AiVaultSession }): React.JSX.Element {
+function SessionMetadata({
+  session,
+  updatedAt
+}: {
+  session: AiVaultSession
+  updatedAt: string
+}): React.JSX.Element {
   return (
-    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
+    <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
       <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
         <AgentIcon agent={session.agent} size={14} />
       </span>
@@ -332,6 +390,24 @@ function SessionMetadata({ session }: { session: AiVaultSession }): React.JSX.El
           { value0: session.messageCount }
         )}
       </span>
+      <span className="shrink-0 text-muted-foreground/55">·</span>
+      <SessionTime value={updatedAt} />
     </div>
   )
+}
+
+function conversationRoleLabel(role: AiVaultSession['previewMessages'][number]['role']): string {
+  if (role === 'user') {
+    return translate('auto.components.right.sidebar.AiVaultSessionRow.userRole', 'You')
+  }
+  if (role === 'assistant') {
+    return translate('auto.components.right.sidebar.AiVaultSessionRow.agentRole', 'Agent')
+  }
+  if (role === 'tool') {
+    return translate('auto.components.right.sidebar.AiVaultSessionRow.toolRole', 'Tool')
+  }
+  if (role === 'system') {
+    return translate('auto.components.right.sidebar.AiVaultSessionRow.systemRole', 'System')
+  }
+  return translate('auto.components.right.sidebar.AiVaultSessionRow.sessionRole', 'Session')
 }
