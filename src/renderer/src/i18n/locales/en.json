@@ -2322,8 +2322,7 @@
             "f3eeb1de13": "Copy",
             "c2f0b72b8d": "Insert",
             "925f49f210": "Expand Pane",
-            "df766809e0": "Collapse Pane",
-            "copyTerminalId": "Copy Terminal ID"
+            "df766809e0": "Collapse Pane"
           },
           "TerminalErrorToast": {
             "e4aa243f8c": "Restart daemon",
@@ -2912,7 +2911,11 @@
             "e740f92596": "Refresh failed",
             "8418ec448d": "{{value0}} usage could not be refreshed. Agent sessions may still be signed in.",
             "45198c7d95": "1 rate-limit reset available",
-            "bce421cba3": "{{value0}} rate-limit resets available"
+            "bce421cba3": "{{value0}} rate-limit resets available",
+            "7ec6e030a0": "Next expires now",
+            "d1e442a9e5": "Expires now",
+            "6cf9eaed10": "Next expires in {{value0}}",
+            "20ad66aed1": "Expires in {{value0}}"
           },
           "SshTargetStatusRow": {
             "sshHost": "SSH Host"
@@ -8465,8 +8468,8 @@
             "a1f2c8d901": "View"
           },
           "SourceControl": {
-            "conflictsSection": "Conflicts",
             "1406954883": "Clear all notes...",
+            "conflictsSection": "Conflicts",
             "cc05b2d088": "Open in File Explorer",
             "03194cfff4": "Local session state derived from a conflict you opened here.",
             "413a3ba113": "conflict",
@@ -9163,9 +9166,6 @@
                 "copyCommand": "Copy command"
               }
             }
-          },
-          "SourceControlEntryContextMenu": {
-            "a1f2c8d901": "View"
           }
         }
       },

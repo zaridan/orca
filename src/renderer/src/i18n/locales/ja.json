@@ -2307,7 +2307,7 @@
           "TerminalContextMenu": {
             "b4cdd9314e": "クリアスクリーン",
             "8c17d6786d": "ペインを閉じる",
-            "copyTerminalId": "Terminal ID をコピー",
+            "copyTerminalId": "Copy Terminal ID",
             "2cf85a6a55": "ペインIDのコピー",
             "39809d152f": "タイトルを設定…",
             "06c2b0f043": "ペインのサイズを均等化する",
@@ -2322,8 +2322,7 @@
             "f3eeb1de13": "コピー",
             "c2f0b72b8d": "入れる",
             "925f49f210": "ペインを展開する",
-            "df766809e0": "ペインを折りたたむ",
-            "copyTerminalId": "Copy Terminal ID"
+            "df766809e0": "ペインを折りたたむ"
           },
           "TerminalErrorToast": {
             "e4aa243f8c": "デーモンを再起動します",
@@ -2912,7 +2911,11 @@
             "e740f92596": "更新に失敗しました",
             "8418ec448d": "{{value0}} の使用状況を更新できませんでした。Agent セッションは引き続きサインイン済みの場合があります。",
             "45198c7d95": "1 rate-limit reset available",
-            "bce421cba3": "{{value0}} rate-limit resets available"
+            "bce421cba3": "{{value0}} rate-limit resets available",
+            "7ec6e030a0": "Next expires now",
+            "d1e442a9e5": "Expires now",
+            "6cf9eaed10": "Next expires in {{value0}}",
+            "20ad66aed1": "Expires in {{value0}}"
           },
           "SshTargetStatusRow": {
             "sshHost": "SSH Host"
@@ -8465,8 +8468,8 @@
             "a1f2c8d901": "表示"
           },
           "SourceControl": {
-            "conflictsSection": "競合",
             "1406954883": "すべてのメモをクリアします...",
+            "conflictsSection": "競合",
             "cc05b2d088": "ファイルエクスプローラーで開く",
             "03194cfff4": "ここで開いた競合から派生したローカル セッション状態。",
             "413a3ba113": "競合",
@@ -9163,9 +9166,6 @@
                 "copyCommand": "Copy command"
               }
             }
-          },
-          "SourceControlEntryContextMenu": {
-            "a1f2c8d901": "表示"
           }
         }
       },

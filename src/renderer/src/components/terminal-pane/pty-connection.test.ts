@@ -3632,6 +3632,147 @@ describe('connectPanePty', () => {
     expect(mockStoreState.clearSleepingAgentSession).toHaveBeenCalledWith(paneKey)
   })
 
+  it('resumes from an unambiguous legacy sleeping record when cold-restoring a preserved pane', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport('fresh-pty')
+    transport.connect.mockImplementation(async ({ sessionId }: { sessionId?: string }) => {
+      if (sessionId) {
+        return {
+          id: 'fresh-pty',
+          coldRestore: { scrollback: 'cold-payload', cwd: '/tmp/wt-1' }
+        }
+      }
+      return 'fresh-pty'
+    })
+    transportFactoryQueue.push(transport)
+    const legacyPaneKey = 'tab-1:2'
+    const duplicateLegacyPaneKey = 'tab-1:3'
+    mockStoreState = {
+      ...mockStoreState,
+      tabsByWorktree: {
+        'wt-1': [{ id: 'tab-1', ptyId: 'lost-pty' }]
+      },
+      settings: {
+        ...mockStoreState.settings,
+        agentCmdOverrides: {}
+      },
+      agentStatusByPaneKey: {},
+      sleepingAgentSessionsByPaneKey: {
+        [legacyPaneKey]: {
+          paneKey: legacyPaneKey,
+          tabId: 'tab-1',
+          worktreeId: 'wt-1',
+          agent: 'codex',
+          providerSession: { key: 'session_id', id: 'codex-session-1' },
+          prompt: 'finish the task',
+          state: 'working',
+          capturedAt: 1,
+          updatedAt: 1
+        },
+        [duplicateLegacyPaneKey]: {
+          paneKey: duplicateLegacyPaneKey,
+          tabId: 'tab-1',
+          worktreeId: 'wt-1',
+          agent: 'codex',
+          providerSession: { key: 'session_id', id: 'codex-session-1' },
+          prompt: 'finish the task',
+          state: 'working',
+          capturedAt: 2,
+          updatedAt: 2
+        }
+      }
+    } as StoreState
+
+    const pane = createPane(1)
+    const manager = createManager(1)
+    const deps = createDeps({
+      restoredLeafId: LEAF_1,
+      restoredPtyIdByLeafId: { [LEAF_1]: 'lost-pty' }
+    })
+
+    connectPanePty(pane as never, manager as never, deps as never)
+    await flushAsyncTicks(20)
+    await new Promise((resolve) => setTimeout(resolve, 70))
+
+    expect(pane.terminal.write).toHaveBeenCalledWith('cold-payload', expect.any(Function))
+    expect(deps.onShowSessionRestoredBanner).toHaveBeenCalledWith(1)
+    expect(transport.sendInput).toHaveBeenCalledWith(
+      "codex '--dangerously-bypass-approvals-and-sandbox' 'resume' 'codex-session-1'\r"
+    )
+    expect(mockStoreState.clearSleepingAgentSession).toHaveBeenCalledWith(legacyPaneKey)
+    expect(mockStoreState.clearSleepingAgentSession).toHaveBeenCalledWith(duplicateLegacyPaneKey)
+    expect(mockStoreState.sleepingAgentSessionsByPaneKey[legacyPaneKey]).toBeUndefined()
+    expect(mockStoreState.sleepingAgentSessionsByPaneKey[duplicateLegacyPaneKey]).toBeUndefined()
+  })
+
+  it('does not choose a non-exact legacy record when same-tab provider sessions differ', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport('fresh-pty')
+    transport.connect.mockImplementation(async ({ sessionId }: { sessionId?: string }) => {
+      if (sessionId) {
+        return {
+          id: 'fresh-pty',
+          coldRestore: { scrollback: 'cold-payload', cwd: '/tmp/wt-1' }
+        }
+      }
+      return 'fresh-pty'
+    })
+    transportFactoryQueue.push(transport)
+    const firstLegacyPaneKey = 'tab-1:2'
+    const secondLegacyPaneKey = 'tab-1:3'
+    mockStoreState = {
+      ...mockStoreState,
+      tabsByWorktree: {
+        'wt-1': [{ id: 'tab-1', ptyId: 'lost-pty' }]
+      },
+      settings: {
+        ...mockStoreState.settings,
+        agentCmdOverrides: {}
+      },
+      agentStatusByPaneKey: {},
+      sleepingAgentSessionsByPaneKey: {
+        [firstLegacyPaneKey]: {
+          paneKey: firstLegacyPaneKey,
+          tabId: 'tab-1',
+          worktreeId: 'wt-1',
+          agent: 'codex',
+          providerSession: { key: 'session_id', id: 'codex-session-1' },
+          prompt: 'finish the task',
+          state: 'working',
+          capturedAt: 1,
+          updatedAt: 1
+        },
+        [secondLegacyPaneKey]: {
+          paneKey: secondLegacyPaneKey,
+          tabId: 'tab-1',
+          worktreeId: 'wt-1',
+          agent: 'codex',
+          providerSession: { key: 'session_id', id: 'codex-session-2' },
+          prompt: 'finish another task',
+          state: 'working',
+          capturedAt: 2,
+          updatedAt: 2
+        }
+      }
+    } as StoreState
+
+    const pane = createPane(1)
+    const manager = createManager(1)
+    const deps = createDeps({
+      restoredLeafId: LEAF_1,
+      restoredPtyIdByLeafId: { [LEAF_1]: 'lost-pty' }
+    })
+
+    connectPanePty(pane as never, manager as never, deps as never)
+    await flushAsyncTicks(20)
+    await new Promise((resolve) => setTimeout(resolve, 70))
+
+    expect(pane.terminal.write).toHaveBeenCalledWith('cold-payload', expect.any(Function))
+    expect(deps.onShowSessionRestoredBanner).not.toHaveBeenCalled()
+    expect(transport.sendInput).not.toHaveBeenCalledWith(expect.stringContaining('resume'))
+    expect(mockStoreState.clearSleepingAgentSession).not.toHaveBeenCalled()
+  })
+
   it('shows the restored banner when a sleeping resume falls back to a fresh shell', async () => {
     const { connectPanePty } = await import('./pty-connection')
     const staleSessionId = 'wt-1@@stale-session'

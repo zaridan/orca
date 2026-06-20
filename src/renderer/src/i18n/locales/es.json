@@ -2307,7 +2307,7 @@
           "TerminalContextMenu": {
             "b4cdd9314e": "Borrar pantalla",
             "8c17d6786d": "Cerrar panel",
-            "copyTerminalId": "Copiar ID de terminal",
+            "copyTerminalId": "Copy Terminal ID",
             "2cf85a6a55": "Copiar ID del panel",
             "39809d152f": "Establecer título…",
             "06c2b0f043": "Igualar tamaños de paneles",
@@ -2322,8 +2322,7 @@
             "f3eeb1de13": "Copiar",
             "c2f0b72b8d": "Insertar",
             "925f49f210": "Expandir panel",
-            "df766809e0": "Contraer panel",
-            "copyTerminalId": "Copy Terminal ID"
+            "df766809e0": "Contraer panel"
           },
           "TerminalErrorToast": {
             "e4aa243f8c": "Reiniciar demonio",
@@ -2912,7 +2911,11 @@
             "e740f92596": "Error al actualizar",
             "8418ec448d": "No se pudo actualizar el uso de {{value0}}. Es posible que las sesiones de agente sigan iniciadas.",
             "45198c7d95": "1 rate-limit reset available",
-            "bce421cba3": "{{value0}} rate-limit resets available"
+            "bce421cba3": "{{value0}} rate-limit resets available",
+            "7ec6e030a0": "Next expires now",
+            "d1e442a9e5": "Expires now",
+            "6cf9eaed10": "Next expires in {{value0}}",
+            "20ad66aed1": "Expires in {{value0}}"
           },
           "SshTargetStatusRow": {
             "sshHost": "SSH Host"
@@ -8465,8 +8468,8 @@
             "a1f2c8d901": "Ver"
           },
           "SourceControl": {
-            "conflictsSection": "Conflictos",
             "1406954883": "Borrar todas las notas...",
+            "conflictsSection": "Conflictos",
             "cc05b2d088": "Abrir en el Explorador de archivos",
             "03194cfff4": "Estado de la sesión local derivado de un conflicto que abrió aquí.",
             "413a3ba113": "conflicto",
@@ -9163,9 +9166,6 @@
                 "copyCommand": "Copy command"
               }
             }
-          },
-          "SourceControlEntryContextMenu": {
-            "a1f2c8d901": "Ver"
           }
         }
       },

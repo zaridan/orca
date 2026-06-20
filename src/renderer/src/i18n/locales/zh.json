@@ -2307,7 +2307,7 @@
           "TerminalContextMenu": {
             "b4cdd9314e": "清晰的屏幕",
             "8c17d6786d": "关闭窗格",
-            "copyTerminalId": "复制终端 ID",
+            "copyTerminalId": "Copy Terminal ID",
             "2cf85a6a55": "复制窗格 ID",
             "39809d152f": "设置标题...",
             "06c2b0f043": "均衡窗格大小",
@@ -2322,8 +2322,7 @@
             "f3eeb1de13": "复制",
             "c2f0b72b8d": "插入",
             "925f49f210": "展开窗格",
-            "df766809e0": "折叠窗格",
-            "copyTerminalId": "Copy Terminal ID"
+            "df766809e0": "折叠窗格"
           },
           "TerminalErrorToast": {
             "e4aa243f8c": "重新启动守护进程",
@@ -2912,7 +2911,11 @@
             "e740f92596": "刷新失败",
             "8418ec448d": "{{value0}} 用量无法刷新。智能体会话可能仍处于登录状态。",
             "45198c7d95": "1 rate-limit reset available",
-            "bce421cba3": "{{value0}} rate-limit resets available"
+            "bce421cba3": "{{value0}} rate-limit resets available",
+            "7ec6e030a0": "Next expires now",
+            "d1e442a9e5": "Expires now",
+            "6cf9eaed10": "Next expires in {{value0}}",
+            "20ad66aed1": "Expires in {{value0}}"
           },
           "SshTargetStatusRow": {
             "sshHost": "SSH 主机"
@@ -8465,8 +8468,8 @@
             "a1f2c8d901": "查看"
           },
           "SourceControl": {
-            "conflictsSection": "冲突",
             "1406954883": "清除所有笔记...",
+            "conflictsSection": "冲突",
             "cc05b2d088": "在文件资源管理器中打开",
             "03194cfff4": "本地会话状态源自您在此处打开的冲突。",
             "413a3ba113": "冲突",
@@ -9163,9 +9166,6 @@
                 "copyCommand": "Copy command"
               }
             }
-          },
-          "SourceControlEntryContextMenu": {
-            "a1f2c8d901": "查看"
           }
         }
       },
