@@ -19575,7 +19575,7 @@ describe('OrcaRuntimeService', () => {
     })
   })
 
-  it('deletes a Windows runtime worktree using the canonical registered path', async () => {
+  it('deletes a Windows runtime worktree using the canonical registered path and metadata', async () => {
     setPlatform('win32')
     const repo = {
       id: TEST_REPO_ID,
@@ -19592,15 +19592,21 @@ describe('OrcaRuntimeService', () => {
       isBare: false,
       isMainWorktree: false
     }
+    const canonicalWorktreeId = `${TEST_REPO_ID}::${registeredWorktree.path}`
+    const metaById: Record<string, WorktreeMeta> = {
+      [requestedWorktreeId]: makeWorktreeMeta(),
+      [canonicalWorktreeId]: makeWorktreeMeta({ preserveBranchOnDelete: true })
+    }
+    const removeWorktreeMeta = vi.fn((worktreeId: string) => {
+      delete metaById[worktreeId]
+    })
     const runtimeStore = {
       ...store,
       getRepos: () => [repo],
       getRepo: (id: string) => (id === TEST_REPO_ID ? repo : undefined),
-      getAllWorktreeMeta: () => ({
-        [requestedWorktreeId]: makeWorktreeMeta()
-      }),
-      getWorktreeMeta: (worktreeId: string) =>
-        worktreeId === requestedWorktreeId ? makeWorktreeMeta() : undefined,
+      getAllWorktreeMeta: () => metaById,
+      getWorktreeMeta: (worktreeId: string) => metaById[worktreeId],
+      removeWorktreeMeta,
       getProjects: () => [
         {
           id: 'project-1',
@@ -19649,9 +19655,12 @@ describe('OrcaRuntimeService', () => {
       wslDistro: 'Ubuntu'
     })
     expect(removeWorktree).toHaveBeenCalledWith(repo.path, registeredWorktree.path, false, {
+      deleteBranch: false,
       knownRemovedWorktree: registeredWorktree,
       wslDistro: 'Ubuntu'
     })
+    expect(removeWorktreeMeta).toHaveBeenCalledWith(canonicalWorktreeId)
+    expect(removeWorktreeMeta).toHaveBeenCalledWith(requestedWorktreeId)
   })
 
   it('surfaces selected-runtime list failures during runtime worktree removal', async () => {

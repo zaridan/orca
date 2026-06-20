@@ -124,6 +124,11 @@ import {
   removeLocalWorktreePath,
   toLocalWorktreeRuntimePath
 } from '../local-worktree-filesystem'
+import {
+  getEquivalentWorktreeIdsForRemoval,
+  getWorktreeRemovalMetadata,
+  omitWorktreeMetaIds
+} from '../worktree-removal-metadata'
 
 const WORKTREE_ARCHIVE_HOOK_TIMEOUT_MS = 120_000
 const WORKTREE_LIST_ALL_CONCURRENCY = 8
@@ -148,12 +153,18 @@ async function mapWithConcurrency<T, R>(
   return results
 }
 
-function removeWorktreeMetadataAndTransientState(store: Store, worktreeId: string): void {
-  // Why: worktree IDs are path-derived and can be recreated, so removal must
-  // drop process-local caches before the same ID can point at a new workspace.
-  store.removeWorktreeMeta(worktreeId)
-  advertisedUrlWatcher.forgetWorktree(worktreeId)
-  deleteWorktreeHistoryDir(worktreeId)
+function removeWorktreeMetadataAndTransientState(
+  store: Store,
+  worktreeIds: string | readonly string[]
+): void {
+  const ids = typeof worktreeIds === 'string' ? [worktreeIds] : worktreeIds
+  for (const worktreeId of ids) {
+    // Why: worktree IDs are path-derived and can be recreated, so removal must
+    // drop process-local caches before the same ID can point at a new workspace.
+    store.removeWorktreeMeta(worktreeId)
+    advertisedUrlWatcher.forgetWorktree(worktreeId)
+    deleteWorktreeHistoryDir(worktreeId)
+  }
 }
 
 async function closeLocalWatcherForRemoval(worktreePath: string): Promise<void> {
@@ -1247,8 +1258,8 @@ export function registerWorktreeHandlers(
           : hasLocalWorktreeGitOptions
             ? await listGitWorktreesStrict(repo.path, localWorktreeGitOptions)
             : await listGitWorktreesStrict(repo.path)
-        const removedMeta = store.getWorktreeMeta(args.worktreeId)
-        const removedPushTarget = removedMeta?.pushTarget
+        const requestedMeta = store.getWorktreeMeta(args.worktreeId)
+        const requestedPushTarget = requestedMeta?.pushTarget
         const registeredWorktree = findRegisteredDeletableWorktree(
           repo.path,
           worktreePath,
@@ -1260,7 +1271,7 @@ export function registerWorktreeHandlers(
           const knownOrcaLayouts = buildKnownOrcaWorkspaceLayouts(store.getSettings(), repo)
           if (
             canCleanupUnregisteredOrcaWorktreeDirectory({
-              meta: removedMeta,
+              meta: requestedMeta,
               worktreePath,
               repo,
               knownOrcaLayouts
@@ -1303,7 +1314,7 @@ export function registerWorktreeHandlers(
                 provider!,
                 repo.path,
                 args.worktreeId,
-                removedPushTarget,
+                requestedPushTarget,
                 store
               )
             } else {
@@ -1312,7 +1323,7 @@ export function registerWorktreeHandlers(
               await cleanupUnusedWorktreePushTargetRemote(
                 repo.path,
                 args.worktreeId,
-                removedPushTarget,
+                requestedPushTarget,
                 store,
                 localWorktreeGitOptions
               )
@@ -1325,7 +1336,7 @@ export function registerWorktreeHandlers(
             return {}
           }
           if (await isAlreadyRemovedWorktreePath(repo, worktreePath, localWorktreeGitOptions)) {
-            if (!args.force && !removedMeta) {
+            if (!args.force && !requestedMeta) {
               // Why: without persisted metadata, require the renderer recovery
               // path before deleting Orca-only state for an unregistered path.
               throw new Error(UNREGISTERED_MISSING_WORKTREE_MESSAGE)
@@ -1338,14 +1349,14 @@ export function registerWorktreeHandlers(
                 provider!,
                 repo.path,
                 args.worktreeId,
-                removedPushTarget,
+                requestedPushTarget,
                 store
               )
             } else {
               await cleanupUnusedWorktreePushTargetRemote(
                 repo.path,
                 args.worktreeId,
-                removedPushTarget,
+                requestedPushTarget,
                 store,
                 localWorktreeGitOptions
               )
@@ -1360,7 +1371,16 @@ export function registerWorktreeHandlers(
           throw new Error(`Refusing to delete unregistered worktree path: ${worktreePath}`)
         }
         const canonicalWorktreePath = registeredWorktree.path
-        const deleteBranch = removedMeta?.preserveBranchOnDelete !== true
+        const removedWorktreeIds = getEquivalentWorktreeIdsForRemoval(
+          store,
+          repo.id,
+          args.worktreeId,
+          canonicalWorktreePath
+        )
+        const removalMetadata = getWorktreeRemovalMetadata(store, removedWorktreeIds)
+        const removedPushTarget = removalMetadata.pushTarget
+        const cleanupStore = omitWorktreeMetaIds(store, removedWorktreeIds)
+        const deleteBranch = !removalMetadata.preserveBranchOnDelete
 
         let shouldTearDownPtys = true
 
@@ -1408,16 +1428,21 @@ export function registerWorktreeHandlers(
             repo.path,
             args.worktreeId,
             removedPushTarget,
-            store
+            cleanupStore
           )
+          for (const worktreeId of removedWorktreeIds) {
+            preservedBranchCleanupByWorktreeId.delete(worktreeId)
+          }
           rememberPreservedBranchCleanupTarget(
             args.worktreeId,
             removalResult,
             registeredWorktree.head,
             removedPushTarget
           )
-          runtime.clearOptimisticReconcileToken(args.worktreeId)
-          removeWorktreeMetadataAndTransientState(store, args.worktreeId)
+          for (const worktreeId of removedWorktreeIds) {
+            runtime.clearOptimisticReconcileToken(worktreeId)
+          }
+          removeWorktreeMetadataAndTransientState(store, removedWorktreeIds)
           notifyWorktreesChanged(mainWindow, repoId)
           return removalResult ?? {}
         }
@@ -1527,12 +1552,14 @@ export function registerWorktreeHandlers(
               repo.path,
               args.worktreeId,
               removedPushTarget,
-              store,
+              cleanupStore,
               localWorktreeGitOptions
             )
-            runtime.clearOptimisticReconcileToken(args.worktreeId)
-            removeWorktreeMetadataAndTransientState(store, args.worktreeId)
-            preservedBranchCleanupByWorktreeId.delete(args.worktreeId)
+            for (const worktreeId of removedWorktreeIds) {
+              runtime.clearOptimisticReconcileToken(worktreeId)
+              preservedBranchCleanupByWorktreeId.delete(worktreeId)
+            }
+            removeWorktreeMetadataAndTransientState(store, removedWorktreeIds)
             invalidateAuthorizedRootsCache()
             notifyWorktreesChanged(mainWindow, repoId)
             return {}
@@ -1545,17 +1572,22 @@ export function registerWorktreeHandlers(
           repo.path,
           args.worktreeId,
           removedPushTarget,
-          store,
+          cleanupStore,
           localWorktreeGitOptions
         )
+        for (const worktreeId of removedWorktreeIds) {
+          preservedBranchCleanupByWorktreeId.delete(worktreeId)
+        }
         rememberPreservedBranchCleanupTarget(
           args.worktreeId,
           removalResult,
           registeredWorktree.head,
           removedPushTarget
         )
-        runtime.clearOptimisticReconcileToken(args.worktreeId)
-        removeWorktreeMetadataAndTransientState(store, args.worktreeId)
+        for (const worktreeId of removedWorktreeIds) {
+          runtime.clearOptimisticReconcileToken(worktreeId)
+        }
+        removeWorktreeMetadataAndTransientState(store, removedWorktreeIds)
         invalidateAuthorizedRootsCache()
 
         notifyWorktreesChanged(mainWindow, repoId)

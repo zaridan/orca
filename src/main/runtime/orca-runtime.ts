@@ -614,6 +614,11 @@ import {
   stripOrcaProvenanceMetaUpdates,
   UNREGISTERED_MISSING_WORKTREE_MESSAGE
 } from '../worktree-removal-safety'
+import {
+  getEquivalentWorktreeIdsForRemoval,
+  getWorktreeRemovalMetadata,
+  omitWorktreeMetaIds
+} from '../worktree-removal-metadata'
 import { prefetchWorktreeCreateBase } from '../worktree-create-base-prefetch'
 import { invalidateAuthorizedRootsCache } from '../ipc/filesystem-auth'
 import { prepareLocalWorktreeRootForRepo } from '../worktree-root-preparation'
@@ -13744,14 +13749,20 @@ export class OrcaRuntimeService {
     }
   }
 
-  private removeWorktreeMetadataAndHistory(store: RuntimeStore, worktreeId: string): void {
-    // Why: worktree IDs are path-derived and can be recreated, so removal must
-    // purge history and process-local caches before the ID points at new state.
-    store.removeWorktreeMeta(worktreeId)
-    advertisedUrlWatcher.forgetWorktree(worktreeId)
-    serveSimStateWatcher.forgetWorktree(worktreeId)
-    deleteWorktreeHistoryDir(worktreeId)
-    this.closeHeadlessBrowserPagesForWorktree(worktreeId)
+  private removeWorktreeMetadataAndHistory(
+    store: RuntimeStore,
+    worktreeIds: string | readonly string[]
+  ): void {
+    const ids = typeof worktreeIds === 'string' ? [worktreeIds] : worktreeIds
+    for (const worktreeId of ids) {
+      // Why: worktree IDs are path-derived and can be recreated, so removal must
+      // purge history and process-local caches before the ID points at new state.
+      store.removeWorktreeMeta(worktreeId)
+      advertisedUrlWatcher.forgetWorktree(worktreeId)
+      serveSimStateWatcher.forgetWorktree(worktreeId)
+      deleteWorktreeHistoryDir(worktreeId)
+      this.closeHeadlessBrowserPagesForWorktree(worktreeId)
+    }
   }
 
   // Why: headless offscreen browser pages are main-process BrowserWindows that
@@ -13933,8 +13944,8 @@ export class OrcaRuntimeService {
         : hasLocalWorktreeGitOptions
           ? await listWorktreesStrict(repo.path, localWorktreeGitOptions)
           : await listWorktreesStrict(repo.path)
-      const removedMeta = store.getWorktreeMeta(removalTarget.id)
-      const removedPushTarget = removedMeta?.pushTarget ?? removalTarget.pushTarget
+      const requestedMeta = store.getWorktreeMeta(removalTarget.id)
+      const requestedPushTarget = requestedMeta?.pushTarget ?? removalTarget.pushTarget
       const registeredWorktree = findRegisteredDeletableWorktree(
         repo.path,
         removalTarget.path,
@@ -13945,7 +13956,7 @@ export class OrcaRuntimeService {
         const knownOrcaLayouts = buildKnownOrcaWorkspaceLayouts(store.getSettings(), repo)
         if (
           canCleanupUnregisteredOrcaWorktreeDirectory({
-            meta: removedMeta,
+            meta: requestedMeta,
             worktreePath: removalTarget.path,
             repo,
             knownOrcaLayouts
@@ -13988,7 +13999,7 @@ export class OrcaRuntimeService {
               provider!,
               repo.path,
               removalTarget.id,
-              removedPushTarget,
+              requestedPushTarget,
               store
             )
           } else {
@@ -13996,7 +14007,7 @@ export class OrcaRuntimeService {
             await cleanupUnusedWorktreePushTargetRemote(
               repo.path,
               removalTarget.id,
-              removedPushTarget,
+              requestedPushTarget,
               store,
               localWorktreeGitOptions
             )
@@ -14010,7 +14021,7 @@ export class OrcaRuntimeService {
           return {}
         }
         if (await isRuntimeWorktreePathMissing(repo, removalTarget.path, localWorktreeGitOptions)) {
-          if (!force && !removedMeta) {
+          if (!force && !requestedMeta) {
             // Why: without persisted metadata, require the renderer recovery
             // path before deleting Orca-only state for an unregistered path.
             throw new Error(UNREGISTERED_MISSING_WORKTREE_MESSAGE)
@@ -14023,13 +14034,13 @@ export class OrcaRuntimeService {
                 provider!,
                 repo.path,
                 removalTarget.id,
-                removedPushTarget,
+                requestedPushTarget,
                 store
               )
             : cleanupUnusedWorktreePushTargetRemote(
                 repo.path,
                 removalTarget.id,
-                removedPushTarget,
+                requestedPushTarget,
                 store,
                 localWorktreeGitOptions
               ))
@@ -14044,7 +14055,16 @@ export class OrcaRuntimeService {
         throw new Error(`Refusing to delete unregistered worktree path: ${removalTarget.path}`)
       }
       const canonicalWorktreePath = registeredWorktree.path
-      const deleteBranch = removedMeta?.preserveBranchOnDelete !== true
+      const removedWorktreeIds = getEquivalentWorktreeIdsForRemoval(
+        store,
+        repo.id,
+        removalTarget.id,
+        canonicalWorktreePath
+      )
+      const removalMetadata = getWorktreeRemovalMetadata(store, removedWorktreeIds)
+      const removedPushTarget = removalMetadata.pushTarget ?? removalTarget.pushTarget
+      const cleanupStore = omitWorktreeMetaIds(store, removedWorktreeIds)
+      const deleteBranch = !removalMetadata.preserveBranchOnDelete
       if (repo.connectionId) {
         const rawRemovalResult = await (deleteBranch
           ? provider!.removeWorktree(canonicalWorktreePath, force)
@@ -14058,16 +14078,21 @@ export class OrcaRuntimeService {
           repo.path,
           removalTarget.id,
           removedPushTarget,
-          store
+          cleanupStore
         )
+        for (const worktreeId of removedWorktreeIds) {
+          this.preservedBranchCleanupByWorktreeId.delete(worktreeId)
+        }
         this.rememberPreservedBranchCleanupTarget(
           removalTarget.id,
           removalResult,
           registeredWorktree.head,
           removedPushTarget
         )
-        this.clearOptimisticReconcileToken(removalTarget.id)
-        this.removeWorktreeMetadataAndHistory(store, removalTarget.id)
+        for (const worktreeId of removedWorktreeIds) {
+          this.clearOptimisticReconcileToken(worktreeId)
+        }
+        this.removeWorktreeMetadataAndHistory(store, removedWorktreeIds)
         this.invalidateResolvedWorktreeCache()
         invalidateAuthorizedRootsCache()
         this.notifyWorktreesChanged(repo.id)
@@ -14188,12 +14213,14 @@ export class OrcaRuntimeService {
             repo.path,
             removalTarget.id,
             removedPushTarget,
-            store,
+            cleanupStore,
             localWorktreeGitOptions
           )
-          this.clearOptimisticReconcileToken(removalTarget.id)
-          this.removeWorktreeMetadataAndHistory(store, removalTarget.id)
-          this.preservedBranchCleanupByWorktreeId.delete(removalTarget.id)
+          for (const worktreeId of removedWorktreeIds) {
+            this.clearOptimisticReconcileToken(worktreeId)
+            this.preservedBranchCleanupByWorktreeId.delete(worktreeId)
+          }
+          this.removeWorktreeMetadataAndHistory(store, removedWorktreeIds)
           this.invalidateResolvedWorktreeCache()
           invalidateAuthorizedRootsCache()
           this.notifyWorktreesChanged(repo.id)
@@ -14208,17 +14235,22 @@ export class OrcaRuntimeService {
         repo.path,
         removalTarget.id,
         removedPushTarget,
-        store,
+        cleanupStore,
         localWorktreeGitOptions
       )
+      for (const worktreeId of removedWorktreeIds) {
+        this.preservedBranchCleanupByWorktreeId.delete(worktreeId)
+      }
       this.rememberPreservedBranchCleanupTarget(
         removalTarget.id,
         removalResult,
         registeredWorktree.head,
         removedPushTarget
       )
-      this.clearOptimisticReconcileToken(removalTarget.id)
-      this.removeWorktreeMetadataAndHistory(store, removalTarget.id)
+      for (const worktreeId of removedWorktreeIds) {
+        this.clearOptimisticReconcileToken(worktreeId)
+      }
+      this.removeWorktreeMetadataAndHistory(store, removedWorktreeIds)
       this.invalidateResolvedWorktreeCache()
       invalidateAuthorizedRootsCache()
       this.notifyWorktreesChanged(repo.id)

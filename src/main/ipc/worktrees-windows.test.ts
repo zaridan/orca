@@ -146,6 +146,7 @@ describe('registerWorktreeHandlers – Windows path handling', () => {
     getProjectHostSetups: vi.fn(),
     getSettings: vi.fn(),
     getWorktreeMeta: vi.fn(),
+    getAllWorktreeMeta: vi.fn(),
     setWorktreeMeta: vi.fn(),
     removeWorktreeMeta: vi.fn()
   }
@@ -185,6 +186,7 @@ describe('registerWorktreeHandlers – Windows path handling', () => {
     store.getProjectHostSetups.mockReset()
     store.getSettings.mockReset()
     store.getWorktreeMeta.mockReset()
+    store.getAllWorktreeMeta.mockReset()
     store.setWorktreeMeta.mockReset()
     store.removeWorktreeMeta.mockReset()
 
@@ -222,6 +224,7 @@ describe('registerWorktreeHandlers – Windows path handling', () => {
       workspaceDir: 'C:\\workspaces'
     })
     store.getWorktreeMeta.mockReturnValue(undefined)
+    store.getAllWorktreeMeta.mockReturnValue({})
     store.setWorktreeMeta.mockReturnValue({})
     getGitUsernameMock.mockReturnValue('')
     getDefaultBaseRefMock.mockReturnValue('origin/main')
@@ -383,5 +386,52 @@ describe('registerWorktreeHandlers – Windows path handling', () => {
     expect(mainWindow.webContents.send).toHaveBeenCalledWith('worktrees:changed', {
       repoId: 'repo-1'
     })
+  })
+
+  it('uses canonical Windows worktree metadata when the requested path spelling differs', async () => {
+    const requestedWorktreeId = 'repo-1::C:/workspaces/improve-dashboard'
+    const canonicalWorktreeId = 'repo-1::c:\\workspaces\\Improve-Dashboard'
+    const registeredWorktree = {
+      path: 'c:\\workspaces\\Improve-Dashboard',
+      head: 'feature-head',
+      branch: 'refs/heads/improve-dashboard',
+      isBare: false,
+      isMainWorktree: false
+    }
+    const metaById = {
+      [canonicalWorktreeId]: {
+        preserveBranchOnDelete: true
+      }
+    }
+    store.getAllWorktreeMeta.mockReturnValue(metaById)
+    store.getWorktreeMeta.mockImplementation((worktreeId: string) => metaById[worktreeId])
+    listWorktreesMock.mockResolvedValue([
+      {
+        path: 'C:\\repo',
+        head: 'main-head',
+        branch: 'refs/heads/main',
+        isBare: false,
+        isMainWorktree: true
+      },
+      registeredWorktree
+    ])
+    removeWorktreeMock.mockResolvedValue({})
+
+    await handlers['worktrees:remove'](null, {
+      worktreeId: requestedWorktreeId
+    })
+
+    expect(removeWorktreeMock).toHaveBeenCalledWith(
+      'C:\\repo',
+      registeredWorktree.path,
+      false,
+      expect.objectContaining({
+        deleteBranch: false,
+        knownRemovedWorktree: registeredWorktree
+      })
+    )
+    expect(store.removeWorktreeMeta).toHaveBeenCalledWith(requestedWorktreeId)
+    expect(store.removeWorktreeMeta).toHaveBeenCalledWith(canonicalWorktreeId)
+    expect(deleteWorktreeHistoryDirMock).toHaveBeenCalledWith(canonicalWorktreeId)
   })
 })
