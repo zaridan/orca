@@ -7,10 +7,7 @@ import {
 } from '../../../shared/tui-agent-launch-defaults'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { CLIENT_PLATFORM } from '@/lib/new-workspace'
-import {
-  buildDirectWorkItemStartupOpts,
-  pasteDirectWorkItemDraftWhenAgentReady
-} from '@/lib/launch-work-item-direct-agent'
+import { pasteDraftWhenAgentReady } from '@/lib/agent-paste-draft'
 import { getProjectDefaultCheckout } from '@/components/sidebar/project-added-default-checkout'
 import { translate } from '@/i18n/i18n'
 import type { Project, TuiAgent, Worktree } from '../../../shared/types'
@@ -80,28 +77,39 @@ export async function launchOrchestratorForProject(project: Project): Promise<bo
     return false
   }
 
-  const activation = activateAndRevealWorktree(primary.id, {
-    sidebarRevealBehavior: 'auto',
-    ...buildDirectWorkItemStartupOpts(agent, startupPlan, 'sidebar')
+  // Why: always spawn a *fresh* tab and queue the agent command directly onto
+  // it, rather than relying on the activation startup payload. Activation only
+  // seeds a worktree's *initial* terminal, so relaunching into an already-open
+  // worktree would otherwise no-op (no new director). createTab +
+  // queueTabStartupCommand works whether or not the worktree is already active.
+  const store = useAppStore.getState()
+  const tab = store.createTab(primary.id, undefined, undefined, {
+    activate: true,
+    launchAgent: agent
   })
-  if (!activation) {
-    toast.error(
-      translate(
-        'auto.lib.orchestrator.launch.no_workspace',
-        'Could not open the Orcastrator workspace.'
-      )
-    )
-    return false
-  }
+  store.queueTabStartupCommand(tab.id, {
+    command: startupPlan.launchCommand,
+    ...(startupPlan.env ? { env: startupPlan.env } : {}),
+    ...(startupPlan.startupCommandDelivery
+      ? { startupCommandDelivery: startupPlan.startupCommandDelivery }
+      : {}),
+    initialAgentStatus: { agent, prompt: ORCASTRATE_PROMPT }
+  })
+  activateAndRevealWorktree(primary.id, { sidebarRevealBehavior: 'auto' })
 
-  if (activation.primaryTabId) {
-    void pasteDirectWorkItemDraftWhenAgentReady({
-      primaryTabId: activation.primaryTabId,
-      startupPlan,
-      content: ORCASTRATE_PROMPT,
-      submit: true,
-      forcePaste: true
-    })
-  }
+  // Why: the command runs when the PTY mounts; deliver /orcastrate once the
+  // agent's TUI is accepting input (bracketed paste + submit). Background so
+  // the click doesn't block on agent boot. Generous timeout: a cold agent boot
+  // (model load + first-run banners, slower still in dev) can exceed the
+  // default window, which previously dropped the prompt with a "took too long"
+  // toast.
+  void pasteDraftWhenAgentReady({
+    tabId: tab.id,
+    content: ORCASTRATE_PROMPT,
+    agent,
+    submit: true,
+    forcePaste: true,
+    timeoutMs: 90_000
+  })
   return true
 }
