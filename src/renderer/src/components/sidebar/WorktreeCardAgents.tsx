@@ -66,7 +66,7 @@ const WorktreeCardAgents = React.memo(function WorktreeCardAgents({
   // section, never as an agent row under its project's worktree. Exclude its
   // agent tab here so the worktree card doesn't double-list it.
   const agents = useMemo(() => {
-    if (orchestrators.length === 0) {
+    if (!orchestrators || orchestrators.length === 0) {
       return allAgents
     }
     const orchestratorTabIds = new Set(orchestrators.map((entry) => entry.tabId))
