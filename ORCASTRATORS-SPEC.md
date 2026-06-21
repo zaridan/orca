@@ -119,6 +119,20 @@ The hard part — how `+` actually spawns a coordinator in a repo's existing **p
 
 ## v2 build plan (the director rearchitect)
 
+> **Status — BUILT (on `feat/orcastrators-sidebar`, behind `experimentalOrchestrators`).** All steps below are implemented, unit-tested (`orchestrators.test.ts`, 7 tests), and live-verified except where noted:
+> - ✅ **Experimental flag + Settings toggle** — verified.
+> - ✅ **Launch** — verified: spawns a director and `/orcastrate` auto-runs (paste timeout raised to 90s for cold boots).
+> - ✅ **Registry + navigator** — verified: directors listed in ORCASTRATORS, active entry highlighted with the worktree card's exact active surface (shared `.orcastrator-active-surface` CSS rule), status via shared `AgentStateDot`.
+> - ✅ **Dedicated worktree (C)** — verified: director runs in its *own* worktree (`createWorktree`, skip-setup), **hidden from Projects** via the registry filter in `WorktreeList`.
+> - ✅ **Reattach (persistence)** — *code-complete + unit-tested; pending live verification.* On load, `reattachOrchestrators` detects director worktrees by the `ORCASTRATOR_DISPLAY_PREFIX` displayName marker and rebuilds the in-memory registry, so directors survive a reload.
+> - ✅ **Close + cleanup** — *code-complete + unit-tested; pending live verification.* X-on-hover → `closeOrchestrator` tears down the director's worktree (`removeWorktree`, force) and drops the registry entry.
+>
+> **Design note:** the director runs in a dedicated worktree (not the primary checkout) — the cleaner of the two run-models, decided mid-build because sharing `main` kept coupling the director to the project's worktree. Write philosophy stays disposition-based (in the coordinator skill), not a permission sandbox.
+>
+> **Known follow-ups:** if `buildAgentStartupPlan` returns null (agent unresolvable) the worktree is created without an agent; multi-director-per-project works but isn't yet stress-tested live.
+
+The original ordered plan (now implemented) follows.
+
 Concrete, ordered steps to take the current Phase-1 launch → the v2 director model. Sequenced low-risk first.
 
 1. **Launch robustness (carries into v2).** Current `orchestrator-launch.ts` relies on `activateAndRevealWorktree({ startup })`, which **no-ops when the worktree is already active** (relaunch spawns nothing) and whose paste loses to the first-run trust gate. Fix: explicitly `createTab(worktreeId, undefined, undefined, { activate: true, launchAgent })` to force a fresh tab, deliver the startup command to *that* tab, and make the prompt paste **wait through** the trust gate (retry/extend `pasteDraftWhenAgentReady` timeout, or detect the trust prompt and answer/raise the budget). Verify: relaunch into an open worktree spawns a fresh director and `/orcastrate` lands on a trusted folder.
