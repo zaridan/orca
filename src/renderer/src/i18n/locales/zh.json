@@ -4248,7 +4248,8 @@
           "title": "Orcastrators",
           "new": "New Orcastrator",
           "pick": "Launch an Orcastrator in…",
-          "empty": "No projects yet"
+          "empty": "No projects yet",
+          "close": "Close Orcastrator"
         }
       },
       "shared": {
