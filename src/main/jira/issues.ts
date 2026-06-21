@@ -68,7 +68,9 @@ function clampLimit(limit: number | undefined, fallback = 30): number {
   return Math.min(Math.max(1, Number.isFinite(limit) ? Number(limit) : fallback), 100)
 }
 
-function shouldThrowAuthError(selection: JiraSiteSelection | null | undefined): boolean {
+function shouldSurfaceSiteFailure(selection: JiraSiteSelection | null | undefined): boolean {
+  // A specific-site selection propagates failures so the UI can show a real
+  // error; an 'all' fan-out stays resilient so one bad site can't blank the rest.
   return selection !== 'all'
 }
 
@@ -345,6 +347,7 @@ export async function searchIssues(
     return []
   }
   const safeLimit = clampLimit(limit)
+  const failures: unknown[] = []
   const results = await Promise.all(
     entries.map(async (entry) => {
       await acquire()
@@ -353,18 +356,23 @@ export async function searchIssues(
       } catch (error) {
         if (isAuthError(error)) {
           clearToken(entry.site.id)
-          if (shouldThrowAuthError(siteId)) {
-            throw error
-          }
-        } else {
-          console.warn('[jira] searchIssues failed:', error)
         }
-        return []
+        if (shouldSurfaceSiteFailure(siteId)) {
+          throw error
+        }
+        console.warn('[jira] searchIssues failed:', error)
+        failures.push(error)
+        return [] as JiraIssue[]
       } finally {
         release()
       }
     })
   )
+  // 'all' fan-out: only surface an error when every connected site failed, so a
+  // partial success (or a genuinely empty result) is not reported as an error.
+  if (failures.length === entries.length) {
+    throw failures[0]
+  }
   return entries.length === 1
     ? results.flat().slice(0, safeLimit)
     : sortAndLimitIssues(results.flat(), safeLimit)
@@ -388,7 +396,7 @@ export async function getIssue(
     } catch (error) {
       if (isAuthError(error)) {
         clearToken(entry.site.id)
-        if (shouldThrowAuthError(siteId)) {
+        if (shouldSurfaceSiteFailure(siteId)) {
           throw error
         }
       } else {
@@ -590,7 +598,7 @@ export async function listProjects(siteId?: JiraSiteSelection | null): Promise<J
       } catch (error) {
         if (isAuthError(error)) {
           clearToken(entry.site.id)
-          if (shouldThrowAuthError(siteId)) {
+          if (shouldSurfaceSiteFailure(siteId)) {
             throw error
           }
         } else {

@@ -391,14 +391,16 @@ describe('createJiraSlice credential errors', () => {
     })
   })
 
-  it('keeps Jira connected when an issue read hits endpoint-level forbidden access', async () => {
+  it('surfaces endpoint-level forbidden errors without disconnecting Jira', async () => {
     const store = createTestStore()
     store.setState({
       jiraStatus: { connected: true, viewer: null, selectedSiteId: 'site-1' }
     })
     jiraListIssues.mockRejectedValueOnce(new Error('Forbidden'))
 
-    await expect(store.getState().listJiraIssues('assigned', 30)).resolves.toEqual([])
+    // A non-auth failure must reject so the Tasks panel can show a real error
+    // instead of a misleading empty list, while keeping the session connected.
+    await expect(store.getState().listJiraIssues('assigned', 30)).rejects.toThrow('Forbidden')
 
     expect(store.getState().jiraStatus.connected).toBe(true)
   })
