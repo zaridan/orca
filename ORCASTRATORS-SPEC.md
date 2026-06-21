@@ -10,6 +10,22 @@ This is a **native packaging layer over capability that already exists** (Orca's
 
 ---
 
+## Revised model (v2 — the Orcastrator is a *director*)
+
+Design feedback from the working session reframed the Orcastrator: it is **not a worktree agent**, it is a persistent **director** that lives above the repo.
+
+**Decisions (locked):**
+
+- **Lives in the ORCASTRATORS section.** Once launched, an Orcastrator is a persistent entry in the ORCASTRATORS sidebar section — **not** shown as an agent under Projects. No worktree/branch is displayed for it (irrelevant to a director).
+- **Run model:** runs in the repo's **primary checkout** (so it loads `CLAUDE.md` and can call the `orca` CLI), but is **display-decoupled** — rendered in ORCASTRATORS, hidden from the project's worktree list.
+- **Write philosophy — disposition, not a sandbox.** The Orcastrator is the ultimate responsible party, so it is **not** hard write-blocked (that could leave it stuck and could break the `orca` commands it relies on). Instead it has **full tools** with a **strong disposition to delegate**: it plans, spins up worktrees/worker agents, runs adversarial reviews (incl. other LLMs), and **decides when work is "done"** — and only writes repo code as a deliberate last resort. Enforced in the coordinator **skill/prompt**, not via per-agent permissions.
+- **Persistence:** an open Orcastrator **survives an Orca restart** and reattaches its session.
+- **Multiplicity:** **several Orcastrators per project** are allowed (multi-coordinator isolation rules in `orcastrate-coordinator.md` keep them from colliding).
+
+**What this changes vs. Phase 1 (current branch):** Phase 1 opens the coordinator as a tab *in the primary worktree*, so it appears under Projects like a normal agent. v2 requires (a) a persistent Orcastrator registry (survives restart), (b) display-decoupling (show in ORCASTRATORS, hide from the worktree list), and (c) a robust launch that always spawns a fresh director session. The director *behavior* (delegate / decide-done / adversarial review) lives in the skill, not the UI.
+
+---
+
 ## Why
 
 Today an Orcastrator is a manual ritual: open a Claude Code chat in a repo's base workspace → type `/orcastrate` → brief it. It works (it plans, spins up worktrees + worker agents, and they appear in the sidebar), but:
@@ -100,6 +116,24 @@ The hard part — how `+` actually spawns a coordinator in a repo's existing **p
 **Two args still to nail before writing the helper** (copy from the composer submit path in `useComposerState.ts` ~2866–3102): the exact `buildAgentStartupPlan` argument set (`cmdOverrides`, `agentArgs`, `agentEnv`, `platform`) and how its output maps onto the `activateAndRevealWorktree(worktreeId, { startup })` payload. Everything else above is confirmed.
 
 **Do NOT use** `launchWorkItemDirect` — it creates a *new* worktree from an issue/PR; the Orcastrator runs in the *existing* primary.
+
+## v2 build plan (the director rearchitect)
+
+Concrete, ordered steps to take the current Phase-1 launch → the v2 director model. Sequenced low-risk first.
+
+1. **Launch robustness (carries into v2).** Current `orchestrator-launch.ts` relies on `activateAndRevealWorktree({ startup })`, which **no-ops when the worktree is already active** (relaunch spawns nothing) and whose paste loses to the first-run trust gate. Fix: explicitly `createTab(worktreeId, undefined, undefined, { activate: true, launchAgent })` to force a fresh tab, deliver the startup command to *that* tab, and make the prompt paste **wait through** the trust gate (retry/extend `pasteDraftWhenAgentReady` timeout, or detect the trust prompt and answer/raise the budget). Verify: relaunch into an open worktree spawns a fresh director and `/orcastrate` lands on a trusted folder.
+
+2. **Orcastrator registry (state).** New store slice: `orchestrators: { id, projectId, projectName, agentTabId, worktreeId, launchedAt, status }[]`. `launchOrchestratorForProject` records an entry. The ORCASTRATORS sidebar section renders **registry entries** (clickable → focus that tab), not just the `+`. Status mirrors the agent's idle/working state via the existing agent-status store.
+
+3. **Persistence + reattach (locked: survive restart).** Persist the registry through Orca's session writer (same path as other persisted slices — see `createSessionWriteSubscriber` in `App.tsx`). On startup, restore entries and re-bind each to its still-living agent tab (Orca already retains agent sessions — see `RetainedAgentsSyncGate`); drop entries whose tab is gone.
+
+4. **Display-decoupling (the hard UI bit).** The director runs in the primary worktree but must **not** appear under Projects. Approaches, in preference order: (a) tag the agent tab as an Orcastrator and **filter it out** of `WorktreeList` agent rendering by tab id; (b) if filtering proves too invasive, run the director in a dedicated hidden/virtual worktree. Render it **only** in the ORCASTRATORS section with no worktree/branch shown.
+
+5. **Director behavior (DONE — in the skill, not the UI).** `~/.claude/orcastrate-coordinator.md` now carries "The director's role": delegate by default, decide "done", run adversarial reviews, write only as a last resort. No per-agent permission wiring needed.
+
+6. **Multiplicity (locked: several per project).** Registry already supports N entries per `projectId`; the isolation rules in the coordinator spec keep concurrent directors from colliding on orchestration state.
+
+**Risk note:** steps 2–4 touch Orca-internal store/persistence/sidebar-rendering that isn't runtime-verified yet — build behind the existing `experimentalOrchestrators` flag and verify each in the dev build before committing, so `main`/the branch never breaks.
 
 ## Related Orca issues
 
