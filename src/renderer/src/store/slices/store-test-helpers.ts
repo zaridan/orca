@@ -40,6 +40,7 @@ import { createWorkspaceCleanupSlice } from './workspace-cleanup'
 import { createRuntimeStatusSlice } from './runtime-status'
 import { createPullRequestGenerationSlice } from './pull-request-generation'
 import { createCommitMessageGenerationSlice } from './commit-message-generation'
+import { createOrchestratorsSlice } from './orchestrators'
 import { createPinnedTabCloseConfirmSlice } from './pinned-tab-close-confirm'
 import { translate } from '@/i18n/i18n'
 
@@ -85,6 +86,7 @@ export function createTestStore() {
     ...createRuntimeStatusSlice(...a),
     ...createPullRequestGenerationSlice(...a),
     ...createCommitMessageGenerationSlice(...a),
+    ...createOrchestratorsSlice(...a),
     ...createPinnedTabCloseConfirmSlice(...a)
   }))
 }
