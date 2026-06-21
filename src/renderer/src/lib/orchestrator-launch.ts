@@ -9,6 +9,7 @@ import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { CLIENT_PLATFORM } from '@/lib/new-workspace'
 import { buildDirectWorkItemStartupOpts } from '@/lib/launch-work-item-direct-agent'
 import { pasteDraftWhenAgentReady } from '@/lib/agent-paste-draft'
+import { ORCASTRATOR_DISPLAY_PREFIX } from '@/store/slices/orchestrators'
 import { translate } from '@/i18n/i18n'
 import type { Project, TuiAgent } from '../../../shared/types'
 
@@ -63,7 +64,7 @@ export async function launchOrchestratorForProject(project: Project): Promise<bo
       'skip',
       undefined,
       undefined,
-      `Orcastrator · ${project.displayName}`
+      `${ORCASTRATOR_DISPLAY_PREFIX}${project.displayName}`
     )
     worktreeId = result.worktree.id
     setup = result.setup
