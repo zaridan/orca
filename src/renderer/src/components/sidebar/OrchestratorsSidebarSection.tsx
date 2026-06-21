@@ -3,15 +3,7 @@ import { Network, Plus, X } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
 import { AgentStateDot, type AgentDotState } from '@/components/AgentStateDot'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import { launchOrchestratorForProject } from '@/lib/orchestrator-launch'
 import { translate } from '@/i18n/i18n'
 import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
 
@@ -43,7 +35,7 @@ function deriveDirectorDotState(
 // Reuses the app's nav-item styling (rounded accent highlight) and AgentStateDot.
 export function OrchestratorsSidebarSection(): React.JSX.Element | null {
   const enabled = useAppStore((s) => s.settings?.experimentalOrchestrators ?? false)
-  const projects = useAppStore((s) => s.projects)
+  const openModal = useAppStore((s) => s.openModal)
   const orchestrators = useAppStore((s) => s.orchestrators)
   const worktreesByRepo = useAppStore((s) => s.worktreesByRepo)
   const tabsByWorktree = useAppStore((s) => s.tabsByWorktree)
@@ -84,47 +76,17 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
         <span className="text-[11px] font-semibold uppercase tracking-wide text-worktree-sidebar-foreground/40">
           {translate('auto.components.sidebar.OrchestratorsSidebarSection.title', 'Orcastrators')}
         </span>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label={translate(
-                'auto.components.sidebar.OrchestratorsSidebarSection.new',
-                'New Orcastrator'
-              )}
-              className="rounded p-0.5 text-worktree-sidebar-foreground/40 transition-colors hover:bg-worktree-sidebar-foreground/8 hover:text-worktree-sidebar-foreground/70"
-            >
-              <Plus className="size-3.5" strokeWidth={2} />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-52">
-            <DropdownMenuLabel>
-              {translate(
-                'auto.components.sidebar.OrchestratorsSidebarSection.pick',
-                'Launch an Orcastrator in…'
-              )}
-            </DropdownMenuLabel>
-            {projects.length === 0 ? (
-              <DropdownMenuItem disabled>
-                {translate(
-                  'auto.components.sidebar.OrchestratorsSidebarSection.empty',
-                  'No projects yet'
-                )}
-              </DropdownMenuItem>
-            ) : (
-              projects.map((project) => (
-                <DropdownMenuItem
-                  key={project.id}
-                  onSelect={() => {
-                    void launchOrchestratorForProject(project)
-                  }}
-                >
-                  {project.displayName}
-                </DropdownMenuItem>
-              ))
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <button
+          type="button"
+          onClick={() => openModal('orchestrator-launch')}
+          aria-label={translate(
+            'auto.components.sidebar.OrchestratorsSidebarSection.new',
+            'New Orcastrator'
+          )}
+          className="rounded p-0.5 text-worktree-sidebar-foreground/40 transition-colors hover:bg-worktree-sidebar-foreground/8 hover:text-worktree-sidebar-foreground/70"
+        >
+          <Plus className="size-3.5" strokeWidth={2} />
+        </button>
       </div>
       {live.map((entry) => {
         const worktreeTabIds = (tabsByWorktree[entry.worktreeId] ?? []).map((tab) => tab.id)
