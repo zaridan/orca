@@ -87,6 +87,14 @@ export async function launchOrchestratorForProject(project: Project): Promise<bo
     activate: true,
     launchAgent: agent
   })
+  store.registerOrchestrator({
+    id: tab.id,
+    projectId: project.id,
+    projectName: project.displayName,
+    worktreeId: primary.id,
+    tabId: tab.id,
+    launchedAt: Date.now()
+  })
   store.queueTabStartupCommand(tab.id, {
     command: startupPlan.launchCommand,
     ...(startupPlan.env ? { env: startupPlan.env } : {}),

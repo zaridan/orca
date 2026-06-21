@@ -32,6 +32,7 @@ import { createWorkspaceCleanupSlice } from './slices/workspace-cleanup'
 import { createRuntimeStatusSlice } from './slices/runtime-status'
 import { createPullRequestGenerationSlice } from './slices/pull-request-generation'
 import { createCommitMessageGenerationSlice } from './slices/commit-message-generation'
+import { createOrchestratorsSlice } from './slices/orchestrators'
 import { createPinnedTabCloseConfirmSlice } from './slices/pinned-tab-close-confirm'
 import { e2eConfig } from '@/lib/e2e-config'
 import { registerHttpLinkStoreAccessor } from '@/lib/http-link-routing'
@@ -69,6 +70,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createRuntimeStatusSlice(...a),
   ...createPullRequestGenerationSlice(...a),
   ...createCommitMessageGenerationSlice(...a),
+  ...createOrchestratorsSlice(...a),
   ...createPinnedTabCloseConfirmSlice(...a)
 }))
 
