@@ -28,14 +28,27 @@ function resolveCoordinatorAgent(defaultTuiAgent: TuiAgent | 'blank' | null | un
   return defaultTuiAgent && defaultTuiAgent !== 'blank' ? defaultTuiAgent : 'claude'
 }
 
+export type LaunchOrchestratorOptions = {
+  /** Optional human name for the director (shown in the ORCASTRATORS list). */
+  name?: string
+  /** Coordinator agent override; defaults to the user's default agent. */
+  agent?: TuiAgent
+  /** Initial task the director should plan — seeded after `/orcastrate` so it
+   *  starts planning instead of asking "what's the task?". */
+  prompt?: string
+}
+
 /**
  * Launch an Orcastrator (director) for a project. The director is a first-class
  * entity, not a worktree agent: it runs in its *own* dedicated worktree (hidden
  * from Projects, shown only in the ORCASTRATORS section) so it never couples to
  * the project's primary checkout. Creates the worktree, launches the coordinator
- * agent in it, seeds `/orcastrate`, and registers it.
+ * agent in it, seeds `/orcastrate` (+ the task), and registers it.
  */
-export async function launchOrchestratorForProject(project: Project): Promise<boolean> {
+export async function launchOrchestratorForProject(
+  project: Project,
+  options?: LaunchOrchestratorOptions
+): Promise<boolean> {
   const repoId = project.sourceRepoIds[0]
   if (!repoId) {
     toast.error(
@@ -50,7 +63,10 @@ export async function launchOrchestratorForProject(project: Project): Promise<bo
   const store = useAppStore.getState()
   const repo = store.repos.find((entry) => entry.id === repoId)
   const settings = store.settings
-  const agent = resolveCoordinatorAgent(settings?.defaultTuiAgent)
+  const agent = options?.agent ?? resolveCoordinatorAgent(settings?.defaultTuiAgent)
+  const label = options?.name?.trim() || project.displayName
+  const task = options?.prompt?.trim()
+  const promptContent = task ? `${ORCASTRATE_PROMPT} ${task}` : ORCASTRATE_PROMPT
 
   let worktreeId: string
   let setup: Awaited<ReturnType<typeof store.createWorktree>>['setup']
@@ -59,17 +75,24 @@ export async function launchOrchestratorForProject(project: Project): Promise<bo
     // not need the repo's setup scripts run in its checkout.
     const result = await store.createWorktree(
       repoId,
-      `orcastrator-${project.displayName}`,
+      `orcastrator-${label}`,
       repo?.worktreeBaseRef,
       'skip',
       undefined,
       undefined,
-      `${ORCASTRATOR_DISPLAY_PREFIX}${project.displayName}`
+      `${ORCASTRATOR_DISPLAY_PREFIX}${label}`
     )
     worktreeId = result.worktree.id
     setup = result.setup
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'Failed to create the Orcastrator.')
+    toast.error(
+      error instanceof Error
+        ? error.message
+        : translate(
+            'auto.lib.orchestrator.launch.create_failed',
+            'Failed to create the Orcastrator.'
+          )
+    )
     return false
   }
 
@@ -98,7 +121,7 @@ export async function launchOrchestratorForProject(project: Project): Promise<bo
   store.registerOrchestrator({
     id: worktreeId,
     projectId: project.id,
-    projectName: project.displayName,
+    projectName: label,
     worktreeId,
     tabId: activation.primaryTabId ?? '',
     launchedAt: Date.now()
@@ -110,7 +133,7 @@ export async function launchOrchestratorForProject(project: Project): Promise<bo
   if (activation.primaryTabId) {
     void pasteDraftWhenAgentReady({
       tabId: activation.primaryTabId,
-      content: ORCASTRATE_PROMPT,
+      content: promptContent,
       agent,
       submit: true,
       forcePaste: true,
