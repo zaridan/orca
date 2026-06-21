@@ -88,6 +88,19 @@ Multiple coordinators share one Orca orchestration DB, so without discipline the
   - `src/renderer/src/components/settings/ExperimentalPane.tsx` + `GlobalSettings` (`src/shared/types.ts`) — the experimental flag
 - **Upstream caveat:** orchestration is the maintainers' **active P1 epic** ([#5700](https://github.com/stablyai/orca/issues/5700) / [#5707](https://github.com/stablyai/orca/issues/5707)); the orchestration UI is thin but tracked ([#4374](https://github.com/stablyai/orca/issues/4374)), and multi-coordinator collision is a known bug ([#4389](https://github.com/stablyai/orca/issues/4389)). A from-scratch UI PR risks colliding with internal work — so **prototype for ourselves first**; upstreaming is a separate conversation with maintainers (or contribute to the existing assigned issues instead).
 
+## Launch mechanism (verified against the codebase)
+
+The hard part — how `+` actually spawns a coordinator in a repo's existing **primary** worktree with `/orcastrate` seeded. Traced and confirmed real (renderer-side):
+
+1. **Repo → primary worktree:** `getProjectDefaultCheckout(state.worktreesByRepo[repoId] ?? [])` → the worktree with `isMainWorktree === true` (`src/renderer/src/components/sidebar/project-added-default-checkout.ts`). A `Project` (`s.projects`) maps to repos via `Project.sourceRepoIds`.
+2. **Agent type:** `TuiAgent` literal for Claude Code is `'claude'` (`src/shared/types.ts:2208`). Prefer `settings.defaultTuiAgent` when set (≠ `'blank'`), else `'claude'`.
+3. **Open the tab:** `state.createTab(worktreeId, undefined, undefined, { activate: true, launchAgent: agent })` → returns a `TerminalTab` with `.id`. NOTE: `launchAgent` is metadata only — it does **not** start the agent process.
+4. **Start the agent + seed prompt:** the agent *command* is delivered via the worktree-activation **startup payload**, and the prompt via `ensureAgentStartupInTerminal({ worktreeId, primaryTabId: tab.id, startup })` (`src/renderer/src/lib/new-workspace.ts:237`), which polls for the PTY then bracketed-pastes `startup.draftPrompt` via `pasteDraftWhenAgentReady` (`src/renderer/src/lib/agent-paste-draft.ts:72`). Both fed by `buildAgentStartupPlan({ agent, prompt: '/orcastrate', … })` (`src/renderer/src/lib/tui-agent-startup.ts`).
+
+**Two args still to nail before writing the helper** (copy from the composer submit path in `useComposerState.ts` ~2866–3102): the exact `buildAgentStartupPlan` argument set (`cmdOverrides`, `agentArgs`, `agentEnv`, `platform`) and how its output maps onto the `activateAndRevealWorktree(worktreeId, { startup })` payload. Everything else above is confirmed.
+
+**Do NOT use** `launchWorkItemDirect` — it creates a *new* worktree from an issue/PR; the Orcastrator runs in the *existing* primary.
+
 ## Related Orca issues
 
 - [#5700](https://github.com/stablyai/orca/issues/5700) — Agent Control Surface Parity (epic)
