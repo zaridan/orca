@@ -7,14 +7,18 @@ import {
 } from '../../../shared/tui-agent-launch-defaults'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { CLIENT_PLATFORM } from '@/lib/new-workspace'
+import { buildDirectWorkItemStartupOpts } from '@/lib/launch-work-item-direct-agent'
 import { pasteDraftWhenAgentReady } from '@/lib/agent-paste-draft'
-import { getProjectDefaultCheckout } from '@/components/sidebar/project-added-default-checkout'
 import { translate } from '@/i18n/i18n'
-import type { Project, TuiAgent, Worktree } from '../../../shared/types'
+import type { Project, TuiAgent } from '../../../shared/types'
 
 // Why: the coordinator session is a normal Claude Code agent that starts by
 // invoking the orchestrate skill, exactly as a user would type it by hand.
 const ORCASTRATE_PROMPT = '/orcastrate'
+
+// Why: a cold agent boot (model load + first-run banners, slower still in dev)
+// can exceed the default paste window; give it room so the prompt lands.
+const ORCASTRATE_PASTE_TIMEOUT_MS = 90_000
 
 // Why: an Orcastrator is the coordinator, not a worker — default it to Claude
 // Code unless the user has chosen a different default agent (a `'blank'`
@@ -23,41 +27,51 @@ function resolveCoordinatorAgent(defaultTuiAgent: TuiAgent | 'blank' | null | un
   return defaultTuiAgent && defaultTuiAgent !== 'blank' ? defaultTuiAgent : 'claude'
 }
 
-// Why: a coordinator runs in the repo's existing primary checkout (it creates
-// worktrees for workers — it does not get one itself). Resolve the project's
-// primary worktree across its source repos.
-function findPrimaryWorktree(project: Project): Worktree | null {
-  const byRepo = useAppStore.getState().worktreesByRepo
-  for (const repoId of project.sourceRepoIds) {
-    const primary = getProjectDefaultCheckout(byRepo[repoId] ?? [])
-    if (primary) {
-      return primary
-    }
-  }
-  return null
-}
-
 /**
- * Launch an Orcastrator (coordinator agent) in a project's primary worktree and
- * seed it with `/orcastrate`. Mirrors the verified "Use" launch path: build the
- * agent startup plan, activate the worktree with that startup command, then
- * paste-and-submit the prompt once the agent's TUI is ready. Best-effort: the
- * prompt paste runs in the background so the click doesn't block on agent boot.
+ * Launch an Orcastrator (director) for a project. The director is a first-class
+ * entity, not a worktree agent: it runs in its *own* dedicated worktree (hidden
+ * from Projects, shown only in the ORCASTRATORS section) so it never couples to
+ * the project's primary checkout. Creates the worktree, launches the coordinator
+ * agent in it, seeds `/orcastrate`, and registers it.
  */
 export async function launchOrchestratorForProject(project: Project): Promise<boolean> {
-  const primary = findPrimaryWorktree(project)
-  if (!primary) {
+  const repoId = project.sourceRepoIds[0]
+  if (!repoId) {
     toast.error(
       translate(
-        'auto.lib.orchestrator.launch.no_checkout',
-        'No checkout found for this project yet — open it once, then launch an Orcastrator.'
+        'auto.lib.orchestrator.launch.no_repo',
+        'This project has no repo to launch an Orcastrator in.'
       )
     )
     return false
   }
 
-  const settings = useAppStore.getState().settings
+  const store = useAppStore.getState()
+  const repo = store.repos.find((entry) => entry.id === repoId)
+  const settings = store.settings
   const agent = resolveCoordinatorAgent(settings?.defaultTuiAgent)
+
+  let worktreeId: string
+  let setup: Awaited<ReturnType<typeof store.createWorktree>>['setup']
+  try {
+    // Why: 'skip' setup — a director coordinates, it doesn't build, so it does
+    // not need the repo's setup scripts run in its checkout.
+    const result = await store.createWorktree(
+      repoId,
+      `orcastrator-${project.displayName}`,
+      repo?.worktreeBaseRef,
+      'skip',
+      undefined,
+      undefined,
+      `Orcastrator · ${project.displayName}`
+    )
+    worktreeId = result.worktree.id
+    setup = result.setup
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : 'Failed to create the Orcastrator.')
+    return false
+  }
+
   const startupPlan = buildAgentStartupPlan({
     agent,
     prompt: '',
@@ -67,57 +81,40 @@ export async function launchOrchestratorForProject(project: Project): Promise<bo
     agentEnv: resolveTuiAgentLaunchEnv(agent, settings?.agentDefaultEnv),
     allowEmptyPromptLaunch: true
   })
-  if (!startupPlan) {
+
+  const activation = activateAndRevealWorktree(worktreeId, {
+    sidebarRevealBehavior: 'auto',
+    setup,
+    ...buildDirectWorkItemStartupOpts(agent, startupPlan, 'sidebar')
+  })
+  if (!activation) {
     toast.error(
-      translate(
-        'auto.lib.orchestrator.launch.no_command',
-        'Could not build the Orcastrator launch command for this agent.'
-      )
+      translate('auto.lib.orchestrator.launch.no_workspace', 'Could not open the Orcastrator.')
     )
     return false
   }
 
-  // Why: always spawn a *fresh* tab and queue the agent command directly onto
-  // it, rather than relying on the activation startup payload. Activation only
-  // seeds a worktree's *initial* terminal, so relaunching into an already-open
-  // worktree would otherwise no-op (no new director). createTab +
-  // queueTabStartupCommand works whether or not the worktree is already active.
-  const store = useAppStore.getState()
-  const tab = store.createTab(primary.id, undefined, undefined, {
-    activate: true,
-    launchAgent: agent
-  })
   store.registerOrchestrator({
-    id: tab.id,
+    id: worktreeId,
     projectId: project.id,
     projectName: project.displayName,
-    worktreeId: primary.id,
-    tabId: tab.id,
+    worktreeId,
+    tabId: activation.primaryTabId ?? '',
     launchedAt: Date.now()
   })
-  store.queueTabStartupCommand(tab.id, {
-    command: startupPlan.launchCommand,
-    ...(startupPlan.env ? { env: startupPlan.env } : {}),
-    ...(startupPlan.startupCommandDelivery
-      ? { startupCommandDelivery: startupPlan.startupCommandDelivery }
-      : {}),
-    initialAgentStatus: { agent, prompt: ORCASTRATE_PROMPT }
-  })
-  activateAndRevealWorktree(primary.id, { sidebarRevealBehavior: 'auto' })
 
-  // Why: the command runs when the PTY mounts; deliver /orcastrate once the
-  // agent's TUI is accepting input (bracketed paste + submit). Background so
-  // the click doesn't block on agent boot. Generous timeout: a cold agent boot
-  // (model load + first-run banners, slower still in dev) can exceed the
-  // default window, which previously dropped the prompt with a "took too long"
-  // toast.
-  void pasteDraftWhenAgentReady({
-    tabId: tab.id,
-    content: ORCASTRATE_PROMPT,
-    agent,
-    submit: true,
-    forcePaste: true,
-    timeoutMs: 90_000
-  })
+  // Why: the agent command runs when the PTY mounts; deliver /orcastrate once
+  // the TUI is accepting input. Background so the click doesn't block on boot,
+  // with a generous timeout since cold boots are slow.
+  if (activation.primaryTabId) {
+    void pasteDraftWhenAgentReady({
+      tabId: activation.primaryTabId,
+      content: ORCASTRATE_PROMPT,
+      agent,
+      submit: true,
+      forcePaste: true,
+      timeoutMs: ORCASTRATE_PASTE_TIMEOUT_MS
+    })
+  }
   return true
 }
