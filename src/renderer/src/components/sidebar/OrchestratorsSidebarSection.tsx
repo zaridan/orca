@@ -68,7 +68,7 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
   const liveWorktreeIds = useMemo(
     () =>
       new Set(
-        Object.values(worktreesByRepo)
+        Object.values(worktreesByRepo ?? {})
           .flat()
           .map((w) => w.id)
       ),
@@ -77,7 +77,7 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
   if (!enabled) {
     return null
   }
-  const live = orchestrators.filter((entry) => liveWorktreeIds.has(entry.worktreeId))
+  const live = (orchestrators ?? []).filter((entry) => liveWorktreeIds.has(entry.worktreeId))
   return (
     <div className="flex flex-col gap-0.5 px-2 pb-1">
       <div className="flex items-center justify-between px-2 pt-2 pb-0.5">
