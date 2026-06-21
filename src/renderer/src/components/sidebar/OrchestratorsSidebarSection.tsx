@@ -1,7 +1,7 @@
-import { Loader2, Network, Plus } from 'lucide-react'
+import { Network, Plus } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
-import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
+import { AgentStateDot, type AgentDotState } from '@/components/AgentStateDot'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,16 +12,16 @@ import {
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { launchOrchestratorForProject } from '@/lib/orchestrator-launch'
 import { translate } from '@/i18n/i18n'
-
-type DirectorState = 'working' | 'attention' | 'ready'
+import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
 
 // Why: the director's live activity belongs on its Orcastrator entry, not on
 // the worktree it runs in. Derive its state from the freshest agent-status
-// entry for its tab (paneKey is `${tabId}:${leafId}`).
-function deriveDirectorState(
+// entry for its tab (paneKey is `${tabId}:${leafId}`) and render it with the
+// app's shared AgentStateDot so it matches every other agent indicator.
+function deriveDirectorDotState(
   tabId: string,
   agentStatusByPaneKey: Record<string, AgentStatusEntry>
-): DirectorState {
+): AgentDotState {
   let latest: AgentStatusEntry | null = null
   const prefix = `${tabId}:`
   for (const [paneKey, entry] of Object.entries(agentStatusByPaneKey)) {
@@ -32,26 +32,22 @@ function deriveDirectorState(
       latest = entry
     }
   }
-  if (latest?.state === 'working') {
-    return 'working'
-  }
-  if (latest?.state === 'blocked' || latest?.state === 'waiting') {
-    return 'attention'
-  }
-  return 'ready'
+  return latest?.state ?? 'idle'
 }
 
 // Why: experimental "Orcastrators" sidebar section. The `+` opens a project
-// picker; selecting one launches a director session in that project's primary
-// worktree (see orchestrator-launch.ts). Launched directors are listed here as
-// persistent entries — no worktree/branch shown, since that's irrelevant to a
-// director. Gated on experimentalOrchestrators.
+// picker; selecting one launches a director session for that project (see
+// orchestrator-launch.ts). Launched directors are listed here as persistent
+// nav entries — no worktree/branch shown — and the list acts as the navigator.
+// Reuses the app's nav-item styling (rounded accent highlight) and AgentStateDot.
 export function OrchestratorsSidebarSection(): React.JSX.Element | null {
   const enabled = useAppStore((s) => s.settings?.experimentalOrchestrators ?? false)
   const projects = useAppStore((s) => s.projects)
   const orchestrators = useAppStore((s) => s.orchestrators)
   const tabsByWorktree = useAppStore((s) => s.tabsByWorktree)
   const agentStatusByPaneKey = useAppStore((s) => s.agentStatusByPaneKey)
+  const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
+  const activeTabIdByWorktree = useAppStore((s) => s.activeTabIdByWorktree)
   const setActiveTab = useAppStore((s) => s.setActiveTab)
   if (!enabled) {
     return null
@@ -62,8 +58,8 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
     tabsByWorktree[entry.worktreeId]?.some((tab) => tab.id === entry.tabId)
   )
   return (
-    <div className="pb-1">
-      <div className="flex items-center justify-between px-4 pt-3 pb-1">
+    <div className="flex flex-col gap-0.5 px-2 pb-1">
+      <div className="flex items-center justify-between px-2 pt-2 pb-0.5">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-worktree-sidebar-foreground/40">
           {translate('auto.components.sidebar.OrchestratorsSidebarSection.title', 'Orcastrators')}
         </span>
@@ -110,27 +106,30 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
         </DropdownMenu>
       </div>
       {live.map((entry) => {
-        const state = deriveDirectorState(entry.tabId, agentStatusByPaneKey)
+        const dotState = deriveDirectorDotState(entry.tabId, agentStatusByPaneKey)
+        // Why: the ORCASTRATORS list is the navigator — highlight the entry
+        // whose director tab is currently focused, using the same rounded accent
+        // highlight as the sidebar nav items.
+        const isActive =
+          activeWorktreeId === entry.worktreeId &&
+          activeTabIdByWorktree[entry.worktreeId] === entry.tabId
         return (
           <button
             key={entry.id}
             type="button"
+            aria-current={isActive ? 'page' : undefined}
             onClick={() => {
               activateAndRevealWorktree(entry.worktreeId, { sidebarRevealBehavior: 'auto' })
               setActiveTab(entry.tabId)
             }}
-            className="flex w-full items-center gap-2 px-4 py-1 text-left text-[13px] tracking-tight text-worktree-sidebar-foreground/70 transition-colors hover:bg-worktree-sidebar-foreground/8"
-          >
-            {state === 'working' ? (
-              <Loader2 className="size-3.5 shrink-0 animate-spin text-amber-500" strokeWidth={2} />
-            ) : (
-              <span
-                className={cn(
-                  'size-2 shrink-0 rounded-full',
-                  state === 'attention' ? 'bg-amber-500' : 'bg-status-success'
-                )}
-              />
+            // Why: `orcastrator-active-surface` shares the worktree card's active
+            // styling via one CSS rule (see main.css) — single source of truth.
+            className={cn(
+              'flex w-full items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left text-[13px] tracking-tight text-worktree-sidebar-foreground/80 transition-[background-color,border-color,box-shadow] duration-200',
+              isActive ? 'orcastrator-active-surface' : 'worktree-sidebar-card-hover'
             )}
+          >
+            <AgentStateDot state={dotState} size="sm" />
             <Network
               className="size-3.5 shrink-0 text-worktree-sidebar-foreground/40"
               strokeWidth={1.75}
