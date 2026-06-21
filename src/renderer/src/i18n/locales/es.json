@@ -513,7 +513,8 @@
         "launch": {
           "no_checkout": "No checkout found for this project yet — open it once, then launch an Orcastrator.",
           "no_command": "Could not build the Orcastrator launch command for this agent.",
-          "no_workspace": "Could not open the Orcastrator workspace."
+          "no_workspace": "Could not open the Orcastrator workspace.",
+          "no_repo": "This project has no repo to launch an Orcastrator in."
         }
       }
     },
