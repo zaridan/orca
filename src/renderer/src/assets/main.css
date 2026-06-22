@@ -184,6 +184,13 @@
   --git-decoration-untracked: #007100;
   --git-decoration-copied: #007acc;
   --git-decoration-ignored: #8c8c8c;
+  /* Hosted-review (PR/MR) state badges mirror GitHub's solid pill palette for
+     provider parity — the same VS-Code-parity exception the git-decoration
+     tokens above make. White foreground is paired with each in the component. */
+  --pr-state-merged: #8250df;
+  --pr-state-open: #1a7f37;
+  --pr-state-closed: #cf222e;
+  --pr-state-draft: #6e7781;
   --git-graph-ref: #007acc;
   --git-graph-remote-ref: #b66dff;
   --git-graph-base-ref: #ea5c00;
@@ -265,6 +272,11 @@
   --git-decoration-untracked: #73c991;
   --git-decoration-copied: #73c991;
   --git-decoration-ignored: #6e6e6e;
+  /* Brighter solids for dark-theme contrast, matching GitHub's dark badges. */
+  --pr-state-merged: #a371f7;
+  --pr-state-open: #238636;
+  --pr-state-closed: #da3633;
+  --pr-state-draft: #6e7781;
   --git-graph-ref: #3794ff;
   --git-graph-remote-ref: #b66dff;
   --git-graph-base-ref: #ea5c00;

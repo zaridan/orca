@@ -54,8 +54,10 @@ export const createOrchestratorsSlice: StateCreator<AppState, [], [], Orchestrat
     set((s) => ({ orchestrators: s.orchestrators.filter((e) => e.id !== id) }))
     try {
       await get().removeWorktree(entry.worktreeId, true)
-    } catch {
-      // Worktree may already be gone; the registry entry is removed regardless.
+    } catch (error) {
+      // The registry entry is dropped regardless, but a teardown failure can leave
+      // an orphaned worktree behind — surface it instead of silently succeeding.
+      console.error(`Failed to tear down Orcastrator worktree ${entry.worktreeId}:`, error)
     }
   },
   reattachOrchestrators: () => {
@@ -70,6 +72,12 @@ export const createOrchestratorsSlice: StateCreator<AppState, [], [], Orchestrat
         ) {
           continue
         }
+        // Skip reattachment until a live tab exists for this director — a blank
+        // tabId would create an orphan entry that can't be activated from the sidebar.
+        const tabId = state.tabsByWorktree[worktree.id]?.[0]?.id
+        if (!tabId) {
+          continue
+        }
         const project = state.projects.find((p) => p.sourceRepoIds.includes(repoId))
         additions.push({
           id: worktree.id,
@@ -77,7 +85,7 @@ export const createOrchestratorsSlice: StateCreator<AppState, [], [], Orchestrat
           projectName:
             project?.displayName ?? worktree.displayName.slice(ORCASTRATOR_DISPLAY_PREFIX.length),
           worktreeId: worktree.id,
-          tabId: state.tabsByWorktree[worktree.id]?.[0]?.id ?? '',
+          tabId,
           launchedAt: Date.now()
         })
       }

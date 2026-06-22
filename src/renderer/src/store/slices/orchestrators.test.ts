@@ -94,11 +94,24 @@ describe('orchestrators slice', () => {
     store.setState({
       worktreesByRepo: { repo1: [directorWorktree('repo1::orc', 'repo1', 'P')] },
       projects: [],
-      tabsByWorktree: {}
+      tabsByWorktree: { 'repo1::orc': [tab('tabX')] }
     })
     store.getState().reattachOrchestrators()
     store.getState().reattachOrchestrators()
     expect(store.getState().orchestrators).toHaveLength(1)
+  })
+
+  it('skips reattachment for director worktrees with no live tab', () => {
+    const store = createTestStore()
+    store.setState({
+      worktreesByRepo: { repo1: [directorWorktree('repo1::orc', 'repo1', 'P')] },
+      projects: [],
+      tabsByWorktree: {}
+    })
+    // A blank tabId would create an orphan entry that can't be activated from the
+    // sidebar — reattachment must wait until a tab exists for the director.
+    store.getState().reattachOrchestrators()
+    expect(store.getState().orchestrators).toHaveLength(0)
   })
 
   it('reattach falls back to repo id + stripped name when no project matches', () => {
@@ -106,13 +119,13 @@ describe('orchestrators slice', () => {
     store.setState({
       worktreesByRepo: { repo1: [directorWorktree('repo1::orc', 'repo1', 'Orphan')] },
       projects: [],
-      tabsByWorktree: {}
+      tabsByWorktree: { 'repo1::orc': [tab('tabY')] }
     })
     store.getState().reattachOrchestrators()
     expect(store.getState().orchestrators[0]).toMatchObject({
       projectId: 'repo1',
       projectName: 'Orphan',
-      tabId: ''
+      tabId: 'tabY'
     })
   })
 

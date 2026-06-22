@@ -112,6 +112,16 @@ export async function launchOrchestratorForProject(
     ...buildDirectWorkItemStartupOpts(agent, startupPlan, 'sidebar')
   })
   if (!activation) {
+    // The worktree was created but never surfaced — tear it down so a failed
+    // launch doesn't leave an orphaned hidden director workspace behind.
+    try {
+      await store.removeWorktree(worktreeId, true)
+    } catch (error) {
+      console.error(
+        `Failed to clean up Orcastrator worktree ${worktreeId} after activation failed:`,
+        error
+      )
+    }
     toast.error(
       translate('auto.lib.orchestrator.launch.no_workspace', 'Could not open the Orcastrator.')
     )

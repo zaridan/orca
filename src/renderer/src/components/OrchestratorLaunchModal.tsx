@@ -95,13 +95,18 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
   const [agent, setAgent] = useState<TuiAgent | null>(null)
   const [prompt, setPrompt] = useState('')
 
+  // Why: seed the form only on the hidden→visible transition. Re-running on every
+  // dependency change while open would clobber the user's in-progress edits when
+  // project/default-agent state updates in the background.
+  const wasVisibleRef = useRef(false)
   useEffect(() => {
-    if (visible) {
+    if (visible && !wasVisibleRef.current) {
       setSelectedOptionId(prefilledProjectOptionId ?? firstProjectOptionId)
       setAgent(defaultTuiAgent && defaultTuiAgent !== 'blank' ? defaultTuiAgent : null)
       setName(prefillName)
       setPrompt(prefillPrompt)
     }
+    wasVisibleRef.current = visible
   }, [
     visible,
     firstProjectOptionId,
@@ -121,16 +126,20 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
       ? (projects.find((p) => p.id === selectedOption.projectId) ?? null)
       : null
 
-  const handleLaunch = (): void => {
+  const handleLaunch = async (): Promise<void> => {
     if (!project) {
       return
     }
-    void launchOrchestratorForProject(project, {
+    // Why: only close on success — a failed launch (toast surfaced inside) should
+    // keep the modal open so the user's input isn't discarded and re-entered.
+    const launched = await launchOrchestratorForProject(project, {
       name: name.trim() || undefined,
       agent: agent ?? undefined,
       prompt: prompt.trim() || undefined
     })
-    closeModal()
+    if (launched) {
+      closeModal()
+    }
   }
 
   return (
@@ -167,7 +176,7 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
           className="flex flex-col gap-4"
           onSubmit={(event) => {
             event.preventDefault()
-            handleLaunch()
+            void handleLaunch()
           }}
         >
           <div className="space-y-2">

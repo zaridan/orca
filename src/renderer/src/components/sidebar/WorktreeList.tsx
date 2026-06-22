@@ -4656,6 +4656,7 @@ const WorktreeList = React.memo(function WorktreeList({
   // Why: an Orcastrator (director) runs in its own dedicated worktree, shown
   // only in the ORCASTRATORS section — never as a project worktree here.
   const orchestrators = useAppStore((s) => s.orchestrators)
+  const orchestratorsEnabled = useAppStore((s) => s.settings?.experimentalOrchestrators ?? false)
   const detectedWorktreesByRepo = useAppStore((s) => s.detectedWorktreesByRepo)
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const currentSidebarWorktreeId = activeWorktreeId
@@ -5039,7 +5040,12 @@ const WorktreeList = React.memo(function WorktreeList({
       // filters; closing the popover naturally restores the filtered view.
       ids.push(agentSendTargetWorktreeId)
     }
-    const orchestratorWorktreeIds = new Set((orchestrators ?? []).map((entry) => entry.worktreeId))
+    // Only hide director worktrees while the feature is on. If the user disables
+    // experimentalOrchestrators after launching directors, the ORCASTRATORS
+    // section disappears — so surface those worktrees here to keep them reachable.
+    const orchestratorWorktreeIds = orchestratorsEnabled
+      ? new Set((orchestrators ?? []).map((entry) => entry.worktreeId))
+      : new Set<string>()
     return ids
       .map((id) => worktreeMap.get(id))
       .filter((w): w is Worktree => w != null && !orchestratorWorktreeIds.has(w.id))
@@ -5059,6 +5065,7 @@ const WorktreeList = React.memo(function WorktreeList({
     sortedIds,
     worktreeMap,
     worktreeLineageById,
+    orchestratorsEnabled,
     worktreesByRepo,
     orchestrators
   ])
