@@ -2722,6 +2722,12 @@ export type GlobalSettings = {
    *  configuration surface and edge cases (conflicts with existing paths,
    *  cleanup on worktree delete) are still being worked out. */
   experimentalWorktreeSymlinks: boolean
+  /** Experimental: an "Orcastrators" sidebar section for launching persistent
+   *  coordinator chats (one per repo) that run the orchestrate workflow —
+   *  planning, worktree/agent fan-out, and supervision — from a single entry
+   *  point. Opt-in while the create-flow and multi-coordinator isolation are
+   *  being worked out. */
+  experimentalOrchestrators?: boolean
 
   /** Active non-local runtime environment for client-routed RPC. `null`
    *  preserves the current local desktop behavior. */

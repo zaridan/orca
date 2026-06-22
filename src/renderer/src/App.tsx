@@ -74,6 +74,7 @@ import { OPEN_WORKSPACE_BOARD_EVENT } from './components/sidebar/useWorkspaceBoa
 import { WorkspacePortScanner } from './components/ports/WorkspacePortScanner'
 import { CrashReportDialog } from './components/crash-report/CrashReportDialog'
 import NewWorkspaceComposerModal from './components/NewWorkspaceComposerModal'
+import OrchestratorLaunchModal from './components/OrchestratorLaunchModal'
 import { RecoverableRenderErrorBoundary } from './components/error-boundaries/RecoverableRenderErrorBoundary'
 import { ConfirmationDialogProvider } from './components/confirmation-dialog'
 import { LinkRoutingPreferenceDialogProvider } from './components/link-routing-preference-dialog'
@@ -2323,6 +2324,7 @@ function App(): React.JSX.Element {
                 <NewWorkspaceComposerModal />
               </RecoverableRenderErrorBoundary>
             ) : null}
+            <OrchestratorLaunchModal />
             <Suspense fallback={null}>
               {shouldMountAddRepoDialog ? (
                 <RecoverableRenderErrorBoundary
