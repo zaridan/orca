@@ -319,9 +319,12 @@ module.exports = {
   // on Intel Macs. The beforeBuild hook performs Orca's targeted rebuild and
   // returns false so electron-builder does not rebuild optional cpu-features.
   npmRebuild: true,
+  // Why (fork): point auto-update at our fork, not stablyai/orca. Without this an
+  // installed build would silently update to the official release and wipe our
+  // Orcastrator + Jira changes. Our releases on the fork are this build's feed.
   publish: {
     provider: 'github',
-    owner: 'stablyai',
+    owner: 'zaridan',
     repo: 'orca',
     releaseType: 'release'
   }
