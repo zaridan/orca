@@ -88,11 +88,15 @@ export const createOrchestratorsSlice: StateCreator<AppState, [], [], Orchestrat
           continue
         }
         const project = state.projects.find((p) => p.sourceRepoIds.includes(repoId))
+        // Why: the prefixed worktree displayName is the durable source of truth,
+        // so a user's rename survives reattach. At launch it's `prefix +
+        // project.displayName`, so un-renamed directors reconstruct the same
+        // name; fall back to the project/repo only if no name survived the prefix.
+        const persistedName = worktree.displayName.slice(ORCASTRATOR_DISPLAY_PREFIX.length).trim()
         additions.push({
           id: worktree.id,
           projectId: project?.id ?? repoId,
-          projectName:
-            project?.displayName ?? worktree.displayName.slice(ORCASTRATOR_DISPLAY_PREFIX.length),
+          projectName: persistedName || project?.displayName || repoId,
           worktreeId: worktree.id,
           tabId,
           launchedAt: Date.now()
