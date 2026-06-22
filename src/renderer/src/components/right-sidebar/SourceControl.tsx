@@ -24,7 +24,6 @@ import {
   GitMerge,
   GitPullRequestArrow,
   MessageSquare,
-  Network,
   Trash,
   Trash2,
   TriangleAlert,
@@ -44,6 +43,8 @@ import { WORKSPACE_FILE_PATH_MIME } from '@/lib/workspace-file-drag'
 import { isFolderRepo } from '../../../../shared/repo-kind'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
+import OrchestratorMissionControl from '@/components/right-sidebar/OrchestratorMissionControl'
+import { useIsOrchestratorActiveWorktree } from '@/lib/use-orchestrator-active-worktree'
 import { DetachedHeadBadge } from '@/components/DetachedHeadBadge'
 import {
   DropdownMenu,
@@ -740,13 +741,9 @@ function SourceControlInner(): React.JSX.Element {
   const worktreeMap = useWorktreeMap()
   // Why: an Orcastrator's worktree is coordination scratch space — the director
   // directs, it never commits to its own branch (workers open their own PRs), so
-  // the publish/PR source-control view doesn't apply and reads as "something's
-  // wrong". Detect it to show a director-specific explainer instead.
-  const isOrchestratorWorktree = useAppStore((s) =>
-    activeWorktreeId
-      ? (s.orchestrators ?? []).some((o) => o.worktreeId === activeWorktreeId)
-      : false
-  )
+  // the publish/PR view doesn't apply; render Mission Control instead. Shared hook
+  // so the Checks panel gates on the same rule.
+  const isOrchestratorWorktree = useIsOrchestratorActiveWorktree()
   const rightSidebarTab = useAppStore((s) => s.rightSidebarTab)
   const activeRepo = useRepoById(activeWorktree?.repoId ?? null)
   const entries = useAppStore((s) =>
@@ -5161,28 +5158,11 @@ function SourceControlInner(): React.JSX.Element {
       </div>
     )
   }
-  // Why: a director has no branch to publish — surface what it *is* instead of
-  // the misleading "Branch not published / create a pull request" empty state.
+  // Why: a director has no branch to publish — show its Mission Control console
+  // (the workers it spawned + their state) instead of the misleading "Branch not
+  // published / create a pull request" empty state.
   if (isOrchestratorWorktree) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-        <Network className="size-6 text-muted-foreground" aria-hidden />
-        <div className="space-y-1">
-          <p className="text-sm font-medium text-foreground">
-            {translate(
-              'auto.components.right.sidebar.SourceControl.orchestrator_title',
-              'Orcastrator'
-            )}
-          </p>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {translate(
-              'auto.components.right.sidebar.SourceControl.orchestrator_body',
-              'This director coordinates worker agents in their own worktrees. It has no branch to publish — each worker opens its own pull request.'
-            )}
-          </p>
-        </div>
-      </div>
-    )
+    return <OrchestratorMissionControl key={activeWorktree.id} worktreeId={activeWorktree.id} />
   }
 
   const hasFilteredUncommittedEntries =
