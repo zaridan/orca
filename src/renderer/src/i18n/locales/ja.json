@@ -1107,7 +1107,8 @@
         "importHostSetup": "インポート",
         "notePasteTooLarge": "Paste is too large for the note field.",
         "reuseExistingBranch": "Reuse branch",
-        "reuseExistingBranchHint": "Check out the existing branch instead of creating a new one from it."
+        "reuseExistingBranchHint": "Check out the existing branch instead of creating a new one from it.",
+        "send_to_orchestrator": "Send to Orcastrator"
       },
       "NewWorkspaceComposerModal": {
         "fa90f739a5": "ワークスペースを作成する前に、プロジェクト、ワークスペース名、および agent を選択します。"
@@ -1606,7 +1607,8 @@
         "ff90d0abc7": "{{value0}} からワークスペースを開始",
         "fe28c9821f": "view",
         "8d1e17a3ef": "{{value0}} を GitHub で開く",
-        "4ac8ff2275": "{{value0}} を Jira で開く"
+        "4ac8ff2275": "{{value0}} を Jira で開く",
+        "send_to_orchestrator": "Send to Orcastrator"
       },
       "Terminal": {
         "73768427cf": "閉じる",
@@ -8694,7 +8696,9 @@
             "b715ef615b": "{{value1}}より{{value0}}commits 進んでいます",
             "c1a8f3e204": "{{value0}}より1commit 遅れています",
             "d2b9g4f315": "{{value1}}より{{value0}}commits 遅れています",
-            "e9c2a5d416": "{{value0}}と同じ状態"
+            "e9c2a5d416": "{{value0}}と同じ状態",
+            "orchestrator_title": "Orcastrator",
+            "orchestrator_body": "This director coordinates worker agents in their own worktrees. It has no branch to publish — each worker opens its own pull request."
           },
           "SourceControlAgentActionDialog": {
             "8e856842d1": "選択した agent を開始できませんでした。",

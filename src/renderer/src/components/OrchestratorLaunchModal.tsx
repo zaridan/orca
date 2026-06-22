@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useMemo, useState } from 'react'
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
 import {
   Dialog,
@@ -25,8 +25,22 @@ import type { TuiAgent } from '../../../shared/types'
 // AgentCombobox) so launching an Orcastrator feels native. Adds a Name and a
 // task prompt — the prompt is seeded after `/orcastrate` so the director starts
 // planning the work instead of asking for it.
+// Why: a "Send to Orcastrator" action on a tracked issue opens this modal
+// prefilled — pre-selecting the project when the issue is repo-bound and seeding
+// the issue as the director's task. See lib/send-work-item-to-orchestrator.ts.
+type OrchestratorLaunchPrefill = {
+  prefillName?: string
+  prefillPrompt?: string
+  prefillProjectId?: string | null
+}
+
 export default function OrchestratorLaunchModal(): React.JSX.Element | null {
   const visible = useAppStore((s) => s.activeModal === 'orchestrator-launch')
+  const prefill = useAppStore((s) =>
+    s.activeModal === 'orchestrator-launch'
+      ? (s.modalData as OrchestratorLaunchPrefill | undefined)
+      : undefined
+  )
   const closeModal = useAppStore((s) => s.closeModal)
   const projects = useAppStore((s) => s.projects)
   const repos = useAppStore((s) => s.repos)
@@ -38,6 +52,7 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
 
   const nameId = useId()
   const promptId = useId()
+  const nameInputRef = useRef<HTMLInputElement>(null)
 
   const projectOptions = useMemo(
     () =>
@@ -63,6 +78,18 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
 
   const firstProjectOptionId =
     projectOptions.find((option) => option.kind === 'project')?.id ?? null
+  const prefillProjectId = prefill?.prefillProjectId ?? null
+  const prefillName = prefill?.prefillName ?? ''
+  const prefillPrompt = prefill?.prefillPrompt ?? ''
+  const prefilledProjectOptionId = useMemo(
+    () =>
+      prefillProjectId
+        ? (projectOptions.find(
+            (option) => option.kind === 'project' && option.projectId === prefillProjectId
+          )?.id ?? null)
+        : null,
+    [projectOptions, prefillProjectId]
+  )
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [agent, setAgent] = useState<TuiAgent | null>(null)
@@ -70,12 +97,19 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
 
   useEffect(() => {
     if (visible) {
-      setSelectedOptionId(firstProjectOptionId)
+      setSelectedOptionId(prefilledProjectOptionId ?? firstProjectOptionId)
       setAgent(defaultTuiAgent && defaultTuiAgent !== 'blank' ? defaultTuiAgent : null)
-      setName('')
-      setPrompt('')
+      setName(prefillName)
+      setPrompt(prefillPrompt)
     }
-  }, [visible, firstProjectOptionId, defaultTuiAgent])
+  }, [
+    visible,
+    firstProjectOptionId,
+    prefilledProjectOptionId,
+    defaultTuiAgent,
+    prefillName,
+    prefillPrompt
+  ])
 
   if (!visible) {
     return null
@@ -108,7 +142,16 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
         }
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent
+        className="sm:max-w-lg"
+        onOpenAutoFocus={(event) => {
+          // Why: Radix focuses the close button by default; land on the Name
+          // field instead so the user can type/refine immediately (matches the
+          // Create-worktree composer's open-focus behavior).
+          event.preventDefault()
+          nameInputRef.current?.focus()
+        }}
+      >
         <DialogHeader className="gap-3">
           <DialogTitle className="leading-tight">
             {translate('auto.components.OrchestratorLaunchModal.title', 'New Orcastrator')}
@@ -147,6 +190,7 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
             </Label>
             <Input
               id={nameId}
+              ref={nameInputRef}
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder={
@@ -177,7 +221,7 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
                 'auto.components.OrchestratorLaunchModal.task_placeholder',
                 'Describe the work — the director plans how to split it into worktrees/PRs. Optional.'
               )}
-              className="flex w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="flex w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             />
           </div>
           <DialogFooter>

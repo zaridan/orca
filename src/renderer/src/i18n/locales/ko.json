@@ -1107,7 +1107,8 @@
         "importHostSetup": "가져오기",
         "notePasteTooLarge": "메모 필드에 붙여넣을 내용이 너무 큽니다.",
         "reuseExistingBranch": "Reuse branch",
-        "reuseExistingBranchHint": "Check out the existing branch instead of creating a new one from it."
+        "reuseExistingBranchHint": "Check out the existing branch instead of creating a new one from it.",
+        "send_to_orchestrator": "Send to Orcastrator"
       },
       "NewWorkspaceComposerModal": {
         "fa90f739a5": "워크스페이스를 만들기 전에 프로젝트, 워크스페이스 이름, agent를 선택하세요."
@@ -1606,7 +1607,8 @@
         "ff90d0abc7": "{{value0}}에서 워크스페이스 시작",
         "fe28c9821f": "보기",
         "8d1e17a3ef": "GitHub에서 {{value0}} 열기",
-        "4ac8ff2275": "Jira에서 {{value0}} 열기"
+        "4ac8ff2275": "Jira에서 {{value0}} 열기",
+        "send_to_orchestrator": "Send to Orcastrator"
       },
       "Terminal": {
         "73768427cf": "닫기",
@@ -8694,7 +8696,9 @@
             "b715ef615b": "{{value1}}보다 {{value0}} commits 앞서 있음",
             "c1a8f3e204": "{{value0}}보다 1 commit 뒤처짐",
             "d2b9g4f315": "{{value1}}보다 {{value0}} commits 뒤처짐",
-            "e9c2a5d416": "{{value0}}와 동일한 상태"
+            "e9c2a5d416": "{{value0}}와 동일한 상태",
+            "orchestrator_title": "Orcastrator",
+            "orchestrator_body": "This director coordinates worker agents in their own worktrees. It has no branch to publish — each worker opens its own pull request."
           },
           "SourceControlAgentActionDialog": {
             "8e856842d1": "선택한 agent를 시작할 수 없습니다.",

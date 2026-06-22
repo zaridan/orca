@@ -40,6 +40,7 @@ import { requestVirtualizedScrollAnchorRecord } from '@/hooks/requestVirtualized
 import { branchName } from '@/lib/git-utils'
 import { markInputQuietSchedulerInput, scheduleAfterInputQuiet } from '@/lib/input-quiet-scheduler'
 import { showLocalBaseRefUpdateSuggestionToast } from '@/components/sidebar/local-base-ref-suggestion-toast'
+import { ORCASTRATOR_DISPLAY_PREFIX } from '@/store/slices/orchestrators'
 import { translate } from '@/i18n/i18n'
 import {
   getRepoExecutionHostId,
@@ -1885,12 +1886,18 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
             }
           })
           showLocalBaseRefRefreshToast(result.localBaseRefRefresh)
-          showLocalBaseRefUpdateSuggestionToast(result.localBaseRefUpdateSuggestion, {
-            updateSettings: get().updateSettings,
-            getSettings: () => get().settings,
-            openSettingsPage: get().openSettingsPage,
-            openSettingsTarget: get().openSettingsTarget
-          })
+          // Why: an Orcastrator's worktree is coordination scratch space, not a
+          // place AI diffs are generated against base — the "local main is behind"
+          // nudge is a false alarm there, so suppress it for director worktrees.
+          const isOrchestratorWorktree = (displayName ?? '').startsWith(ORCASTRATOR_DISPLAY_PREFIX)
+          if (!isOrchestratorWorktree) {
+            showLocalBaseRefUpdateSuggestionToast(result.localBaseRefUpdateSuggestion, {
+              updateSettings: get().updateSettings,
+              getSettings: () => get().settings,
+              openSettingsPage: get().openSettingsPage,
+              openSettingsTarget: get().openSettingsTarget
+            })
+          }
           return result
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)

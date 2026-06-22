@@ -24,6 +24,7 @@ import {
   GitMerge,
   GitPullRequestArrow,
   MessageSquare,
+  Network,
   Trash,
   Trash2,
   TriangleAlert,
@@ -728,6 +729,15 @@ function SourceControlInner(): React.JSX.Element {
     activeWorktreeId ? s.activeGroupIdByWorktree[activeWorktreeId] : undefined
   )
   const worktreeMap = useWorktreeMap()
+  // Why: an Orcastrator's worktree is coordination scratch space — the director
+  // directs, it never commits to its own branch (workers open their own PRs), so
+  // the publish/PR source-control view doesn't apply and reads as "something's
+  // wrong". Detect it to show a director-specific explainer instead.
+  const isOrchestratorWorktree = useAppStore((s) =>
+    activeWorktreeId
+      ? (s.orchestrators ?? []).some((o) => o.worktreeId === activeWorktreeId)
+      : false
+  )
   const rightSidebarTab = useAppStore((s) => s.rightSidebarTab)
   const activeRepo = useRepoById(activeWorktree?.repoId ?? null)
   const entries = useAppStore((s) =>
@@ -5058,6 +5068,29 @@ function SourceControlInner(): React.JSX.Element {
           'auto.components.right.sidebar.SourceControl.e131cd7128',
           'Source Control is only available for Git repositories'
         )}
+      </div>
+    )
+  }
+  // Why: a director has no branch to publish — surface what it *is* instead of
+  // the misleading "Branch not published / create a pull request" empty state.
+  if (isOrchestratorWorktree) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+        <Network className="size-6 text-muted-foreground" aria-hidden />
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-foreground">
+            {translate(
+              'auto.components.right.sidebar.SourceControl.orchestrator_title',
+              'Orcastrator'
+            )}
+          </p>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {translate(
+              'auto.components.right.sidebar.SourceControl.orchestrator_body',
+              'This director coordinates worker agents in their own worktrees. It has no branch to publish — each worker opens its own pull request.'
+            )}
+          </p>
+        </div>
       </div>
     )
   }

@@ -1,5 +1,6 @@
 import type { GlobalSettings } from '../../../../shared/types'
 import { Label } from '../ui/label'
+import { SettingsSwitch } from './SettingsFormControls'
 import { SearchableSetting } from './SearchableSetting'
 import { matchesSettingsSearch } from './settings-search'
 import { getExperimentalSearchEntry } from './experimental-search'
@@ -38,7 +39,7 @@ export function OrchestratorsExperimentalToggle({
     >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 shrink space-y-0.5">
-          <Label>
+          <Label id="orchestrators-experimental-toggle-label">
             {translate(
               'auto.components.settings.ExperimentalPane.orchestrators.title',
               'Orcastrators'
@@ -51,23 +52,13 @@ export function OrchestratorsExperimentalToggle({
             )}
           </p>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          onClick={() =>
+        <SettingsSwitch
+          checked={enabled}
+          onChange={() =>
             updateSettings({ experimentalOrchestrators: !settings.experimentalOrchestrators })
           }
-          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors ${
-            enabled ? 'bg-foreground' : 'bg-muted-foreground/30'
-          }`}
-        >
-          <span
-            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-background shadow-sm transition-transform ${
-              enabled ? 'translate-x-4' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
+          ariaLabelledBy="orchestrators-experimental-toggle-label"
+        />
       </div>
     </SearchableSetting>
   )
