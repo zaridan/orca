@@ -170,6 +170,32 @@ describe('Jira client credential storage', () => {
     )
   })
 
+  it('sends a non-browser User-Agent so Jira does not fail POSTs with "XSRF check failed"', async () => {
+    // Why: Electron's net.fetch defaults to a Chrome User-Agent, which trips
+    // Atlassian's XSRF filter on POST/PUT REST calls (issue search, create,
+    // update, comment) even under API-token auth, surfacing as a 403.
+    const siteId = 'site-alpha'
+    writeJiraFiles(siteId, 'token-alpha')
+    netFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          accountId: 'account-alpha',
+          displayName: 'Ada',
+          emailAddress: 'ada@example.com'
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    )
+    const jira = await loadClientModule({ encryptionAvailable: true })
+
+    await jira.testConnection(siteId)
+
+    const headers = netFetchMock.mock.calls[0]?.[1]?.headers as Headers
+    const userAgent = headers.get('User-Agent') ?? ''
+    expect(userAgent).toBe('Orca')
+    expect(userAgent).not.toMatch(/Mozilla|Chrome|Safari|AppleWebKit/i)
+  })
+
   it('does not pass encrypted safeStorage bytes to Jira when encryption is unavailable', async () => {
     const siteId = 'site-alpha'
     const tokenPath = tokenPathForSite(siteId)
