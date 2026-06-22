@@ -850,6 +850,41 @@ export class OrchestrationDb {
       .get() as CoordinatorRun | undefined
   }
 
+  // Why: getActiveCoordinatorRun returns only the latest. Per-Orcastrator
+  // background-activity attribution needs every still-running run so each one
+  // can be keyed to its own coordinator's pane.
+  listCoordinatorRuns(filter?: { status?: CoordinatorStatus }): CoordinatorRun[] {
+    if (filter?.status) {
+      return this.db
+        .prepare('SELECT * FROM coordinator_runs WHERE status = ? ORDER BY created_at')
+        .all(filter.status) as CoordinatorRun[]
+    }
+    return this.db
+      .prepare('SELECT * FROM coordinator_runs ORDER BY created_at')
+      .all() as CoordinatorRun[]
+  }
+
+  // Why: cheap counts for the supervision dot — outstanding work means tasks
+  // not yet in a terminal state (pending/ready/dispatched/blocked).
+  countOutstandingTasks(): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM tasks WHERE status IN ('pending', 'ready', 'dispatched', 'blocked')"
+      )
+      .get() as { n: number }
+    return row.n
+  }
+
+  // Why: a worker is still busy while its dispatch is pending or dispatched.
+  countActiveDispatches(): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM dispatch_contexts WHERE status IN ('pending', 'dispatched')"
+      )
+      .get() as { n: number }
+    return row.n
+  }
+
   // ── Queries for Coordinator ──
 
   getIdleTerminals(excludeHandles: string[] = []): string[] {

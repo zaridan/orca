@@ -2,12 +2,43 @@ import { useCallback, useEffect, useMemo } from 'react'
 import { Network, Plus, X } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
-import { AgentStateDot } from '@/components/AgentStateDot'
+import { AgentStateDot, agentStateLabel } from '@/components/AgentStateDot'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import { deriveWorktreeAgentDotState } from '@/lib/worktree-agent-dot-state'
+import { deriveOrcastratorDotState } from '@/lib/orcastrator-dot-state'
+import type { OrchestrationActivity } from '../../../../shared/runtime-types'
 import { translate } from '@/i18n/i18n'
 import { ORCASTRATOR_DISPLAY_PREFIX } from '@/store/slices/orchestrators'
 import { WorktreeTitleInlineRename } from './WorktreeTitleInlineRename'
+
+// Why: turn the background-run counts into a short hover suffix (e.g.
+// " · 2 tasks, 1 worker") so a supervising/stalled dot is legible on hover.
+function describeOrchestrationActivity(
+  tabIds: readonly string[],
+  orchestrationActivityByPaneKey: Record<string, OrchestrationActivity>
+): string {
+  let activity: OrchestrationActivity | null = null
+  for (const [paneKey, candidate] of Object.entries(orchestrationActivityByPaneKey)) {
+    const colon = paneKey.indexOf(':')
+    if (colon > 0 && tabIds.includes(paneKey.slice(0, colon))) {
+      activity = candidate
+      break
+    }
+  }
+  if (!activity) {
+    return ''
+  }
+  const parts: string[] = []
+  if (activity.pendingTasks > 0) {
+    parts.push(`${activity.pendingTasks} task${activity.pendingTasks === 1 ? '' : 's'}`)
+  }
+  if (activity.activeDispatches > 0) {
+    parts.push(`${activity.activeDispatches} worker${activity.activeDispatches === 1 ? '' : 's'}`)
+  }
+  if (activity.staleDispatches > 0) {
+    parts.push(`${activity.staleDispatches} stalled`)
+  }
+  return parts.length > 0 ? ` · ${parts.join(', ')}` : ''
+}
 
 // Why: experimental "Orcastrators" sidebar section. The `+` opens a project
 // picker; selecting one launches a director session for that project (see
@@ -21,6 +52,7 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
   const worktreesByRepo = useAppStore((s) => s.worktreesByRepo)
   const tabsByWorktree = useAppStore((s) => s.tabsByWorktree)
   const agentStatusByPaneKey = useAppStore((s) => s.agentStatusByPaneKey)
+  const orchestrationActivityByPaneKey = useAppStore((s) => s.orchestrationActivityByPaneKey)
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const activeTabIdByWorktree = useAppStore((s) => s.activeTabIdByWorktree)
   const setActiveTab = useAppStore((s) => s.setActiveTab)
@@ -101,7 +133,17 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
       </div>
       {live.map((entry) => {
         const worktreeTabIds = (tabsByWorktree[entry.worktreeId] ?? []).map((tab) => tab.id)
-        const dotState = deriveWorktreeAgentDotState(worktreeTabIds, agentStatusByPaneKey)
+        const dotState = deriveOrcastratorDotState(
+          worktreeTabIds,
+          agentStatusByPaneKey,
+          orchestrationActivityByPaneKey
+        )
+        // Why: spell out the background-run counts on hover so a supervising or
+        // stalled dot is legible without opening the tab.
+        const dotTitle =
+          dotState === 'supervising' || dotState === 'stalled'
+            ? `${agentStateLabel(dotState)}${describeOrchestrationActivity(worktreeTabIds, orchestrationActivityByPaneKey)}`
+            : agentStateLabel(dotState)
         // Why: the ORCASTRATORS list is the navigator — highlight the entry
         // whose worktree is active, using the same rounded accent highlight as
         // the sidebar nav items.
@@ -132,6 +174,7 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
                 }
               }}
               className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-[13px] tracking-tight text-worktree-sidebar-foreground/80 outline-none"
+              title={dotTitle}
             >
               <AgentStateDot state={dotState} size="sm" />
               <Network

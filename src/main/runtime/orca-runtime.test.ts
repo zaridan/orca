@@ -16800,6 +16800,92 @@ describe('OrcaRuntimeService', () => {
     expect(result.agentOrchestrationByPaneKey).toBeUndefined()
   })
 
+  it('returns orchestration activity keyed by the coordinator pane for a running run', () => {
+    const runtime = new OrcaRuntimeService(store)
+    const coordinatorLeafId = '88888888-8888-4888-8888-888888888888'
+    const coordinatorPaneKey = makePaneKey('tab-coordinator', coordinatorLeafId)
+    const coordinatorHandle = runtime.preAllocateHandleForPty('pty-coordinator')
+    runtime.setOrchestrationDb({
+      getActiveDispatchForTerminal: vi.fn(() => undefined),
+      getLatestDispatchForTerminal: vi.fn(() => undefined),
+      listCoordinatorRuns: vi.fn(() => [
+        { id: 'run-active', coordinator_handle: coordinatorHandle }
+      ]),
+      countOutstandingTasks: vi.fn(() => 3),
+      countActiveDispatches: vi.fn(() => 2),
+      getStaleDispatches: vi.fn(() => [{ id: 'ctx-stale' }])
+    } as never)
+    runtime.attachWindow(1)
+
+    const result = runtime.syncWindowGraph(1, {
+      tabs: [
+        {
+          tabId: 'tab-coordinator',
+          worktreeId: TEST_WORKTREE_ID,
+          title: 'Codex',
+          activeLeafId: coordinatorLeafId,
+          layout: null
+        }
+      ],
+      leaves: [
+        {
+          tabId: 'tab-coordinator',
+          worktreeId: TEST_WORKTREE_ID,
+          leafId: coordinatorLeafId,
+          paneRuntimeId: 1,
+          ptyId: 'pty-coordinator',
+          paneTitle: null
+        }
+      ]
+    })
+
+    expect(result.orchestrationActivityByPaneKey?.[coordinatorPaneKey]).toEqual({
+      runId: 'run-active',
+      pendingTasks: 3,
+      activeDispatches: 2,
+      staleDispatches: 1
+    })
+  })
+
+  it('omits orchestration activity when no coordinator run is running', () => {
+    const runtime = new OrcaRuntimeService(store)
+    const coordinatorLeafId = '99999999-9999-4999-8999-999999999999'
+    runtime.preAllocateHandleForPty('pty-coordinator')
+    runtime.setOrchestrationDb({
+      getActiveDispatchForTerminal: vi.fn(() => undefined),
+      getLatestDispatchForTerminal: vi.fn(() => undefined),
+      listCoordinatorRuns: vi.fn(() => []),
+      countOutstandingTasks: vi.fn(() => 0),
+      countActiveDispatches: vi.fn(() => 0),
+      getStaleDispatches: vi.fn(() => [])
+    } as never)
+    runtime.attachWindow(1)
+
+    const result = runtime.syncWindowGraph(1, {
+      tabs: [
+        {
+          tabId: 'tab-coordinator',
+          worktreeId: TEST_WORKTREE_ID,
+          title: 'Codex',
+          activeLeafId: coordinatorLeafId,
+          layout: null
+        }
+      ],
+      leaves: [
+        {
+          tabId: 'tab-coordinator',
+          worktreeId: TEST_WORKTREE_ID,
+          leafId: coordinatorLeafId,
+          paneRuntimeId: 1,
+          ptyId: 'pty-coordinator',
+          paneTitle: null
+        }
+      ]
+    })
+
+    expect(result.orchestrationActivityByPaneKey).toBeUndefined()
+  })
+
   it('falls back to cwd lineage when the caller terminal handle is stale', async () => {
     const parentPath = '/tmp/worktree-parent'
     const childPath = '/tmp/workspaces/cwd-child'

@@ -646,6 +646,9 @@ async function syncRuntimeGraph(): Promise<void> {
     getStoreState()?.setRuntimeAgentOrchestrationByPaneKey?.(
       result?.agentOrchestrationByPaneKey ?? {}
     )
+    getStoreState()?.setOrchestrationActivityByPaneKey?.(
+      result?.orchestrationActivityByPaneKey ?? {}
+    )
   } catch (error) {
     console.error('[runtime] Failed to sync renderer graph:', error)
   }

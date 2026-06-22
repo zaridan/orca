@@ -109,10 +109,32 @@ export type RuntimeSyncWindowGraph = {
   mobileSessionTabs?: RuntimeMobileSessionTabsSnapshot[]
 }
 
+/** Live snapshot of a coordinator's in-flight orchestration run, keyed in the
+ *  graph-sync result by the coordinator's own paneKey. Lets the renderer show a
+ *  director that has handed control back (its Stop hook fired `done`) but is
+ *  still supervising background work — a state the per-pane agent hook cannot
+ *  express. Counts come from the global orchestration DB (one namespace, no
+ *  per-run association), so with multiple concurrent runs they are shared
+ *  across runs; `coordinatorRunning` stays per-run accurate. */
+export type OrchestrationActivity = {
+  /** Coordinator run id (coordinator_runs.id) that is still `running`. */
+  runId: string
+  /** Tasks not in a terminal state (pending/ready/dispatched/blocked). */
+  pendingTasks: number
+  /** Dispatch contexts still pending or dispatched (workers not yet done). */
+  activeDispatches: number
+  /** Dispatched workers whose heartbeat has gone quiet past the hung threshold
+   *  — drives a distinct "stalled" affordance instead of healthy supervising. */
+  staleDispatches: number
+}
+
 export type RuntimeSyncWindowGraphResult = RuntimeStatus & {
   /** Main owns terminal handles/dispatches, so renderer graph sync returns the
    *  parent metadata needed by title-derived agent rows without name guessing. */
   agentOrchestrationByPaneKey?: Record<string, AgentStatusOrchestrationContext>
+  /** In-flight orchestration runs keyed by coordinator paneKey, so an
+   *  Orcastrator's sidebar dot can reflect background supervision. */
+  orchestrationActivityByPaneKey?: Record<string, OrchestrationActivity>
 }
 
 export type RuntimeMobileSessionTerminalTab = {
