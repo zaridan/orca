@@ -1,6 +1,7 @@
-const { chmodSync, existsSync, readdirSync } = require('node:fs')
+const { chmodSync, existsSync, readdirSync, rmSync } = require('node:fs')
 const { execFileSync } = require('node:child_process')
 const { join, resolve } = require('node:path')
+const { Arch } = require('electron-builder')
 const electronBuilderNativeRebuild = require('./scripts/electron-builder-native-rebuild.cjs')
 const {
   createPackagedRuntimeNodeModuleResources,
@@ -122,6 +123,18 @@ module.exports = {
         : join(context.appOutDir, 'resources')
     if (!existsSync(resourcesDir)) {
       return
+    }
+    // Why (arm64 mac build): the runtime node_modules closure copies the x86_64
+    // native binaries alongside the arm64 ones. They're never loaded on Apple
+    // silicon, but macOS warns that the app "includes an Intel component". Strip
+    // the unused darwin-x64 binaries so the warning doesn't fire.
+    if (context.electronPlatformName === 'darwin' && context.arch === Arch.arm64) {
+      for (const relativePath of [
+        'node_modules/@parcel/watcher-darwin-x64',
+        'node_modules/node-pty/prebuilds/darwin-x64'
+      ]) {
+        rmSync(join(resourcesDir, relativePath), { recursive: true, force: true })
+      }
     }
     prunePackagedRuntimeNodeModules(resourcesDir, context.electronPlatformName)
     verifyPackagedMainRuntimeDeps(resourcesDir)
