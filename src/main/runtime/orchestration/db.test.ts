@@ -532,6 +532,39 @@ describe('OrchestrationDb', () => {
       d.updateCoordinatorRun(run.id, 'completed')
       expect(d.getActiveCoordinatorRun()).toBeUndefined()
     })
+
+    it('lists every running run, not just the latest', () => {
+      const d = createDb()
+      const a = d.createCoordinatorRun({ spec: 'a', coordinatorHandle: 'coord_a' })
+      const b = d.createCoordinatorRun({ spec: 'b', coordinatorHandle: 'coord_b' })
+      const done = d.createCoordinatorRun({ spec: 'c', coordinatorHandle: 'coord_c' })
+      d.updateCoordinatorRun(done.id, 'completed')
+
+      const running = d.listCoordinatorRuns({ status: 'running' })
+      expect(running.map((r) => r.id).sort()).toEqual([a.id, b.id].sort())
+      expect(d.listCoordinatorRuns()).toHaveLength(3)
+    })
+
+    it('counts outstanding tasks and active dispatches', () => {
+      const d = createDb()
+      expect(d.countOutstandingTasks()).toBe(0)
+      expect(d.countActiveDispatches()).toBe(0)
+
+      const t1 = d.createTask({ spec: 'one' })
+      d.createTask({ spec: 'two' })
+      // Two ready tasks outstanding, none dispatched yet.
+      expect(d.countOutstandingTasks()).toBe(2)
+      expect(d.countActiveDispatches()).toBe(0)
+
+      d.createDispatchContext(t1.id, 'term_worker')
+      expect(d.countActiveDispatches()).toBe(1)
+      // t1 is now 'dispatched' (still outstanding); both tasks remain.
+      expect(d.countOutstandingTasks()).toBe(2)
+
+      d.updateTaskStatus(t1.id, 'completed')
+      expect(d.countOutstandingTasks()).toBe(1)
+      expect(d.countActiveDispatches()).toBe(0)
+    })
   })
 
   describe('lifecycle', () => {

@@ -271,6 +271,7 @@ import type {
   RuntimeTerminalDriverState,
   RuntimeSyncWindowGraph,
   RuntimeWorktreeListResult,
+  OrchestrationActivity,
   BrowserTabInfo,
   BrowserScreencastResult
 } from '../../shared/runtime-types'
@@ -1001,6 +1002,10 @@ function getAgentLaunchPlatformForRepo(
 
 const FOREGROUND_AGENT_WRAPPER_RETRY_INTERVAL_MS = 150
 const FOREGROUND_AGENT_WRAPPER_RETRY_TIMEOUT_MS = 6_500
+// Why: matches the coordinator's HUNG_THRESHOLD_MS (orchestration/coordinator.ts)
+// so the sidebar's "stalled supervision" read agrees with when the coordinator
+// itself treats a worker's heartbeat as hung.
+const ORCHESTRATION_HUNG_THRESHOLD_MS = 10 * 60 * 1000
 const DECSET_BRACKETED_PASTE = '\x1b[?2004h'
 const CODEX_COMPOSER_PROMPT = '›'
 const BRACKETED_PASTE_BEGIN = '\x1b[200~'
@@ -2638,9 +2643,11 @@ export class OrcaRuntimeService {
     }
 
     const agentOrchestrationByPaneKey = this.buildAgentOrchestrationByPaneKey()
+    const orchestrationActivityByPaneKey = this.buildOrchestrationActivityByPaneKey()
     return {
       ...this.getStatus(),
-      ...(agentOrchestrationByPaneKey ? { agentOrchestrationByPaneKey } : {})
+      ...(agentOrchestrationByPaneKey ? { agentOrchestrationByPaneKey } : {}),
+      ...(orchestrationActivityByPaneKey ? { orchestrationActivityByPaneKey } : {})
     }
   }
 
@@ -17222,6 +17229,47 @@ export class OrcaRuntimeService {
       }
     }
     return Object.keys(contexts).length > 0 ? contexts : undefined
+  }
+
+  // Why: a director's per-pane agent hook fires `done` when its turn ends, even
+  // while it still supervises background workers/watchers. The orchestration DB
+  // knows the run is alive, so surface it keyed by the coordinator's own pane —
+  // the renderer maps that pane to its Orcastrator and shows a "supervising"
+  // dot instead of a misleading completion check. Counts are global to the DB
+  // (one orchestration namespace), so with multiple concurrent runs they are
+  // shared; `runId`/coordinator attribution stays per-run accurate.
+  private buildOrchestrationActivityByPaneKey(): Record<string, OrchestrationActivity> | undefined {
+    const db = this.getOrchestrationDbIfAvailable()
+    if (!db?.listCoordinatorRuns) {
+      return undefined
+    }
+    const runningRuns = db.listCoordinatorRuns({ status: 'running' })
+    if (runningRuns.length === 0) {
+      return undefined
+    }
+    const pendingTasks = db.countOutstandingTasks?.() ?? 0
+    const activeDispatches = db.countActiveDispatches?.() ?? 0
+    // Why: mirror the coordinator's own hung-worker threshold (10 min) so the
+    // sidebar's "stalled" read agrees with the coordinator's escalation logic.
+    const staleThresholdIso = new Date(Date.now() - ORCHESTRATION_HUNG_THRESHOLD_MS).toISOString()
+    const staleDispatches = db.getStaleDispatches?.(staleThresholdIso)?.length ?? 0
+
+    const activityByPaneKey: Record<string, OrchestrationActivity> = {}
+    for (const run of runningRuns) {
+      const paneKey = this.getPaneKeyForTerminalHandle(run.coordinator_handle)
+      // Why: skip runs whose coordinator pane is not resolvable in this window —
+      // there is no Orcastrator row here to attribute the activity to.
+      if (!paneKey) {
+        continue
+      }
+      activityByPaneKey[paneKey] = {
+        runId: run.id,
+        pendingTasks,
+        activeDispatches,
+        staleDispatches
+      }
+    }
+    return Object.keys(activityByPaneKey).length > 0 ? activityByPaneKey : undefined
   }
 
   private getAgentStatusOrchestrationContextForHandle(
