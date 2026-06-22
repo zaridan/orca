@@ -1,5 +1,7 @@
-/* eslint-disable max-lines -- TEMP: removed once the in-progress hook/component
-extraction brings this file under the limit. */
+/* eslint-disable max-lines -- Temporary, inherited from the original ChecksPanel.
+Follow-up: split this prop-driven inner into focused hook/component modules
+(see PR description) and remove this disable. The prop-extraction in this PR is the
+behavior-preserving step that unblocks reuse; the file-size split is mechanical. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, Check, X, Pencil } from 'lucide-react'
 import { useAppStore, type AppState } from '@/store'
@@ -2660,6 +2662,8 @@ export function ChecksPanelInner({
   }, [activeReview?.provider, activeWorktreeId, linkedPR, updateWorktreeMeta])
 
   const handleLinkAnotherPullRequest = useCallback(() => {
+    // PR2: needs a live worktree (rename/link-PR modal edits worktree meta). For a
+    // shipped PR with no worktree this no-ops; Mission Control should hide/replace it.
     if (!activeWorktreeId || !activeWorktree || activeReview?.provider !== 'github') {
       return
     }
@@ -2680,6 +2684,8 @@ export function ChecksPanelInner({
   }, [activeReview, activeWorktree, activeWorktreeId, openModal, refreshLinkedGitHubPullRequest])
 
   const pushBeforeCreatePullRequest = useCallback(async (): Promise<boolean> => {
+    // PR2: push/publish need a live local checkout (worktree path). With no worktree
+    // (shipped PR) this no-ops; Mission Control cards drive already-published PRs.
     if (!activeWorktreeId || !activeWorktree?.path) {
       return false
     }
@@ -3263,6 +3269,9 @@ export function ChecksPanelInner({
           </div>
         )}
         {/* Merge / Delete Workspace actions */}
+        {/* PR2: HostedReviewActions requires a live Worktree (merge/delete-workspace
+            operate on the local checkout). Gated off when absent; Mission Control
+            must supply a worktree or a shipped-PR-aware merge surface. */}
         {activeReview && activeWorktree && repo && (
           <HostedReviewActions
             review={activeReview}
