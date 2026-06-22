@@ -34,6 +34,9 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
   // worktree so reattachOrchestrators reconstructs the name after a reload.
   const renameOrchestrator = useCallback(
     async (id: string, worktreeId: string, projectName: string): Promise<void> => {
+      // Why: optimistic update for instant UI. If the persist below throws, the
+      // in-memory name diverges only until the next reload, when reattach
+      // reconciles from the durable worktree displayName.
       updateOrchestrator(id, { projectName })
       await updateWorktreeMeta(worktreeId, {
         displayName: `${ORCASTRATOR_DISPLAY_PREFIX}${projectName}`
