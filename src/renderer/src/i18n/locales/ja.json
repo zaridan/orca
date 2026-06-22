@@ -9245,7 +9245,8 @@
             "pr_draft": "draft",
             "shipped": "Shipped",
             "shipped_note": "From the director’s log. Worktrees are torn down after merge, so PR numbers aren’t recorded here.",
-            "view_pr": "View PR"
+            "view_pr": "View PR",
+            "pr_number": "PR #{{number}}"
           },
           "OrchestratorPanelNotice": {
             "title": "Orcastrator",

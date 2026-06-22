@@ -46,14 +46,14 @@ function prStateLabel(state: HostedReviewState): string {
 }
 
 // Why: PR state reads as a colored pill in GitHub's convention (merged = purple,
-// open = green, closed = red, draft = gray). The user asked for GitHub styling, so
-// these mirror GitHub's solid state-badge colors rather than Orca's neutral tokens
-// (the same exception the git-decoration palette makes for VS Code parity).
+// open = green, closed = red, draft = gray). Colors come from theme-scoped
+// --pr-state-* tokens in main.css (the same VS-Code-parity exception the
+// git-decoration palette makes) rather than raw hex in this renderer file.
 const PR_STATE_PILL_CLASS: Record<HostedReviewState, string> = {
-  merged: 'bg-[#8250df] text-white',
-  open: 'bg-[#1a7f37] text-white',
-  closed: 'bg-[#cf222e] text-white',
-  draft: 'bg-[#6e7781] text-white'
+  merged: 'bg-[var(--pr-state-merged)] text-white',
+  open: 'bg-[var(--pr-state-open)] text-white',
+  closed: 'bg-[var(--pr-state-closed)] text-white',
+  draft: 'bg-[var(--pr-state-draft)] text-white'
 }
 
 function PrStatePill({ state }: { state: HostedReviewState }): React.JSX.Element {
@@ -232,6 +232,9 @@ export default function OrchestratorMissionControl({
     const repoPath = directorRepo?.path
     const repoId = directorRepo?.id
     if (!repoPath || !repoId || shippedWork.length === 0) {
+      // Drop any previously-fetched items so a repo/shipped-work change that fails
+      // preconditions can't leave stale PRs to match against.
+      setPrItems([])
       return
     }
     let cancelled = false
@@ -394,7 +397,11 @@ export default function OrchestratorMissionControl({
                           className="flex shrink-0 items-center gap-1 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground hover:underline"
                         >
                           {prLink.number != null
-                            ? `PR #${prLink.number}`
+                            ? translate(
+                                'auto.components.right.sidebar.OrchestratorMissionControl.pr_number',
+                                'PR #{{number}}',
+                                { number: prLink.number }
+                              )
                             : translate(
                                 'auto.components.right.sidebar.OrchestratorMissionControl.view_pr',
                                 'View PR'
