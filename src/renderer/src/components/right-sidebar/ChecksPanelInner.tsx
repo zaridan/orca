@@ -1,7 +1,8 @@
-/* eslint-disable max-lines -- Temporary, inherited from the original ChecksPanel.
-Follow-up: split this prop-driven inner into focused hook/component modules
-(see PR description) and remove this disable. The prop-extraction in this PR is the
-behavior-preserving step that unblocks reuse; the file-size split is mechanical. */
+/* eslint-disable max-lines -- Why: the checks panel co-locates PR header, checks,
+comments, merge actions, and conflict state in one component to keep the data flow
+straightforward. Inherited from the pre-split ChecksPanel.tsx; a deeper sub-module
+split is possible future cleanup but is out of scope for this behavior-preserving
+prop-extraction. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, Check, X, Pencil } from 'lucide-react'
 import { useAppStore, type AppState } from '@/store'
