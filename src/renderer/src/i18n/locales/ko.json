@@ -222,7 +222,12 @@
           "0216895fb5": "브랜치를 삭제하지 못했습니다.",
           "19db0085fb": "로컬 브랜치가 삭제되었습니다.",
           "2b0afc7f14": "로컬 {{value0}}을(를) 최신 상태로 유지할 수 없습니다.",
-          "670864ab52": "로컬 {{value0}}을 최신 상태로 유지"
+          "670864ab52": "로컬 {{value0}}을 최신 상태로 유지",
+          "5366d13eec": "Workspace deleted, branch kept",
+          "2e17f825d4": "Worktree deleted, branch kept",
+          "78e08cd877": "Git could not safely delete branch \"{{value0}}\", so Orca kept it to avoid losing local commits.",
+          "3b57982bf6": "Git could not safely delete branch \"{{value0}}\" after deleting workspace \"{{value1}}\", so Orca kept it to avoid losing local commits.",
+          "81f13f48d2": "Git could not safely delete branch \"{{value0}}\" after deleting worktree \"{{value1}}\", so Orca kept it to avoid losing local commits."
         },
         "repos": {
           "b7e14472ae": "폴더를 추가하지 못했습니다.",
@@ -508,6 +513,15 @@
         "distroRequired": "이 스킬을 설치하기 전에 프로젝트의 WSL 배포판을 선택하세요.",
         "distroMissing": "선택한 WSL 배포판을 사용할 수 없습니다. 사용 가능한 배포판을 선택하거나 이 프로젝트를 Windows로 전환하세요.",
         "wslDefault": "WSL 기본값"
+      },
+      "orchestrator": {
+        "launch": {
+          "no_checkout": "No checkout found for this project yet — open it once, then launch an Orcastrator.",
+          "no_command": "Could not build the Orcastrator launch command for this agent.",
+          "no_workspace": "Could not open the Orcastrator workspace.",
+          "no_repo": "This project has no repo to launch an Orcastrator in.",
+          "create_failed": "Failed to create the Orcastrator."
+        }
       }
     },
     "hooks": {
@@ -938,7 +952,8 @@
         "0d0ace8861": "GitHub에서 별표 주기",
         "ec43b38ba7": "GitHub에 별표 표시됨",
         "157bb5ecbb": "GitHub 열기",
-        "preflightDismiss": "닫기"
+        "preflightDismiss": "닫기",
+        "orchestrator_cta": "Create Orcastrator"
       },
       "LinearIssueMarkdownDescriptionEditor": {
         "d9c47069ef": "Markdown",
@@ -1097,7 +1112,8 @@
         "importHostSetup": "가져오기",
         "notePasteTooLarge": "메모 필드에 붙여넣을 내용이 너무 큽니다.",
         "reuseExistingBranch": "Reuse branch",
-        "reuseExistingBranchHint": "Check out the existing branch instead of creating a new one from it."
+        "reuseExistingBranchHint": "Check out the existing branch instead of creating a new one from it.",
+        "send_to_orchestrator": "Send to Orcastrator"
       },
       "NewWorkspaceComposerModal": {
         "fa90f739a5": "워크스페이스를 만들기 전에 프로젝트, 워크스페이스 이름, agent를 선택하세요."
@@ -1596,7 +1612,8 @@
         "ff90d0abc7": "{{value0}}에서 워크스페이스 시작",
         "fe28c9821f": "보기",
         "8d1e17a3ef": "GitHub에서 {{value0}} 열기",
-        "4ac8ff2275": "Jira에서 {{value0}} 열기"
+        "4ac8ff2275": "Jira에서 {{value0}} 열기",
+        "send_to_orchestrator": "Send to Orcastrator"
       },
       "Terminal": {
         "73768427cf": "닫기",
@@ -4245,6 +4262,13 @@
           "current": "현재",
           "searchPlaceholder": "워크트리 검색...",
           "empty": "일치하는 적격 워크트리가 없습니다."
+        },
+        "OrchestratorsSidebarSection": {
+          "title": "Orcastrators",
+          "new": "New Orcastrator",
+          "pick": "Launch an Orcastrator in…",
+          "empty": "No projects yet",
+          "close": "Close Orcastrator"
         }
       },
       "shared": {
@@ -4814,6 +4838,11 @@
             "description": "업데이트된 워크트리 카드 레이아웃, 메타데이터 배치, 카드 표시 메뉴 옵션 및 상태 표시를 미리 봅니다.",
             "title": "새 카드 스타일",
             "toggleLabel": "새 카드 스타일 전환"
+          },
+          "orchestrators": {
+            "title": "Orcastrators",
+            "description": "A sidebar section for launching persistent coordinator chats that plan and run multi-worktree work.",
+            "detail": "Adds an \"Orcastrators\" section above Projects. Launch a coordinator chat per repo — it plans the work, spins up worktrees and worker agents, and supervises them. Experimental while the create-flow and multi-coordinator isolation are settling."
           }
         },
         "FloatingWorkspacePane": {
@@ -6891,6 +6920,10 @@
               "title": "새 카드 스타일",
               "worktree": "worktree",
               "worktrees": "worktrees"
+            },
+            "orchestrators": {
+              "title": "Orcastrators",
+              "description": "A sidebar section for launching persistent coordinator chats that plan and run multi-worktree work."
             }
           }
         },
@@ -8678,7 +8711,9 @@
             "b715ef615b": "{{value1}}보다 {{value0}} commits 앞서 있음",
             "c1a8f3e204": "{{value0}}보다 1 commit 뒤처짐",
             "d2b9g4f315": "{{value1}}보다 {{value0}} commits 뒤처짐",
-            "e9c2a5d416": "{{value0}}와 동일한 상태"
+            "e9c2a5d416": "{{value0}}와 동일한 상태",
+            "orchestrator_title": "Orcastrator",
+            "orchestrator_body": "This director coordinates worker agents in their own worktrees. It has no branch to publish — each worker opens its own pull request."
           },
           "SourceControlAgentActionDialog": {
             "8e856842d1": "선택한 agent를 시작할 수 없습니다.",
@@ -9198,6 +9233,24 @@
                 "copyCommand": "명령 복사"
               }
             }
+          },
+          "OrchestratorMissionControl": {
+            "fallback": "Orcastrator",
+            "summary": "Directs worker agents in their own worktrees — it has no branch to publish. Each worker opens its own pull request.",
+            "spawned": "Spawned work",
+            "empty": "No worktrees yet — the director creates them as it plans the work.",
+            "pr_open": "open",
+            "pr_merged": "merged",
+            "pr_closed": "closed",
+            "pr_draft": "draft",
+            "shipped": "Shipped",
+            "shipped_note": "From the director’s log. Worktrees are torn down after merge, so PR numbers aren’t recorded here.",
+            "view_pr": "View PR"
+          },
+          "OrchestratorPanelNotice": {
+            "title": "Orcastrator",
+            "body": "A director has no branch or pull request of its own, so there are no checks here. Each worker opens its own pull request, where its checks run.",
+            "open_mission_control": "Open Mission Control"
           }
         }
       },
@@ -11683,6 +11736,19 @@
             "later": "Later"
           }
         }
+      },
+      "OrchestratorLaunchModal": {
+        "title": "New Orcastrator",
+        "description": "A director plans the work and runs agents in worktrees for you — it directs, it does not write the code itself.",
+        "project": "Project",
+        "pick_project": "Select a project",
+        "name": "Name",
+        "name_placeholder": "Orcastrator",
+        "agent": "Agent",
+        "task": "What should it orchestrate?",
+        "task_placeholder": "Describe the work — the director plans how to split it into worktrees/PRs. Optional.",
+        "cancel": "Cancel",
+        "launch": "Launch Orcastrator"
       }
     },
     "i18n": {

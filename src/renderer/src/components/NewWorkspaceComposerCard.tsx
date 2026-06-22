@@ -11,6 +11,7 @@ import {
   CornerDownLeft,
   FolderPlus,
   LoaderCircle,
+  Network,
   PlugZap,
   Settings2
 } from 'lucide-react'
@@ -106,6 +107,9 @@ type NewWorkspaceComposerCardProps = {
   projectError: string | null
   creating: boolean
   onCreate: () => void
+  /** When set, render a secondary "Send to Orcastrator" action beside Create —
+   *  provided only for a linked issue while the director feature is enabled. */
+  onSendToOrchestrator?: () => void
   note: string
   onNoteChange: (value: string) => void
   setupConfig: SetupConfig | null
@@ -341,6 +345,7 @@ export default function NewWorkspaceComposerCard({
   projectError,
   creating,
   onCreate,
+  onSendToOrchestrator,
   note,
   onNoteChange,
   setupConfig,
@@ -1043,7 +1048,22 @@ export default function NewWorkspaceComposerCard({
         </div>
       ) : null}
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {onSendToOrchestrator ? (
+          <Button
+            type="button"
+            onClick={onSendToOrchestrator}
+            variant="outline"
+            size="sm"
+            className="text-xs"
+          >
+            <Network className="size-4" />
+            {translate(
+              'auto.components.NewWorkspaceComposerCard.send_to_orchestrator',
+              'Send to Orcastrator'
+            )}
+          </Button>
+        ) : null}
         <Button
           onClick={() => void onCreate()}
           disabled={createDisabled}

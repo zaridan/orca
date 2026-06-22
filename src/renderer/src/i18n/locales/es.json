@@ -222,7 +222,12 @@
           "0216895fb5": "No se pudo eliminar la rama",
           "19db0085fb": "Sucursal local eliminada",
           "2b0afc7f14": "No se pudo mantener actualizado el {{value0}} local",
-          "670864ab52": "Mantener actualizado el {{value0}} local"
+          "670864ab52": "Mantener actualizado el {{value0}} local",
+          "5366d13eec": "Workspace deleted, branch kept",
+          "2e17f825d4": "Worktree deleted, branch kept",
+          "78e08cd877": "Git could not safely delete branch \"{{value0}}\", so Orca kept it to avoid losing local commits.",
+          "3b57982bf6": "Git could not safely delete branch \"{{value0}}\" after deleting workspace \"{{value1}}\", so Orca kept it to avoid losing local commits.",
+          "81f13f48d2": "Git could not safely delete branch \"{{value0}}\" after deleting worktree \"{{value1}}\", so Orca kept it to avoid losing local commits."
         },
         "repos": {
           "b7e14472ae": "No se pudo agregar la carpeta",
@@ -508,6 +513,15 @@
         "distroRequired": "Select a WSL distro for this project before installing this skill.",
         "distroMissing": "The selected WSL distro is unavailable. Choose an available distro or switch this project to Windows.",
         "wslDefault": "WSL default"
+      },
+      "orchestrator": {
+        "launch": {
+          "no_checkout": "No checkout found for this project yet — open it once, then launch an Orcastrator.",
+          "no_command": "Could not build the Orcastrator launch command for this agent.",
+          "no_workspace": "Could not open the Orcastrator workspace.",
+          "no_repo": "This project has no repo to launch an Orcastrator in.",
+          "create_failed": "Failed to create the Orcastrator."
+        }
       }
     },
     "hooks": {
@@ -938,7 +952,8 @@
         "0d0ace8861": "Dar estrella en GitHub",
         "ec43b38ba7": "Con estrella en GitHub",
         "157bb5ecbb": "Abrir GitHub",
-        "preflightDismiss": "Dismiss"
+        "preflightDismiss": "Dismiss",
+        "orchestrator_cta": "Create Orcastrator"
       },
       "LinearIssueMarkdownDescriptionEditor": {
         "d9c47069ef": "Markdown",
@@ -1097,7 +1112,8 @@
         "importHostSetup": "Import",
         "notePasteTooLarge": "Paste is too large for the note field.",
         "reuseExistingBranch": "Reuse branch",
-        "reuseExistingBranchHint": "Check out the existing branch instead of creating a new one from it."
+        "reuseExistingBranchHint": "Check out the existing branch instead of creating a new one from it.",
+        "send_to_orchestrator": "Send to Orcastrator"
       },
       "NewWorkspaceComposerModal": {
         "fa90f739a5": "Elija el proyecto, el nombre del espacio de trabajo y el agente antes de crear el espacio de trabajo."
@@ -1596,7 +1612,8 @@
         "ff90d0abc7": "Iniciar espacio de trabajo desde {{value0}}",
         "fe28c9821f": "vista",
         "8d1e17a3ef": "Abra {{value0}} en GitHub",
-        "4ac8ff2275": "Abrir {{value0}} en Jira"
+        "4ac8ff2275": "Abrir {{value0}} en Jira",
+        "send_to_orchestrator": "Send to Orcastrator"
       },
       "Terminal": {
         "73768427cf": "Cerca",
@@ -4245,6 +4262,13 @@
           "current": "Actual",
           "searchPlaceholder": "Buscar árboles de trabajo...",
           "empty": "No hay árboles de trabajo elegibles que coincidan."
+        },
+        "OrchestratorsSidebarSection": {
+          "title": "Orcastrators",
+          "new": "New Orcastrator",
+          "pick": "Launch an Orcastrator in…",
+          "empty": "No projects yet",
+          "close": "Close Orcastrator"
         }
       },
       "shared": {
@@ -4829,6 +4853,11 @@
             "description": "Previsualiza el diseño actualizado de tarjetas de worktree, la ubicación de metadatos, las opciones del menú de visualización de tarjeta y la presentación de estado.",
             "title": "Nuevo estilo de tarjeta",
             "toggleLabel": "Alternar nuevo estilo de tarjeta"
+          },
+          "orchestrators": {
+            "title": "Orcastrators",
+            "description": "A sidebar section for launching persistent coordinator chats that plan and run multi-worktree work.",
+            "detail": "Adds an \"Orcastrators\" section above Projects. Launch a coordinator chat per repo — it plans the work, spins up worktrees and worker agents, and supervises them. Experimental while the create-flow and multi-coordinator isolation are settling."
           }
         },
         "FloatingWorkspacePane": {
@@ -6906,6 +6935,10 @@
               "title": "Nuevo estilo de tarjeta",
               "worktree": "worktree",
               "worktrees": "worktrees"
+            },
+            "orchestrators": {
+              "title": "Orcastrators",
+              "description": "A sidebar section for launching persistent coordinator chats that plan and run multi-worktree work."
             }
           }
         },
@@ -8678,7 +8711,9 @@
             "b715ef615b": "{{value0}} commits adelante de {{value1}}",
             "c1a8f3e204": "1 commit detrás de {{value0}}",
             "d2b9g4f315": "{{value0}} commits detrás de {{value1}}",
-            "e9c2a5d416": "A la par con {{value0}}"
+            "e9c2a5d416": "A la par con {{value0}}",
+            "orchestrator_title": "Orcastrator",
+            "orchestrator_body": "This director coordinates worker agents in their own worktrees. It has no branch to publish — each worker opens its own pull request."
           },
           "SourceControlAgentActionDialog": {
             "8e856842d1": "No se pudo iniciar el agente seleccionado.",
@@ -9198,6 +9233,24 @@
                 "copyCommand": "Copy command"
               }
             }
+          },
+          "OrchestratorMissionControl": {
+            "fallback": "Orcastrator",
+            "summary": "Directs worker agents in their own worktrees — it has no branch to publish. Each worker opens its own pull request.",
+            "spawned": "Spawned work",
+            "empty": "No worktrees yet — the director creates them as it plans the work.",
+            "pr_open": "open",
+            "pr_merged": "merged",
+            "pr_closed": "closed",
+            "pr_draft": "draft",
+            "shipped": "Shipped",
+            "shipped_note": "From the director’s log. Worktrees are torn down after merge, so PR numbers aren’t recorded here.",
+            "view_pr": "View PR"
+          },
+          "OrchestratorPanelNotice": {
+            "title": "Orcastrator",
+            "body": "A director has no branch or pull request of its own, so there are no checks here. Each worker opens its own pull request, where its checks run.",
+            "open_mission_control": "Open Mission Control"
           }
         }
       },
@@ -11683,6 +11736,19 @@
             "later": "Later"
           }
         }
+      },
+      "OrchestratorLaunchModal": {
+        "title": "New Orcastrator",
+        "description": "A director plans the work and runs agents in worktrees for you — it directs, it does not write the code itself.",
+        "project": "Project",
+        "pick_project": "Select a project",
+        "name": "Name",
+        "name_placeholder": "Orcastrator",
+        "agent": "Agent",
+        "task": "What should it orchestrate?",
+        "task_placeholder": "Describe the work — the director plans how to split it into worktrees/PRs. Optional.",
+        "cancel": "Cancel",
+        "launch": "Launch Orcastrator"
       }
     },
     "i18n": {
