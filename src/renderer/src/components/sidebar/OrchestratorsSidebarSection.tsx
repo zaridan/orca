@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { Network, Plus, X } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
@@ -6,6 +6,8 @@ import { AgentStateDot } from '@/components/AgentStateDot'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { deriveWorktreeAgentDotState } from '@/lib/worktree-agent-dot-state'
 import { translate } from '@/i18n/i18n'
+import { ORCASTRATOR_DISPLAY_PREFIX } from '@/store/slices/orchestrators'
+import { WorktreeTitleInlineRename } from './WorktreeTitleInlineRename'
 
 // Why: experimental "Orcastrators" sidebar section. The `+` opens a project
 // picker; selecting one launches a director session for that project (see
@@ -23,7 +25,32 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
   const activeTabIdByWorktree = useAppStore((s) => s.activeTabIdByWorktree)
   const setActiveTab = useAppStore((s) => s.setActiveTab)
   const closeOrchestrator = useAppStore((s) => s.closeOrchestrator)
+  const updateOrchestrator = useAppStore((s) => s.updateOrchestrator)
+  const updateWorktreeMeta = useAppStore((s) => s.updateWorktreeMeta)
   const reattachOrchestrators = useAppStore((s) => s.reattachOrchestrators)
+
+  // Why: rename mirrors the worktree-title rename — update the in-memory entry
+  // for instant UI, then persist the prefixed displayName on the underlying
+  // worktree so reattachOrchestrators reconstructs the name after a reload.
+  const renameOrchestrator = useCallback(
+    async (id: string, worktreeId: string, projectName: string): Promise<void> => {
+      updateOrchestrator(id, { projectName })
+      await updateWorktreeMeta(worktreeId, {
+        displayName: `${ORCASTRATOR_DISPLAY_PREFIX}${projectName}`
+      })
+    },
+    [updateOrchestrator, updateWorktreeMeta]
+  )
+
+  const activate = useCallback(
+    (worktreeId: string, focusTabId: string | undefined): void => {
+      activateAndRevealWorktree(worktreeId, { sidebarRevealBehavior: 'auto' })
+      if (focusTabId) {
+        setActiveTab(focusTabId)
+      }
+    },
+    [setActiveTab]
+  )
 
   // Why: the in-memory registry doesn't survive a reload, but director worktrees
   // do — rebuild it from them on load (and whenever worktrees change) so a
@@ -85,24 +112,36 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
               isActive ? 'orcastrator-active-surface' : 'worktree-sidebar-card-hover'
             )}
           >
-            <button
-              type="button"
+            {/* Why: a div (not a button) hosts the inline-rename Input — an
+                Input nested in a <button> is invalid HTML. role/tabIndex/key
+                handling keep activation keyboard-accessible. */}
+            <div
+              role="button"
+              tabIndex={0}
               aria-current={isActive ? 'page' : undefined}
-              onClick={() => {
-                activateAndRevealWorktree(entry.worktreeId, { sidebarRevealBehavior: 'auto' })
-                if (focusTabId) {
-                  setActiveTab(focusTabId)
+              onClick={() => activate(entry.worktreeId, focusTabId)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  activate(entry.worktreeId, focusTabId)
                 }
               }}
-              className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-[13px] tracking-tight text-worktree-sidebar-foreground/80"
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-[13px] tracking-tight text-worktree-sidebar-foreground/80 outline-none"
             >
               <AgentStateDot state={dotState} size="sm" />
               <Network
                 className="size-3.5 shrink-0 text-worktree-sidebar-foreground/40"
                 strokeWidth={1.75}
               />
-              <span className="flex-1 truncate">{entry.projectName}</span>
-            </button>
+              <WorktreeTitleInlineRename
+                displayName={entry.projectName}
+                className="flex-1 text-[13px]"
+                editingClassName="flex-1"
+                onRename={(projectName) =>
+                  renameOrchestrator(entry.id, entry.worktreeId, projectName)
+                }
+              />
+            </div>
             <button
               type="button"
               aria-label={translate(

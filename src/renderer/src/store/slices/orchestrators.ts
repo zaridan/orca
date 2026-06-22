@@ -23,6 +23,10 @@ export type OrchestratorEntry = {
 export type OrchestratorsSlice = {
   orchestrators: OrchestratorEntry[]
   registerOrchestrator: (entry: OrchestratorEntry) => void
+  /** Optimistic in-memory rename of a director's display name. The durable
+   *  source of truth is the worktree displayName (prefixed) — callers must also
+   *  persist via updateWorktreeMeta so reattachOrchestrators reconstructs it. */
+  updateOrchestrator: (id: string, updates: Partial<Pick<OrchestratorEntry, 'projectName'>>) => void
   removeOrchestrator: (id: string) => void
   /** Close a director: tear down its dedicated worktree (git + checkout) and
    *  drop it from the registry. */
@@ -41,6 +45,10 @@ export const createOrchestratorsSlice: StateCreator<AppState, [], [], Orchestrat
   registerOrchestrator: (entry) =>
     set((s) => ({
       orchestrators: [...s.orchestrators.filter((e) => e.id !== entry.id), entry]
+    })),
+  updateOrchestrator: (id, updates) =>
+    set((s) => ({
+      orchestrators: s.orchestrators.map((e) => (e.id === id ? { ...e, ...updates } : e))
     })),
   removeOrchestrator: (id) =>
     set((s) => ({ orchestrators: s.orchestrators.filter((e) => e.id !== id) })),
