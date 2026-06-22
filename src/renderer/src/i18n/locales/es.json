@@ -9218,6 +9218,24 @@
                 "copyCommand": "Copy command"
               }
             }
+          },
+          "OrchestratorMissionControl": {
+            "fallback": "Orcastrator",
+            "summary": "Directs worker agents in their own worktrees — it has no branch to publish. Each worker opens its own pull request.",
+            "spawned": "Spawned work",
+            "empty": "No worktrees yet — the director creates them as it plans the work.",
+            "pr_open": "open",
+            "pr_merged": "merged",
+            "pr_closed": "closed",
+            "pr_draft": "draft",
+            "shipped": "Shipped",
+            "shipped_note": "From the director’s log. Worktrees are torn down after merge, so PR numbers aren’t recorded here.",
+            "view_pr": "View PR"
+          },
+          "OrchestratorPanelNotice": {
+            "title": "Orcastrator",
+            "body": "A director has no branch or pull request of its own, so there are no checks here. Each worker opens its own pull request, where its checks run.",
+            "open_mission_control": "Open Mission Control"
           }
         }
       },

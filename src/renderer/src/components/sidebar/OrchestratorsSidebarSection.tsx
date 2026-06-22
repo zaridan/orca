@@ -2,31 +2,10 @@ import { useEffect, useMemo } from 'react'
 import { Network, Plus, X } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
-import { AgentStateDot, type AgentDotState } from '@/components/AgentStateDot'
+import { AgentStateDot } from '@/components/AgentStateDot'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
+import { deriveWorktreeAgentDotState } from '@/lib/worktree-agent-dot-state'
 import { translate } from '@/i18n/i18n'
-import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
-
-// Why: the director's live activity belongs on its Orcastrator entry, not on
-// the worktree it runs in. Derive its state from the freshest agent-status
-// entry for its tab (paneKey is `${tabId}:${leafId}`) and render it with the
-// app's shared AgentStateDot so it matches every other agent indicator.
-function deriveDirectorDotState(
-  tabIds: readonly string[],
-  agentStatusByPaneKey: Record<string, AgentStatusEntry>
-): AgentDotState {
-  let latest: AgentStatusEntry | null = null
-  for (const [paneKey, entry] of Object.entries(agentStatusByPaneKey)) {
-    const colon = paneKey.indexOf(':')
-    if (colon <= 0 || !tabIds.includes(paneKey.slice(0, colon))) {
-      continue
-    }
-    if (!latest || entry.stateStartedAt > latest.stateStartedAt) {
-      latest = entry
-    }
-  }
-  return latest?.state ?? 'idle'
-}
 
 // Why: experimental "Orcastrators" sidebar section. The `+` opens a project
 // picker; selecting one launches a director session for that project (see
@@ -90,7 +69,7 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
       </div>
       {live.map((entry) => {
         const worktreeTabIds = (tabsByWorktree[entry.worktreeId] ?? []).map((tab) => tab.id)
-        const dotState = deriveDirectorDotState(worktreeTabIds, agentStatusByPaneKey)
+        const dotState = deriveWorktreeAgentDotState(worktreeTabIds, agentStatusByPaneKey)
         // Why: the ORCASTRATORS list is the navigator — highlight the entry
         // whose worktree is active, using the same rounded accent highlight as
         // the sidebar nav items.
