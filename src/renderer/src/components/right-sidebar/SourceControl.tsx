@@ -254,6 +254,13 @@ import {
   shouldShowSourceControlCompareUnavailableCard,
   SourceControlHeaderToolbar
 } from './source-control-header-toolbar'
+import {
+  hasPositiveHostedReviewNumberLink,
+  hasResolvableHostedReviewPushTargetLink,
+  hasUsableHostedReviewPushTarget,
+  resolveHostedReviewActionUpstreamStatus,
+  resolveHostedReviewStateForActions
+} from './source-control-hosted-review-push-target'
 export { HostedReviewHeaderLink } from './hosted-review-header-chrome'
 import {
   createRunningCommitMessageGenerationRecord,
@@ -790,6 +797,7 @@ function SourceControlInner(): React.JSX.Element {
   const beginGitBranchCompareRequest = useAppStore((s) => s.beginGitBranchCompareRequest)
   const setGitBranchCompareResult = useAppStore((s) => s.setGitBranchCompareResult)
   const fetchUpstreamStatus = useAppStore((s) => s.fetchUpstreamStatus)
+  const ensureHostedReviewPushTarget = useAppStore((s) => s.ensureHostedReviewPushTarget)
   const setUpstreamStatus = useAppStore((s) => s.setUpstreamStatus)
   const pushBranch = useAppStore((s) => s.pushBranch)
   const pullBranch = useAppStore((s) => s.pullBranch)
@@ -1416,12 +1424,14 @@ function SourceControlInner(): React.JSX.Element {
     linkedGitLabMR,
     linkedGiteaPR
   ])
-  const hasLinkedHostedReview =
-    (linkedGitHubPR ?? fallbackGitHubPRNumber) !== null ||
-    linkedGitLabMR !== null ||
-    linkedBitbucketPR !== null ||
-    linkedAzureDevOpsPR !== null ||
-    linkedGiteaPR !== null
+  const hasHostedReviewLink = hasPositiveHostedReviewNumberLink({
+    linkedGitHubPR,
+    fallbackGitHubPR: fallbackGitHubPRNumber,
+    linkedGitLabMR,
+    linkedBitbucketPR,
+    linkedAzureDevOpsPR,
+    linkedGiteaPR
+  })
   // Why: when activeRepo.connectionId is truthy, neither the SourceControl
   // effect below nor WorktreeCard.tsx fetches hostedReview for this branch,
   // so hostedReviewEntry would stay undefined forever and would permanently
@@ -1429,7 +1439,59 @@ function SourceControlInner(): React.JSX.Element {
   // and no upstream. Skip the loading state for those repos so the publish
   // gate doesn't latch.
   const isHostedReviewStateLoading =
-    !activeRepo?.connectionId && hasLinkedHostedReview && hostedReviewEntry === undefined
+    !activeRepo?.connectionId && hasHostedReviewLink && hostedReviewEntry === undefined
+  const hasResolvableReviewPushTargetLink = hasResolvableHostedReviewPushTargetLink({
+    linkedGitHubPR,
+    linkedGitLabMR
+  })
+  useEffect(() => {
+    // Why: resolving review heads can hit provider/SSH APIs, so keep it tied
+    // to the visible Source Control branch view like the adjacent PR polling.
+    if (!isBranchVisible || isFolder || !activeWorktreeId || activeWorktree?.pushTarget) {
+      return
+    }
+    if (!hasResolvableReviewPushTargetLink) {
+      return
+    }
+    void ensureHostedReviewPushTarget(activeWorktreeId)
+  }, [
+    activeWorktree?.pushTarget,
+    activeWorktreeId,
+    ensureHostedReviewPushTarget,
+    hasResolvableReviewPushTargetLink,
+    isBranchVisible,
+    isFolder,
+    linkedGitHubPR,
+    linkedGitLabMR
+  ])
+  const canUseHostedReviewPushTarget = hasUsableHostedReviewPushTarget({
+    pushTarget: activeWorktree?.pushTarget,
+    upstreamStatus: remoteStatus,
+    hasResolvableHostedReviewPushTargetLink: hasResolvableReviewPushTargetLink
+  })
+  const hostedReviewStateForActions = resolveHostedReviewStateForActions({
+    hostedReviewState: hostedReview?.state ?? null,
+    hasResolvableHostedReviewPushTargetLink: hasResolvableReviewPushTargetLink
+  })
+  const remoteStatusForActions: typeof remoteStatus = useMemo(
+    () =>
+      resolveHostedReviewActionUpstreamStatus({
+        hasHostedReviewLink,
+        hasResolvableHostedReviewPushTargetLink: hasResolvableReviewPushTargetLink,
+        hostedReviewState: hostedReviewStateForActions,
+        isHostedReviewStateLoading,
+        canUseHostedReviewPushTarget,
+        upstreamStatus: remoteStatus
+      }),
+    [
+      canUseHostedReviewPushTarget,
+      hasHostedReviewLink,
+      hasResolvableReviewPushTargetLink,
+      hostedReviewStateForActions,
+      isHostedReviewStateLoading,
+      remoteStatus
+    ]
+  )
   useEffect(() => {
     if (
       !isBranchVisible ||
@@ -3778,16 +3840,15 @@ function SourceControlInner(): React.JSX.Element {
       hasUnresolvedConflicts: unresolvedConflicts.length > 0,
       isCommitting,
       isRemoteOperationActive: isRemoteOperationActive || isAbortingOperation,
-      upstreamStatus: remoteStatus,
-      prState: hostedReview?.state ?? null,
+      upstreamStatus: remoteStatusForActions,
+      prState: hostedReviewStateForActions,
       isPRStateLoading: isHostedReviewStateLoading,
       inFlightRemoteOpKind,
       hostedReviewCreation,
       branchCommitsAhead:
         branchSummary?.status === 'ready' ? (branchSummary.commitsAhead ?? 0) : undefined,
       hasCurrentBranch: Boolean(branchName),
-      canPushLinkedReviewWithoutUpstream:
-        Boolean(activeWorktree?.pushTarget) || remoteStatus?.hasConfiguredPushTarget === true,
+      canPushLinkedReviewWithoutUpstream: canUseHostedReviewPushTarget,
       isPrIntentInFlight: isCreatePrIntentInFlight
     })
   }, [
@@ -3802,13 +3863,13 @@ function SourceControlInner(): React.JSX.Element {
     inFlightRemoteOpKind,
     hostedReviewCreation,
     isHostedReviewStateLoading,
-    hostedReview?.state,
-    activeWorktree?.pushTarget,
+    hostedReviewStateForActions,
+    canUseHostedReviewPushTarget,
     isCreatePrIntentInFlight,
     branchSummary?.commitsAhead,
     branchSummary?.status,
     branchName,
-    remoteStatus,
+    remoteStatusForActions,
     unresolvedConflicts.length
   ])
 
@@ -3897,8 +3958,8 @@ function SourceControlInner(): React.JSX.Element {
         isCommitting,
         isRemoteOperationActive: isRemoteOperationActive || isAbortingOperation,
         conflictOperation,
-        upstreamStatus: remoteStatus,
-        prState: hostedReview?.state ?? null,
+        upstreamStatus: remoteStatusForActions,
+        prState: hostedReviewStateForActions,
         isPRStateLoading: isHostedReviewStateLoading,
         inFlightRemoteOpKind,
         hostedReviewCreation,
@@ -3906,8 +3967,7 @@ function SourceControlInner(): React.JSX.Element {
         branchCommitsAhead:
           branchSummary?.status === 'ready' ? (branchSummary.commitsAhead ?? 0) : undefined,
         hasCurrentBranch: Boolean(branchName),
-        canPushLinkedReviewWithoutUpstream:
-          Boolean(activeWorktree?.pushTarget) || remoteStatus?.hasConfiguredPushTarget === true,
+        canPushLinkedReviewWithoutUpstream: canUseHostedReviewPushTarget,
         rebaseBaseRef: effectiveBaseRef
       }),
     [
@@ -3925,14 +3985,14 @@ function SourceControlInner(): React.JSX.Element {
       isCreatingPr,
       isCreatePrIntentInFlight,
       isHostedReviewStateLoading,
-      hostedReview?.state,
+      hostedReviewStateForActions,
       prGenerating,
-      activeWorktree?.pushTarget,
+      canUseHostedReviewPushTarget,
       branchSummary?.commitsAhead,
       branchSummary?.status,
       branchName,
       effectiveBaseRef,
-      remoteStatus,
+      remoteStatusForActions,
       unresolvedConflicts.length
     ]
   )

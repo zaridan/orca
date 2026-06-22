@@ -11,6 +11,7 @@ import type { AgentHookInstallStatus } from '../shared/agent-hook-types'
 import type { TerminalPaneSplitSource } from '../shared/feature-education-telemetry'
 import type { ProjectExecutionRuntimeResolution } from '../shared/project-execution-runtime'
 import type { StartupCommandDelivery } from '../shared/codex-startup-delivery'
+import type { SleepingAgentLaunchConfig } from '../shared/agent-session-resume'
 import type {
   BaseRefSearchResult,
   BaseRefDefaultResult,
@@ -44,6 +45,7 @@ import type {
   FloatingTerminalCwdRequest,
   MarkdownDocument,
   SearchResult,
+  TuiAgent,
   UpdateStatus,
   WorktreeBaseStatusEvent,
   WorktreeDefaultTabsLaunch,
@@ -700,6 +702,9 @@ const api = {
       cwd?: string
       env?: Record<string, string>
       command?: string
+      launchConfig?: SleepingAgentLaunchConfig
+      launchToken?: string
+      launchAgent?: TuiAgent
       startupCommandDelivery?: StartupCommandDelivery
       connectionId?: string | null
       worktreeId?: string
@@ -720,6 +725,7 @@ const api = {
       telemetry?: { agent_kind: AgentKind; launch_source: LaunchSource; request_kind: RequestKind }
     }): Promise<{
       id: string
+      launchConfig?: SleepingAgentLaunchConfig
       snapshot?: string
       snapshotCols?: number
       snapshotRows?: number
@@ -3004,6 +3010,10 @@ const api = {
         requestId?: string
         worktreeId: string
         command?: string
+        env?: Record<string, string>
+        launchConfig?: SleepingAgentLaunchConfig
+        launchToken?: string
+        launchAgent?: TuiAgent
         title?: string
         ptyId?: string
         activate?: boolean
@@ -3020,6 +3030,10 @@ const api = {
           requestId?: string
           worktreeId: string
           command?: string
+          env?: Record<string, string>
+          launchConfig?: SleepingAgentLaunchConfig
+          launchToken?: string
+          launchAgent?: TuiAgent
           title?: string
           ptyId?: string
           activate?: boolean
@@ -3040,6 +3054,10 @@ const api = {
         afterTabId?: string
         targetGroupId?: string
         command?: string
+        env?: Record<string, string>
+        launchConfig?: SleepingAgentLaunchConfig
+        launchToken?: string
+        launchAgent?: TuiAgent
         startupCommandDelivery?: StartupCommandDelivery
         title?: string
         activate?: boolean
@@ -3053,6 +3071,10 @@ const api = {
           afterTabId?: string
           targetGroupId?: string
           command?: string
+          env?: Record<string, string>
+          launchConfig?: SleepingAgentLaunchConfig
+          launchToken?: string
+          launchAgent?: TuiAgent
           startupCommandDelivery?: StartupCommandDelivery
           title?: string
           activate?: boolean
@@ -3248,6 +3270,8 @@ const api = {
         mode: options?.mode === 'paste-and-match-style' ? 'paste-and-match-style' : 'paste'
       })
     },
+    writeClipboardFile: (filePath: string): Promise<{ ok: boolean; reason?: string }> =>
+      ipcRenderer.invoke('clipboard:writeFile', filePath),
     onFileDrop: (callback: (data: NativeFileDropPayload) => void): (() => void) =>
       subscribeNativeFileDrop(callback),
     getZoomLevel: (): number => webFrame.getZoomLevel(),
@@ -3816,6 +3840,11 @@ const api = {
      *  cannot resurrect it. Fire-and-forget; no response. */
     drop: (paneKey: string): void => {
       ipcRenderer.send('agentStatus:drop', paneKey)
+    },
+    /** Drop all cached hook statuses under one terminal tab prefix. Fired on
+     *  explicit tab close even when the renderer has no matching local row. */
+    dropByTabPrefix: (tabId: string): void => {
+      ipcRenderer.send('agentStatus:dropByTabPrefix', tabId)
     }
   },
 

@@ -177,21 +177,26 @@ describe('Jira client credential storage', () => {
     const siteId = 'site-alpha'
     writeJiraFiles(siteId, 'token-alpha')
     netFetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          accountId: 'account-alpha',
-          displayName: 'Ada',
-          emailAddress: 'ada@example.com'
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      )
+      new Response(JSON.stringify({ issues: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
     )
     const jira = await loadClientModule({ encryptionAvailable: true })
+    const client = jira.getClients(siteId)[0]
 
-    await jira.testConnection(siteId)
+    if (!client) {
+      throw new Error('Expected stored Jira client')
+    }
+
+    await jira.jiraRequest(client, '/rest/api/3/search/jql', {
+      method: 'POST',
+      body: JSON.stringify({ jql: 'project = ALP' })
+    })
 
     const headers = netFetchMock.mock.calls[0]?.[1]?.headers as Headers
     const userAgent = headers.get('User-Agent') ?? ''
+    expect(netFetchMock.mock.calls[0]?.[1]?.method).toBe('POST')
     expect(userAgent).toBe('Orca')
     expect(userAgent).not.toMatch(/Mozilla|Chrome|Safari|AppleWebKit/i)
   })
@@ -420,6 +425,8 @@ describe('Jira client credential storage', () => {
 
     expect(resolveProxyMock).toHaveBeenCalledWith('https://example.atlassian.net/rest/api/3/myself')
     expect(netFetchMock).toHaveBeenCalledTimes(1)
+    const headers = netFetchMock.mock.calls[0]?.[1]?.headers as Headers
+    expect(headers.get('User-Agent')).toBe('Orca')
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })

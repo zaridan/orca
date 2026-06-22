@@ -3,7 +3,7 @@
    make the hook coordination harder to audit. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { OpenFile } from '@/store/slices/editor'
-import { getConnectionId } from '@/lib/connection-context'
+import { getConnectionId, getConnectionIdForFile } from '@/lib/connection-context'
 import { joinPath } from '@/lib/path'
 import { useAppStore } from '@/store'
 import { getRuntimeFileReadScope, readRuntimeFileContent } from '@/runtime/runtime-file-client'
@@ -95,7 +95,7 @@ export function useEditorPanelContentState({
       relativePath?: string
     ): Promise<void> => {
       try {
-        const connectionId = getConnectionId(worktreeId ?? null) ?? undefined
+        const connectionId = getConnectionIdForFile(worktreeId ?? null, filePath) ?? undefined
         const restoredOpenFile = openFilesRef.current.find((file) => file.id === id)
         const activeSettings = useAppStore.getState().settings
         const readSettings = settingsForRuntimeOwner(
@@ -305,7 +305,12 @@ export function useEditorPanelContentState({
         return
       }
       if (!fileContents[fileToLoad.id]) {
-        void loadFileContent(fileToLoad.filePath, fileToLoad.id, fileToLoad.worktreeId)
+        void loadFileContent(
+          fileToLoad.filePath,
+          fileToLoad.id,
+          fileToLoad.worktreeId,
+          fileToLoad.relativePath
+        )
       }
       if (isChangesMode && !diffContents[fileToLoad.id]) {
         void loadDiffContent(fileToLoad)

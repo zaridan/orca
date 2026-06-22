@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   readRuntimeFileContent: vi.fn(),
   getRuntimeGitDiff: vi.fn(),
   getConnectionId: vi.fn(),
+  getConnectionIdForFile: vi.fn(),
   getState: vi.fn()
 }))
 
@@ -33,7 +34,8 @@ vi.mock('@/runtime/runtime-git-client', () => ({
 }))
 
 vi.mock('@/lib/connection-context', () => ({
-  getConnectionId: mocks.getConnectionId
+  getConnectionId: mocks.getConnectionId,
+  getConnectionIdForFile: mocks.getConnectionIdForFile
 }))
 
 vi.mock('@/store', () => ({
@@ -95,6 +97,8 @@ describe('useEditorPanelContentState', () => {
     mocks.getRuntimeGitDiff.mockReset()
     mocks.getConnectionId.mockReset()
     mocks.getConnectionId.mockReturnValue(undefined)
+    mocks.getConnectionIdForFile.mockReset()
+    mocks.getConnectionIdForFile.mockReturnValue(undefined)
     mocks.getState.mockReset()
     mocks.getState.mockReturnValue({ settings: null })
   })
@@ -106,6 +110,40 @@ describe('useEditorPanelContentState', () => {
     container?.remove()
     container = null
     root = null
+  })
+
+  it('loads folder workspace files through the path-specific SSH connection', async () => {
+    const activeFile = createOpenFile({
+      filePath: '/home/neil/platform/api/src/file.ts',
+      relativePath: 'api/src/file.ts',
+      worktreeId: 'folder:folder-workspace-1'
+    })
+    mocks.getConnectionIdForFile.mockReturnValue('ssh-1')
+    mocks.readRuntimeFileContent.mockResolvedValue({ content: 'remote content', isBinary: false })
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(<HookProbe activeFile={activeFile} openFiles={[activeFile]} />)
+    })
+
+    await vi.waitFor(() =>
+      expect(latestFileContents[activeFile.id]?.content).toBe('remote content')
+    )
+    expect(mocks.getConnectionIdForFile).toHaveBeenCalledWith(
+      'folder:folder-workspace-1',
+      '/home/neil/platform/api/src/file.ts'
+    )
+    expect(mocks.readRuntimeFileContent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: '/home/neil/platform/api/src/file.ts',
+        relativePath: 'api/src/file.ts',
+        worktreeId: 'folder:folder-workspace-1',
+        connectionId: 'ssh-1'
+      })
+    )
   })
 
   it('reloads a clean file when its file content reload nonce changes', async () => {
