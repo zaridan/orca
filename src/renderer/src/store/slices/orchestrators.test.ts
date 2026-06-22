@@ -53,6 +53,18 @@ describe('orchestrators slice', () => {
     expect(store.getState().orchestrators).toHaveLength(0)
   })
 
+  it('updateOrchestrator renames the matching entry in place and leaves others untouched', () => {
+    const store = createTestStore()
+    store.getState().registerOrchestrator(entry({ id: 'w1', projectName: 'P1' }))
+    store.getState().registerOrchestrator(entry({ id: 'w2', worktreeId: 'w2', projectName: 'P2' }))
+
+    store.getState().updateOrchestrator('w1', { projectName: 'Renamed' })
+
+    const byId = Object.fromEntries(store.getState().orchestrators.map((e) => [e.id, e]))
+    expect(byId.w1.projectName).toBe('Renamed')
+    expect(byId.w2.projectName).toBe('P2')
+  })
+
   it('reattaches directors from existing worktrees by displayName prefix', () => {
     const store = createTestStore()
     store.setState({
