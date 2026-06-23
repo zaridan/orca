@@ -829,6 +829,7 @@ describe('orchestration RPC methods', () => {
         call('orchestration.dispatch', {
           task: task.id,
           to: 'term_a',
+          from: 'coordinator-test',
           inject: true
         })
       ).rejects.toThrow('terminal_not_writable')
@@ -850,6 +851,7 @@ describe('orchestration RPC methods', () => {
       await call('orchestration.dispatch', {
         task: task.id,
         to: 'term_a',
+        from: 'coordinator-test',
         inject: true,
         devMode: true
       })
@@ -869,6 +871,39 @@ describe('orchestration RPC methods', () => {
           inject: true
         })
       ).rejects.toThrow('no recognized agent detected')
+    })
+
+    it('refuses inject without --from when no single active run can supply a handle (#12)', async () => {
+      setup()
+      const task = db.createTask({ spec: 'work' })
+      vi.spyOn(runtime, 'isTerminalRunningAgent').mockResolvedValue(true)
+      const send = vi.spyOn(runtime, 'sendTerminal')
+
+      await expect(
+        call('orchestration.dispatch', { task: task.id, to: 'term_a', inject: true })
+      ).rejects.toThrow(/Cannot resolve a coordinator handle/)
+      // No black-holed inject: nothing was sent to the terminal.
+      expect(send).not.toHaveBeenCalled()
+    })
+
+    it('infers the per-run handle from the single active run for inject (#12)', async () => {
+      setup()
+      db.createCoordinatorRun({ spec: 'go', coordinatorHandle: 'coordinator-zzz' })
+      const task = db.createTask({ spec: 'work' })
+      vi.spyOn(runtime, 'isTerminalRunningAgent').mockResolvedValue(true)
+      const send = vi.spyOn(runtime, 'sendTerminal').mockResolvedValue({
+        handle: 'term_a',
+        accepted: true,
+        bytesWritten: 1
+      })
+
+      await call('orchestration.dispatch', { task: task.id, to: 'term_a', inject: true })
+
+      // Worker preamble addresses the per-run coordinator handle, not 'coordinator'.
+      expect(send.mock.calls[0]?.[1].text).toContain('coordinator-zzz')
+      expect(send.mock.calls[0]?.[1].text).not.toContain(
+        "Your coordinator's terminal handle is: coordinator\n"
+      )
     })
 
     it('rejects dispatch to occupied terminal', async () => {
@@ -1294,7 +1329,7 @@ describe('orchestration RPC methods', () => {
       expect(startSpy.mock.calls[0][0].coordinatorHandle).toBe('coordinator-explicit')
     })
 
-    it('rejects a second run while one is already active', async () => {
+    it('rejects a second run on the same target (no worktree → shared null slot)', async () => {
       setup()
       // Seed an active run directly (simulates another runtime's in-flight run).
       db.createCoordinatorRun({ spec: 'first', coordinatorHandle: 'coordinator-aaa' })
@@ -1302,6 +1337,20 @@ describe('orchestration RPC methods', () => {
       await expect(call('orchestration.run', { spec: 'second' })).rejects.toThrow(
         /Coordinator already running/
       )
+    })
+
+    it('threads the resolved target key into startCoordinatorRun', async () => {
+      setup()
+      vi.spyOn(runtime, 'resolveOrchestrationTargetKey').mockResolvedValue('worktree:abc')
+      const startSpy = vi.spyOn(db, 'startCoordinatorRun').mockImplementation(() => {
+        throw new Error('abort-after-capture')
+      })
+
+      await expect(call('orchestration.run', { spec: 'x', worktree: 'id:abc' })).rejects.toThrow(
+        'abort-after-capture'
+      )
+
+      expect(startSpy.mock.calls[0][0].targetKey).toBe('worktree:abc')
     })
   })
 

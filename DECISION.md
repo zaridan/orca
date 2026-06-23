@@ -37,17 +37,17 @@ connection-lifecycle management. That **re-introduces shared routing state** —
 exact thing A was supposed to remove — at strictly more surface and risk than a
 column, for identical isolation.
 
-## 3. Atomic single-active-run *and* cross-run supervision both want one shared table
+## 3. Atomic run-start *and* cross-run supervision both want one shared table
 
-The required atomic run-start (`CREATE UNIQUE INDEX … ON coordinator_runs(status)
-WHERE status='running'`) only gives **cross-process** mutual exclusion if every run
-shares one `coordinator_runs` table. (The current in-memory `getActiveCoordinatorRun()`
-check does not span processes — that is *why* two coordinators clash: separate
-runtimes, same DB file.) Per-run files force a **separate shared registry DB**
-anyway, so A is really "per-run files + a shared registry" — a two-tier schema that
-is more complex than B's single file, not the clean structural win the brief
-imagines. The same applies to the supervisor enumerations
-(`listCoordinatorRuns`, `getActiveDispatchForTerminal`) which must see across runs.
+The atomic run-start guard only gives **cross-process** mutual exclusion if every
+run shares one `coordinator_runs` table. (The current in-memory
+`getActiveCoordinatorRun()` check does not span processes — that is *why* two
+coordinators clash: separate runtimes, same DB file.) Per-run files force a
+**separate shared registry DB** anyway, so A is really "per-run files + a shared
+registry" — a two-tier schema that is more complex than B's single file, not the
+clean structural win the brief imagines. The same applies to the supervisor
+enumerations (`listCoordinatorRuns`, `getActiveDispatchForTerminal`) which must see
+across runs.
 
 ## What Approach B does here
 
@@ -61,9 +61,19 @@ imagines. The same applies to the supervisor enumerations
   (Worker→coordinator messages can't carry a runId — the worker never learns one —
   so a `coordinator_run_id` column on `messages` would have no reliable writer;
   unique handles are the correct fix for message routing.)
-- **Atomic run-start**: partial unique index on `coordinator_runs(status) WHERE
-  status='running'` closes the cross-process TOCTOU; the RPC keeps a friendly
-  pre-check and maps the constraint violation to "coordinator already running".
+- **Atomic, per-target run-start** (schema v6 → v7): concurrent Orcastrators in
+  different repos/worktrees are a supported product feature, so the guard must
+  block only a *duplicate run on the same target*, not all concurrency.
+  `coordinator_runs.target_key` identifies the run's repo/worktree (the worktree
+  selector resolved to a stable worktree id; the raw selector if it can't resolve;
+  NULL when no worktree was given — those runs share one slot).
+  `startCoordinatorRun` wraps the check+insert in **`BEGIN IMMEDIATE`** and rejects
+  only when a `status='running'` row exists **for the same `target_key`**, throwing
+  `CoordinatorRunConflictError` (mapped to a friendly RPC error). `BEGIN IMMEDIATE`
+  (not a partial unique index) is the mechanism: it takes the write lock up front so
+  the check+insert is serialized across connections/processes, while leaving the
+  table free to hold multiple concurrent `running` rows on *different* targets — a
+  global `WHERE status='running'` unique index could not.
 - Cross-run supervisor queries (push-on-idle, exit attribution, activity dots)
   stay handle-based / fan over `listCoordinatorRuns` — the minimal cross-run surface.
 

@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { OrchestrationDb, CoordinatorRunConflictError } from './db'
 
@@ -151,8 +154,42 @@ describe('orchestration per-run isolation (issue #12)', () => {
     })
   })
 
-  describe('atomic run-start (TOCTOU close)', () => {
-    it('rejects a second run while one is already running', () => {
+  describe('atomic, per-target run-start (TOCTOU close)', () => {
+    it('rejects a second run on the SAME target', () => {
+      const d = createDb()
+      d.startCoordinatorRun({ spec: 'A', coordinatorHandle: 'coordinator-a', targetKey: 'repo:x' })
+      expect(() =>
+        d.startCoordinatorRun({
+          spec: 'B',
+          coordinatorHandle: 'coordinator-b',
+          targetKey: 'repo:x'
+        })
+      ).toThrow(CoordinatorRunConflictError)
+    })
+
+    it('allows concurrent runs on DIFFERENT targets', () => {
+      const d = createDb()
+      const a = d.startCoordinatorRun({
+        spec: 'A',
+        coordinatorHandle: 'coordinator-a',
+        targetKey: 'repo:x'
+      })
+      const b = d.startCoordinatorRun({
+        spec: 'B',
+        coordinatorHandle: 'coordinator-b',
+        targetKey: 'repo:y'
+      })
+      expect(a.status).toBe('running')
+      expect(b.status).toBe('running')
+      expect(
+        d
+          .listCoordinatorRuns({ status: 'running' })
+          .map((r) => r.id)
+          .sort()
+      ).toEqual([a.id, b.id].sort())
+    })
+
+    it('treats a null target_key as a single shared slot', () => {
       const d = createDb()
       d.startCoordinatorRun({ spec: 'A', coordinatorHandle: 'coordinator-a' })
       expect(() =>
@@ -162,12 +199,88 @@ describe('orchestration per-run isolation (issue #12)', () => {
 
     it('does not leave a dangling transaction after a rejected start', () => {
       const d = createDb()
-      const runA = d.startCoordinatorRun({ spec: 'A', coordinatorHandle: 'coordinator-a' })
-      expect(() => d.startCoordinatorRun({ spec: 'B', coordinatorHandle: 'b' })).toThrow()
+      const runA = d.startCoordinatorRun({
+        spec: 'A',
+        coordinatorHandle: 'coordinator-a',
+        targetKey: 'repo:x'
+      })
+      expect(() =>
+        d.startCoordinatorRun({ spec: 'B', coordinatorHandle: 'b', targetKey: 'repo:x' })
+      ).toThrow()
       // The DB is still writable (the failed start rolled back cleanly).
       d.updateCoordinatorRun(runA.id, 'completed')
-      const runC = d.startCoordinatorRun({ spec: 'C', coordinatorHandle: 'coordinator-c' })
+      const runC = d.startCoordinatorRun({
+        spec: 'C',
+        coordinatorHandle: 'coordinator-c',
+        targetKey: 'repo:x'
+      })
       expect(runC.status).toBe('running')
+    })
+  })
+
+  // Why (#12): the actual bug repro shape — two runtimes (two OrchestrationDb
+  // connections) sharing ONE on-disk file. A :memory: DB is single-connection by
+  // construction and cannot exercise the BEGIN IMMEDIATE cross-connection lock,
+  // so these use a real temp file. The first start commits a running row; the
+  // second connection's BEGIN IMMEDIATE check sees it through the shared file.
+  describe('cross-connection atomic run-start (two runtimes, one file)', () => {
+    let tempDir: string
+    let dbA: OrchestrationDb | undefined
+    let dbB: OrchestrationDb | undefined
+
+    afterEach(() => {
+      dbA?.close()
+      dbB?.close()
+      dbA = undefined
+      dbB = undefined
+      if (tempDir) {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    })
+
+    function openTwoOnOneFile(): { a: OrchestrationDb; b: OrchestrationDb } {
+      tempDir = mkdtempSync(join(tmpdir(), 'orca-orch-race-'))
+      const path = join(tempDir, 'orchestration.db')
+      dbA = new OrchestrationDb(path)
+      dbB = new OrchestrationDb(path)
+      return { a: dbA, b: dbB }
+    }
+
+    it('same target: exactly one connection wins', () => {
+      const { a, b } = openTwoOnOneFile()
+      const won = a.startCoordinatorRun({
+        spec: 'A',
+        coordinatorHandle: 'coordinator-a',
+        targetKey: 'repo:x'
+      })
+      expect(won.status).toBe('running')
+      // Second runtime, same file, same target → rejected via the shared lock.
+      expect(() =>
+        b.startCoordinatorRun({
+          spec: 'B',
+          coordinatorHandle: 'coordinator-b',
+          targetKey: 'repo:x'
+        })
+      ).toThrow(CoordinatorRunConflictError)
+      expect(b.listCoordinatorRuns({ status: 'running' })).toHaveLength(1)
+    })
+
+    it('different targets: both connections succeed', () => {
+      const { a, b } = openTwoOnOneFile()
+      const ra = a.startCoordinatorRun({
+        spec: 'A',
+        coordinatorHandle: 'coordinator-a',
+        targetKey: 'repo:x'
+      })
+      const rb = b.startCoordinatorRun({
+        spec: 'B',
+        coordinatorHandle: 'coordinator-b',
+        targetKey: 'repo:y'
+      })
+      expect(ra.status).toBe('running')
+      expect(rb.status).toBe('running')
+      // Both runs are visible (and running) through either connection.
+      expect(a.listCoordinatorRuns({ status: 'running' })).toHaveLength(2)
     })
   })
 })
