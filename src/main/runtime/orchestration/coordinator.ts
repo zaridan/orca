@@ -80,6 +80,28 @@ export function parseAllowStaleBaseFromSpec(spec: string): {
   return { allowStale: true, strippedSpec }
 }
 
+// Why (F2 #13, slice 2 / design §3.3): a task declares its track in spec text via
+// `track: <key>` — the same low-friction channel as `allow-stale-base`. Same-track
+// tasks share one worktree/branch/PR (the implement→review handoff). The capture is
+// a single non-whitespace token; createManagedWorktree sanitizes anything used in a
+// branch name downstream. Like the stale-base flag, the line is STRIPPED from the
+// worker's `--- TASK ---` block (workers would otherwise read it as an instruction).
+// Returns null when unset; the caller defaults to the task's own id (→ per-task,
+// the collision-free slice-1 behavior).
+const TRACK_RE = /^[ \t]*track:[ \t]*(\S+)[ \t]*\r?$/im
+const TRACK_STRIP_RE = /^[ \t]*track:[ \t]*\S+[ \t]*\r?\n?/im
+
+export function parseTrackFromSpec(spec: string): {
+  trackKey: string | null
+  strippedSpec: string
+} {
+  const match = spec.match(TRACK_RE)
+  if (!match) {
+    return { trackKey: null, strippedSpec: spec }
+  }
+  return { trackKey: match[1], strippedSpec: spec.replace(TRACK_STRIP_RE, '') }
+}
+
 // Why (F2 #13): a deterministic, branch-safe worktree name (Orca: worktree name
 // IS branch name) per task. A readable slug from the task title/spec aids the
 // Mission Control display; the unique task-id suffix prevents collisions when
@@ -171,6 +193,17 @@ export class Coordinator {
   // so an operator who asked for worktree-backed dispatch sees the signal
   // without a per-tick warning storm.
   private warnedMissingCreateWorktree = false
+  // Why (F2 #13, slice 2 / design §3.3): the in-memory track map for this run.
+  // First dispatch of a track lazily creates a worktree (the miss path) and caches
+  // it here; later same-track tasks reuse it (the hit path) so review continues
+  // implement's branch (one PR). Keyed by trackKey (spec hint → default = task id).
+  // TODO(F3 #14): on resume, seed this map by re-discovering existing children of
+  // the director worktree (parentWorktreeId === directorWorktreeId) instead of
+  // recreating them — out of scope here, see design §8.
+  private trackWorktrees = new Map<
+    string,
+    { worktreeId: string; terminalHandle: string; isAgent: boolean }
+  >()
   private opts: Required<Omit<CoordinatorOptions, 'onLog' | 'worktree' | 'workerAgent'>> & {
     onLog: (msg: string) => void
     worktree?: string
@@ -628,12 +661,15 @@ export class Coordinator {
     }
   }
 
-  // Why (F2 #13, slice 1): worktree-backed dispatch. Each ready task gets its
-  // OWN child worktree (trackKey = task id — the safe degenerate default; the
-  // implement→review track-reuse model is slice 2). The worktree's lineage
-  // parent is the director (`opts.worktree`), so selectSpawnedWorktreeIds finds
-  // the worker with no Mission Control change. Concurrency is still bounded by
-  // maxConcurrent; same-task serialization is inherent (one worktree per task).
+  // Why (F2 #13, slice 2 / design §3.3, §5): worktree-backed dispatch over the
+  // track model. Each ready task maps to a track (spec `track:` hint → default =
+  // task id). The FIRST dispatch of a track lazily creates a child worktree whose
+  // lineage parent is the director (`opts.worktree`) so selectSpawnedWorktreeIds
+  // finds the worker with no Mission Control change; LATER same-track tasks reuse
+  // that worktree (review continues implement's branch → one PR). Concurrency is
+  // bounded by TWO limits (design §5.2): maxConcurrent AND one-active-dispatch-
+  // per-track (two agents in one checkout corrupt it), so effective parallelism =
+  // min(maxConcurrent, #distinct ready tracks with no in-flight dispatch).
   private async dispatchReadyTasksInWorktrees(): Promise<void> {
     this.state.phase = 'dispatching'
     const readyTasks = this.db.listTasks({ ready: true, coordinatorRunId: this.state.runId })
@@ -661,92 +697,223 @@ export class Coordinator {
       return
     }
 
+    // Why (slice 2, design §3.1 #2 / §5.2): one active dispatch per track. A track
+    // is "busy" when any of its tasks is already dispatched; a ready task on a busy
+    // track must WAIT (stays ready, retried next tick — the same shape as the
+    // legacy "no idle terminal" wait) so two agents never edit one checkout
+    // concurrently. Tracks claimed earlier in THIS pass count too, so we also
+    // never dispatch two same-track tasks within a single tick.
+    const busyTracks = new Set(dispatched.map((t) => this.trackKeyForTask(t)))
+
     for (const task of readyTasks) {
       if (slotsAvailable <= 0) {
         break
       }
 
-      // Why (round 3): resolve drift on the DIRECTOR BEFORE creating the child.
-      // The child branches from the director's base, so a stale local base would
+      const trackKey = this.trackKeyForTask(task)
+      if (busyTracks.has(trackKey)) {
+        // Serialize: a dispatch is already in flight for this track; wait.
+        continue
+      }
+
+      // Why (round 3): resolve drift on the DIRECTOR BEFORE creating/reusing.
+      // A child branches from the director's base, so a stale local base would
       // make every fresh child report behind>threshold and be torn down — an
       // unbounded create→skip→teardown churn loop. Pre-checking skips a stale base
-      // WITHOUT creating anything (recoverable, exactly like the legacy path, no
-      // churn). The resolved drift is threaded into dispatchTask so the fresh
-      // child is not re-probed.
+      // WITHOUT creating anything (recoverable, no churn). The resolved drift is
+      // threaded into dispatchTask so the worktree is not re-probed. Drift is
+      // resolved against the director for both hit and miss (cross-track
+      // base-ref-from-predecessor is out of scope — design §10 Q5 / slice note).
       const drift = await this.resolveDispatchDrift(task, this.opts.worktree)
       if (drift.skip) {
         continue
       }
 
-      let created: { worktreeId: string; branch: string; terminalHandle?: string }
-      try {
-        created = await this.runtime.createWorktree!({
-          parentWorktree: this.opts.worktree,
-          name: worktreeNameForTask(task),
-          orchestrationRunId: this.state.runId,
-          taskId: task.id,
-          coordinatorHandle: this.opts.coordinatorHandle,
-          ...(this.opts.workerAgent ? { startup: { agent: this.opts.workerAgent } } : {})
-        })
-      } catch (err) {
-        // Why (round 2): createManagedWorktree validation (e.g. a disabled/invalid
-        // agent) throws BEFORE a worktree is created, so there is nothing to
-        // orphan here. Route the failure through the SAME breaker F1 uses so a
-        // task that can never be provisioned (disk full, stale director, bad
-        // agent) gives up after N strikes instead of retrying every tick forever.
-        this.recordWorktreeProvisionFailure(task, err)
-        continue
+      // Claim the track for this tick BEFORE provisioning so a later same-track
+      // ready task in this same pass waits instead of racing into the checkout.
+      // (Waiting is always safe; a failed attempt simply retries next tick.)
+      busyTracks.add(trackKey)
+
+      const existing = this.trackWorktrees.get(trackKey)
+      const dispatchedOk = existing
+        ? await this.dispatchIntoExistingTrack(task, trackKey, existing, drift)
+        : await this.createTrackWorktreeAndDispatch(task, trackKey, drift)
+
+      if (dispatchedOk) {
+        slotsAvailable--
       }
-
-      // Why (round 2): the adapter returns a handle for the agent it launched,
-      // or — when no agent was requested — the plain terminal createManagedWorktree
-      // already opened (it does NOT create a second one). A missing handle means
-      // the worktree exists but has no usable terminal: tear it down so it does
-      // not orphan, and breaker-account so we don't loop recreating it.
-      if (!created.terminalHandle) {
-        this.opts.onLog(
-          `No worker terminal in worktree ${created.worktreeId} for task ${task.id}; removing it`
-        )
-        await this.teardownWorktree(created.worktreeId)
-        this.recordWorktreeProvisionFailure(
-          task,
-          new Error('created worktree had no usable worker terminal')
-        )
-        continue
-      }
-
-      slotsAvailable--
-
-      // Why (round 2): wait for the agent TUI to be ready before sending the
-      // preamble only when we actually launched an agent. A plain shell (no
-      // workerAgent) accepts input immediately, so gating it on tui-idle would
-      // just risk a needless timeout.
-      const awaitReady = this.opts.workerAgent !== undefined
-      try {
-        // Drift was already resolved (skip=false) above, so pass it through:
-        // dispatchTask will NOT re-probe the fresh child and cannot drift-skip
-        // here — it dispatches or throws, so there is no created-but-undispatched
-        // worktree to churn.
-        await this.dispatchTask(
-          task,
-          created.terminalHandle,
-          `id:${created.worktreeId}`,
-          awaitReady,
-          drift
-        )
-      } catch (err) {
-        // dispatchTask already breaker-accounted the readiness/send failure.
-        // Tear down the worktree on failure so retries (or a give-up) don't
-        // leave an orphan behind.
-        this.opts.onLog(
-          `Failed to dispatch task ${task.id} in worktree ${created.worktreeId}: ${err}`
-        )
-        await this.teardownWorktree(created.worktreeId)
-        continue
-      }
-
-      this.opts.onLog(`Created worktree ${created.branch} for task ${task.id}`)
     }
+  }
+
+  // Why (slice 2, miss path): first dispatch of a track. Create a child worktree
+  // (lineage parent = director), dispatch the preamble into the launched worker
+  // agent, and — only on success — cache the worktree so later same-track tasks
+  // reuse it. Returns true when the task was dispatched. Mirrors slice-1 failure
+  // handling: a created-but-unusable or failed-to-dispatch worktree is torn down
+  // and breaker-accounted so repeated failures converge instead of orphaning.
+  private async createTrackWorktreeAndDispatch(
+    task: TaskRow,
+    trackKey: string,
+    drift: DispatchDrift
+  ): Promise<boolean> {
+    let created: { worktreeId: string; branch: string; terminalHandle?: string }
+    try {
+      created = await this.runtime.createWorktree!({
+        parentWorktree: this.opts.worktree!,
+        // Why: name the track's branch after its lead (first) task. Reuse within a
+        // run is via the in-memory map, so determinism is not required here; the
+        // run-namespaced, track-deterministic naming of design §6 is an F3-resume
+        // enabler — TODO(F3 #14), out of scope for this slice.
+        name: worktreeNameForTask(task),
+        orchestrationRunId: this.state.runId,
+        taskId: task.id,
+        coordinatorHandle: this.opts.coordinatorHandle,
+        ...(this.opts.workerAgent ? { startup: { agent: this.opts.workerAgent } } : {})
+      })
+    } catch (err) {
+      // Why (round 2): createManagedWorktree validation (e.g. a disabled/invalid
+      // agent) throws BEFORE a worktree is created, so there is nothing to orphan
+      // here. Route the failure through the SAME breaker F1 uses so a task that can
+      // never be provisioned gives up after N strikes instead of retrying forever.
+      this.recordWorktreeProvisionFailure(task, err)
+      return false
+    }
+
+    // Why (round 2): the adapter returns a handle for the agent it launched, or —
+    // when no agent was requested — the plain terminal createManagedWorktree
+    // already opened (it does NOT create a second one). A missing handle means the
+    // worktree exists but has no usable terminal: tear it down so it does not
+    // orphan, and breaker-account so we don't loop recreating it.
+    if (!created.terminalHandle) {
+      this.opts.onLog(
+        `No worker terminal in worktree ${created.worktreeId} for task ${task.id}; removing it`
+      )
+      await this.teardownWorktree(created.worktreeId)
+      this.recordWorktreeProvisionFailure(
+        task,
+        new Error('created worktree had no usable worker terminal')
+      )
+      return false
+    }
+
+    // Why (round 2): wait for the agent TUI to be ready before sending the
+    // preamble only when we actually launched an agent. A plain shell (no
+    // workerAgent) accepts input immediately, so gating it on tui-idle would just
+    // risk a needless timeout.
+    const awaitReady = this.opts.workerAgent !== undefined
+    try {
+      await this.dispatchTask(
+        task,
+        created.terminalHandle,
+        `id:${created.worktreeId}`,
+        awaitReady,
+        drift
+      )
+    } catch (err) {
+      // dispatchTask already breaker-accounted the readiness/send failure. Tear
+      // down the (not-yet-cached) worktree so retries don't leave an orphan.
+      this.opts.onLog(
+        `Failed to dispatch task ${task.id} in worktree ${created.worktreeId}: ${err}`
+      )
+      await this.teardownWorktree(created.worktreeId)
+      return false
+    }
+
+    // Cache only AFTER a successful first dispatch so a torn-down (failed) worktree
+    // is never handed to a same-track successor.
+    this.trackWorktrees.set(trackKey, {
+      worktreeId: created.worktreeId,
+      terminalHandle: created.terminalHandle,
+      isAgent: this.opts.workerAgent !== undefined
+    })
+    this.opts.onLog(`Created worktree ${created.branch} for track ${trackKey} (task ${task.id})`)
+    return true
+  }
+
+  // Why (slice 2, hit path): a same-track successor (e.g. review after implement).
+  // Reuse the track's existing worktree — it already holds the predecessor's
+  // commits, which IS the git-artifact handoff (#5). Dispatch into a terminal in
+  // that worktree (the cached worker agent if still usable, else a fresh one).
+  // Crucially, a dispatch failure here does NOT tear the worktree down: it holds
+  // the predecessor's work. dispatchTask still breaker-accounts the strike so a
+  // permanently-failing successor converges.
+  private async dispatchIntoExistingTrack(
+    task: TaskRow,
+    trackKey: string,
+    track: { worktreeId: string; terminalHandle: string; isAgent: boolean },
+    drift: DispatchDrift
+  ): Promise<boolean> {
+    const target = await this.resolveTrackTerminal(track)
+    if (!target) {
+      // No usable terminal could be found or opened in the reused worktree. Do
+      // NOT tear it down (it holds the predecessor's work). Breaker-account so a
+      // permanently-unusable track converges instead of retrying every tick.
+      this.recordWorktreeProvisionFailure(
+        task,
+        new Error(`no usable terminal in reused track worktree ${track.worktreeId}`)
+      )
+      return false
+    }
+
+    try {
+      // Why (slice 2 hard constraint): the tui-idle readiness gate applies to a
+      // reused agent terminal too — the same race exists. A freshly opened plain
+      // terminal accepts input immediately, so it is not gated.
+      await this.dispatchTask(task, target.handle, `id:${track.worktreeId}`, target.isAgent, drift)
+    } catch (err) {
+      this.opts.onLog(
+        `Failed to dispatch task ${task.id} into reused track ${trackKey} worktree ${track.worktreeId}: ${err}`
+      )
+      return false
+    }
+
+    // Refresh the cached terminal in case the fallback opened a fresh one.
+    this.trackWorktrees.set(trackKey, {
+      worktreeId: track.worktreeId,
+      terminalHandle: target.handle,
+      isAgent: target.isAgent
+    })
+    this.opts.onLog(`Reused track ${trackKey} worktree ${track.worktreeId} for task ${task.id}`)
+    return true
+  }
+
+  // Why (slice 2, design §5.3 / Q4): pick the terminal for a same-track
+  // re-dispatch. Prefer the cached worker-agent terminal when it is still
+  // connected/writable — per-track serialization guarantees it is idle now, and
+  // reusing it keeps the worker's context for the handoff. If it is gone, open a
+  // fresh plain terminal in the same worktree (so the dispatch still lands in the
+  // right checkout). Returns null only when neither is possible.
+  private async resolveTrackTerminal(track: {
+    worktreeId: string
+    terminalHandle: string
+    isAgent: boolean
+  }): Promise<{ handle: string; isAgent: boolean } | null> {
+    try {
+      const { terminals } = await this.runtime.listTerminals(`id:${track.worktreeId}`)
+      const cached = terminals.find(
+        (t) => t.handle === track.terminalHandle && t.connected && t.writable
+      )
+      if (cached) {
+        return { handle: track.terminalHandle, isAgent: track.isAgent }
+      }
+    } catch {
+      // Fall through to opening a fresh terminal.
+    }
+    try {
+      const created = await this.runtime.createTerminal(`id:${track.worktreeId}`, {
+        title: `Worker (track reuse)`
+      })
+      return { handle: created.handle, isAgent: false }
+    } catch (err) {
+      this.opts.onLog(`Failed to open a terminal in reused worktree ${track.worktreeId}: ${err}`)
+      return null
+    }
+  }
+
+  // Why (slice 2): a task's track = its `track:` spec hint, or its own id when
+  // unset (→ per-task, the collision-free slice-1 default).
+  private trackKeyForTask(task: Pick<TaskRow, 'id' | 'spec'>): string {
+    return parseTrackFromSpec(task.spec).trackKey ?? task.id
   }
 
   // Why (round 2): worktree/terminal provisioning fails BEFORE a real dispatch
@@ -806,7 +973,13 @@ export class Coordinator {
     task: TaskRow,
     driftSelector: string | undefined
   ): Promise<DispatchDrift> {
-    const { allowStale, strippedSpec } = parseAllowStaleBaseFromSpec(task.spec)
+    // Why (slice 2): strip BOTH infra hints from the preamble spec — the
+    // stale-base flag and the `track:` line — so neither leaks into the worker's
+    // `--- TASK ---` block. Shared by both dispatch paths exactly like the
+    // stale-base strip already was; a spec carrying neither hint is unchanged
+    // (legacy byte-for-byte preserved).
+    const { allowStale, strippedSpec: withoutStaleBase } = parseAllowStaleBaseFromSpec(task.spec)
+    const strippedSpec = parseTrackFromSpec(withoutStaleBase).strippedSpec
 
     if (!driftSelector) {
       // Why (§7.4): CoordinatorOptions.worktree is optional. When undefined,
