@@ -34,6 +34,18 @@ function generateId(prefix: string): string {
   return `${prefix}_${randomBytes(6).toString('hex')}`
 }
 
+// Why (#12): raised by startCoordinatorRun when another run is already active.
+// startCoordinatorRun wraps the check+insert in BEGIN IMMEDIATE so the guard is
+// atomic across processes (two runtimes / SSH sharing one DB file) — the prior
+// in-memory `getActiveCoordinatorRun()` check did not span processes, which is
+// how two coordinators clashed. Callers map this to a friendly RPC error.
+export class CoordinatorRunConflictError extends Error {
+  constructor(message = 'A coordinator run is already in progress') {
+    super(message)
+    this.name = 'CoordinatorRunConflictError'
+  }
+}
+
 // Why: v1 → v2 added `'heartbeat'` to messages.type CHECK + `last_heartbeat_at`
 // column (preamble-hardening PR). v2 → v3 adds `delivered_at` column so
 // push-on-idle can distinguish queued-but-undelivered from user-acknowledged
@@ -41,7 +53,11 @@ function generateId(prefix: string): string {
 // the terminal that created a task so task-record worktree creation can infer
 // the parent workspace even when no dispatch context exists. v4 → v5 adds
 // explicit task_title/display_name fields for orchestration worker UI labels.
-const SCHEMA_VERSION = 5
+// v5 → v6 adds `coordinator_run_id` to tasks/dispatch_contexts/decision_gates
+// (plus run-scoped lookup indexes) so concurrent runs sharing one DB no longer
+// poach each other's work (#12). The single-running invariant is enforced at
+// write time by startCoordinatorRun (BEGIN IMMEDIATE), not by a schema index.
+const SCHEMA_VERSION = 6
 
 export class OrchestrationDb {
   private db: Database.Database
@@ -86,6 +102,7 @@ export class OrchestrationDb {
         id            TEXT PRIMARY KEY,
         parent_id     TEXT,
         created_by_terminal_handle TEXT,
+        coordinator_run_id TEXT,
         task_title    TEXT,
         display_name  TEXT,
         spec          TEXT NOT NULL,
@@ -106,6 +123,7 @@ export class OrchestrationDb {
       CREATE TABLE IF NOT EXISTS dispatch_contexts (
         id                  TEXT PRIMARY KEY,
         task_id             TEXT NOT NULL,
+        coordinator_run_id  TEXT,
         assignee_handle     TEXT,
         status              TEXT NOT NULL DEFAULT 'pending'
           CHECK(status IN ('pending', 'dispatched', 'completed', 'failed', 'circuit_broken')),
@@ -123,6 +141,7 @@ export class OrchestrationDb {
       CREATE TABLE IF NOT EXISTS decision_gates (
         id            TEXT PRIMARY KEY,
         task_id       TEXT NOT NULL,
+        coordinator_run_id TEXT,
         question      TEXT NOT NULL,
         options       TEXT NOT NULL DEFAULT '[]',
         status        TEXT NOT NULL DEFAULT 'pending'
@@ -147,6 +166,12 @@ export class OrchestrationDb {
       );
     `)
     this.createUndeliveredInboxIndexIfPossible()
+    // Why: run-scoped indexes + the single-running UNIQUE index depend on the
+    // coordinator_run_id columns, which on an upgraded DB only exist after
+    // migrate() runs. createTables() runs first (CREATE TABLE IF NOT EXISTS is a
+    // no-op on the old shape), so guard on the column and (re)attach after
+    // migration too. Fresh DBs already have the columns, so this attaches now.
+    this.createRunScopedIndexesIfPossible()
   }
 
   // Why: `CREATE TABLE IF NOT EXISTS` is a no-op against an existing on-disk
@@ -246,7 +271,23 @@ export class OrchestrationDb {
           this.db.exec(`ALTER TABLE tasks ADD COLUMN display_name TEXT`)
         }
       }
+      // v5 → v6: per-run isolation (#12). Add coordinator_run_id to the
+      // run-scoped tables and enforce the single-running invariant atomically.
+      if (current < 6) {
+        if (!this.hasColumn('tasks', 'coordinator_run_id')) {
+          this.db.exec(`ALTER TABLE tasks ADD COLUMN coordinator_run_id TEXT`)
+        }
+        if (!this.hasColumn('dispatch_contexts', 'coordinator_run_id')) {
+          this.db.exec(`ALTER TABLE dispatch_contexts ADD COLUMN coordinator_run_id TEXT`)
+        }
+        if (!this.hasColumn('decision_gates', 'coordinator_run_id')) {
+          this.db.exec(`ALTER TABLE decision_gates ADD COLUMN coordinator_run_id TEXT`)
+        }
+      }
       this.createUndeliveredInboxIndexIfPossible()
+      // Why: attach run-scoped + single-running indexes now that the v6 columns
+      // exist (createTables ran before the ALTERs above on an upgraded DB).
+      this.createRunScopedIndexesIfPossible()
 
       this.db.pragma(`user_version = ${SCHEMA_VERSION}`)
       this.db.exec('COMMIT')
@@ -268,6 +309,21 @@ export class OrchestrationDb {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_messages_undelivered_inbox
         ON messages(to_handle, read, delivered_at, sequence)
+    `)
+  }
+
+  // Why (#12): the run-scoped lookup indexes depend on the v6 coordinator_run_id
+  // columns. Guard on column presence so this is safe to call from createTables
+  // (fresh DB / no-op on old DB) and again after migrate() adds the columns.
+  private createRunScopedIndexesIfPossible(): void {
+    if (!this.hasColumn('tasks', 'coordinator_run_id')) {
+      return
+    }
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_run ON tasks(coordinator_run_id, status);
+      CREATE INDEX IF NOT EXISTS idx_dispatch_run
+        ON dispatch_contexts(coordinator_run_id, status);
+      CREATE INDEX IF NOT EXISTS idx_gates_run ON decision_gates(coordinator_run_id, status);
     `)
   }
 
@@ -434,6 +490,10 @@ export class OrchestrationDb {
     deps?: string[]
     parentId?: string
     createdByTerminalHandle?: string
+    // Why (#12): tasks created mid-run are stamped with the active run so the
+    // coordinator's run-scoped listTasks sees them. Pre-run tasks pass nothing
+    // and stay unowned (NULL) until run-start adoptUnownedTasks() claims them.
+    coordinatorRunId?: string
   }): TaskRow {
     const id = generateId('task')
     const depsJson = JSON.stringify(task.deps ?? [])
@@ -446,12 +506,13 @@ export class OrchestrationDb {
     })
     this.db
       .prepare(
-        'INSERT INTO tasks (id, parent_id, created_by_terminal_handle, task_title, display_name, spec, status, deps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO tasks (id, parent_id, created_by_terminal_handle, coordinator_run_id, task_title, display_name, spec, status, deps) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         id,
         task.parentId ?? null,
         task.createdByTerminalHandle ?? null,
+        task.coordinatorRunId ?? null,
         display.taskTitle || null,
         display.displayName || null,
         task.spec,
@@ -461,22 +522,74 @@ export class OrchestrationDb {
     return this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow
   }
 
+  // Why (#12): tasks are created via orchestration.taskCreate BEFORE
+  // orchestration.run exists, so they start unowned (coordinator_run_id NULL).
+  // Run-start adopts every still-unowned task — plus any task whose owning run
+  // is no longer running — into the starting run. The "not running" clause is
+  // what makes isolation safe: a *concurrently running* run's tasks are never
+  // adopted (no poaching), while a stopped/crashed run's leftover tasks are not
+  // stranded and can be picked up by the next run. (Re-attaching a coordinator
+  // process to an existing run after a restart is F3's job, #14 — this only
+  // transfers task ownership.)
+  adoptUnownedTasks(coordinatorRunId: string): number {
+    const info = this.db
+      .prepare(
+        `UPDATE tasks SET coordinator_run_id = ?
+         WHERE coordinator_run_id IS NULL
+            OR coordinator_run_id IN (
+              SELECT id FROM coordinator_runs WHERE status != 'running'
+            )`
+      )
+      .run(coordinatorRunId)
+    // Why: dispatch_contexts/decision_gates copy their task's run at creation,
+    // but a dispatch/gate created before the task was adopted (or owned by the
+    // run we just reclaimed from) would carry a stale run id. Re-sync the
+    // denormalized column so run-scoped dispatch/gate queries stay correct.
+    this.db
+      .prepare(
+        `UPDATE dispatch_contexts SET coordinator_run_id = ?
+         WHERE coordinator_run_id IS NOT ?
+           AND task_id IN (SELECT id FROM tasks WHERE coordinator_run_id = ?)`
+      )
+      .run(coordinatorRunId, coordinatorRunId, coordinatorRunId)
+    this.db
+      .prepare(
+        `UPDATE decision_gates SET coordinator_run_id = ?
+         WHERE coordinator_run_id IS NOT ?
+           AND task_id IN (SELECT id FROM tasks WHERE coordinator_run_id = ?)`
+      )
+      .run(coordinatorRunId, coordinatorRunId, coordinatorRunId)
+    return Number((info as { changes?: number | bigint }).changes ?? 0)
+  }
+
   getTask(id: string): TaskRow | undefined {
     return this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined
   }
 
-  listTasks(filter?: { status?: TaskStatus; ready?: boolean }): TaskRow[] {
+  // Why (#12): `coordinatorRunId` scopes the listing to a single run. The
+  // coordinator always passes its own run id so it never sees (or dispatches)
+  // another run's tasks; supervisor/UI callers omit it for a global view.
+  listTasks(filter?: {
+    status?: TaskStatus
+    ready?: boolean
+    coordinatorRunId?: string
+  }): TaskRow[] {
+    const clauses: string[] = []
+    const params: Database.BindValue[] = []
     if (filter?.ready) {
-      return this.db
-        .prepare("SELECT * FROM tasks WHERE status = 'ready' ORDER BY created_at")
-        .all() as TaskRow[]
+      clauses.push("status = 'ready'")
+    } else if (filter?.status) {
+      clauses.push('status = ?')
+      params.push(filter.status)
     }
-    if (filter?.status) {
-      return this.db
-        .prepare('SELECT * FROM tasks WHERE status = ? ORDER BY created_at')
-        .all(filter.status) as TaskRow[]
+    if (filter?.coordinatorRunId !== undefined) {
+      clauses.push('coordinator_run_id = ?')
+      params.push(filter.coordinatorRunId)
     }
-    return this.db.prepare('SELECT * FROM tasks ORDER BY created_at').all() as TaskRow[]
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    return this.db
+      .prepare(`SELECT * FROM tasks ${where} ORDER BY created_at`)
+      .all(...params) as TaskRow[]
   }
 
   // Why: surfaces the active dispatch (assignee handle + dispatch context id)
@@ -485,7 +598,11 @@ export class OrchestrationDb {
   // with NULL assignee/dispatch fields so non-dispatched output stays stable.
   // The inner subquery picks the most recent active dispatch per task to match
   // the semantics of getDispatchContext for dispatched tasks.
-  listTasksWithDispatch(filter?: { status?: TaskStatus; ready?: boolean }): (TaskRow & {
+  listTasksWithDispatch(filter?: {
+    status?: TaskStatus
+    ready?: boolean
+    coordinatorRunId?: string
+  }): (TaskRow & {
     assignee_handle: string | null
     dispatch_id: string | null
   })[] {
@@ -496,6 +613,10 @@ export class OrchestrationDb {
     } else if (filter?.status) {
       whereClauses.push('t.status = ?')
       params.push(filter.status)
+    }
+    if (filter?.coordinatorRunId !== undefined) {
+      whereClauses.push('t.coordinator_run_id = ?')
+      params.push(filter.coordinatorRunId)
     }
     const where = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : ''
     const sql = `
@@ -546,9 +667,12 @@ export class OrchestrationDb {
   // the status update, so there's no window where a task is completable but its
   // children haven't been promoted.
   private promoteReadyTasks(completedTaskId: string): void {
+    // Why (#12): only consider pending tasks in the same run as the task that
+    // just completed, so DAG resolution never promotes another run's tasks.
+    const completed = this.getTask(completedTaskId)
     const candidates = this.db
-      .prepare("SELECT * FROM tasks WHERE status = 'pending'")
-      .all() as TaskRow[]
+      .prepare('SELECT * FROM tasks WHERE status = ? AND coordinator_run_id IS ?')
+      .all('pending', completed?.coordinator_run_id ?? null) as TaskRow[]
 
     for (const task of candidates) {
       const deps: string[] = JSON.parse(task.deps)
@@ -577,11 +701,16 @@ export class OrchestrationDb {
       throw new Error(`Task ${taskId} is ${task.status}; only ready tasks can be dispatched`)
     }
 
+    // Why (#12): the "already working" guard is scoped to the task's run. A
+    // different run reusing the same worker handle (or a zombie dispatch left
+    // by a prior/abandoned run) must not block this run's dispatch — that
+    // cross-run throw was the observed bug symptom.
+    const runId = task.coordinator_run_id
     const existing = this.db
       .prepare(
-        "SELECT * FROM dispatch_contexts WHERE assignee_handle = ? AND status IN ('pending', 'dispatched')"
+        "SELECT * FROM dispatch_contexts WHERE assignee_handle = ? AND coordinator_run_id IS ? AND status IN ('pending', 'dispatched')"
       )
-      .get(assigneeHandle) as DispatchContextRow | undefined
+      .get(assigneeHandle, runId) as DispatchContextRow | undefined
 
     if (existing) {
       throw new Error(
@@ -599,10 +728,10 @@ export class OrchestrationDb {
     const id = generateId('ctx')
     this.db
       .prepare(
-        `INSERT INTO dispatch_contexts (id, task_id, assignee_handle, status, failure_count, dispatched_at)
-         VALUES (?, ?, ?, 'dispatched', ?, datetime('now'))`
+        `INSERT INTO dispatch_contexts (id, task_id, coordinator_run_id, assignee_handle, status, failure_count, dispatched_at)
+         VALUES (?, ?, ?, ?, 'dispatched', ?, datetime('now'))`
       )
-      .run(id, taskId, assigneeHandle, priorFailures)
+      .run(id, taskId, runId, assigneeHandle, priorFailures)
 
     this.db.prepare("UPDATE tasks SET status = 'dispatched' WHERE id = ?").run(taskId)
 
@@ -689,16 +818,24 @@ export class OrchestrationDb {
   // heartbeat interval (false positive). Callers supply the threshold as an
   // ISO timestamp so the SQLite string-compare ordering works correctly
   // (ISO-8601 compares lexicographically in time order).
-  getStaleDispatches(thresholdIso: string): DispatchContextRow[] {
+  // Why (#12): `coordinatorRunId` restricts the scan to one run so a
+  // coordinator never warns about (or acts on) another run's hung dispatch.
+  getStaleDispatches(thresholdIso: string, coordinatorRunId?: string): DispatchContextRow[] {
+    const runClause = coordinatorRunId !== undefined ? 'AND coordinator_run_id = ?' : ''
+    const params: Database.BindValue[] =
+      coordinatorRunId !== undefined
+        ? [thresholdIso, thresholdIso, coordinatorRunId]
+        : [thresholdIso, thresholdIso]
     return this.db
       .prepare(
         `SELECT * FROM dispatch_contexts
          WHERE status = 'dispatched'
            AND dispatched_at IS NOT NULL
            AND dispatched_at < ?
-           AND (last_heartbeat_at IS NULL OR last_heartbeat_at < ?)`
+           AND (last_heartbeat_at IS NULL OR last_heartbeat_at < ?)
+           ${runClause}`
       )
-      .all(thresholdIso, thresholdIso) as DispatchContextRow[]
+      .all(...params) as DispatchContextRow[]
   }
 
   failDispatch(ctxId: string, error: string): DispatchContextRow | undefined {
@@ -735,9 +872,13 @@ export class OrchestrationDb {
   createGate(gate: { taskId: string; question: string; options?: string[] }): DecisionGateRow {
     const id = generateId('gate')
     const optionsJson = JSON.stringify(gate.options ?? [])
+    // Why (#12): copy the gated task's run so listGates({status}) stays scoped.
+    const runId = this.getTask(gate.taskId)?.coordinator_run_id ?? null
     this.db
-      .prepare('INSERT INTO decision_gates (id, task_id, question, options) VALUES (?, ?, ?, ?)')
-      .run(id, gate.taskId, gate.question, optionsJson)
+      .prepare(
+        'INSERT INTO decision_gates (id, task_id, coordinator_run_id, question, options) VALUES (?, ?, ?, ?, ?)'
+      )
+      .run(id, gate.taskId, runId, gate.question, optionsJson)
 
     this.completeActiveDispatchForTask(gate.taskId)
     this.db.prepare("UPDATE tasks SET status = 'blocked' WHERE id = ?").run(gate.taskId)
@@ -780,27 +921,32 @@ export class OrchestrationDb {
       | undefined
   }
 
-  listGates(filter?: { taskId?: string; status?: GateStatus }): DecisionGateRow[] {
-    if (filter?.taskId && filter?.status) {
-      return this.db
-        .prepare(
-          'SELECT * FROM decision_gates WHERE task_id = ? AND status = ? ORDER BY created_at'
-        )
-        .all(filter.taskId, filter.status) as DecisionGateRow[]
-    }
+  // Why (#12): `coordinatorRunId` scopes status/all listings to one run so a
+  // coordinator's processDecisionGates loop never touches another run's gates.
+  // A `taskId` filter is already run-implicit (a task belongs to one run).
+  listGates(filter?: {
+    taskId?: string
+    status?: GateStatus
+    coordinatorRunId?: string
+  }): DecisionGateRow[] {
+    const clauses: string[] = []
+    const params: Database.BindValue[] = []
     if (filter?.taskId) {
-      return this.db
-        .prepare('SELECT * FROM decision_gates WHERE task_id = ? ORDER BY created_at')
-        .all(filter.taskId) as DecisionGateRow[]
+      clauses.push('task_id = ?')
+      params.push(filter.taskId)
     }
     if (filter?.status) {
-      return this.db
-        .prepare('SELECT * FROM decision_gates WHERE status = ? ORDER BY created_at')
-        .all(filter.status) as DecisionGateRow[]
+      clauses.push('status = ?')
+      params.push(filter.status)
     }
+    if (filter?.coordinatorRunId !== undefined) {
+      clauses.push('coordinator_run_id = ?')
+      params.push(filter.coordinatorRunId)
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
     return this.db
-      .prepare('SELECT * FROM decision_gates ORDER BY created_at')
-      .all() as DecisionGateRow[]
+      .prepare(`SELECT * FROM decision_gates ${where} ORDER BY created_at`)
+      .all(...params) as DecisionGateRow[]
   }
 
   getGate(id: string): DecisionGateRow | undefined {
@@ -823,6 +969,51 @@ export class OrchestrationDb {
       )
       .run(id, run.spec, run.coordinatorHandle, run.pollIntervalMs ?? 2000)
     return this.db.prepare('SELECT * FROM coordinator_runs WHERE id = ?').get(id) as CoordinatorRun
+  }
+
+  // Why (#12): atomic run-start. The previous flow ("getActiveCoordinatorRun()
+  // in the RPC, then createCoordinatorRun") had a TOCTOU window that two
+  // runtimes sharing one DB file could both pass, starting two clashing
+  // coordinators. BEGIN IMMEDIATE takes the write lock up front, so the
+  // check+insert is serialized across connections/processes: the loser sees the
+  // winner's running row and gets a CoordinatorRunConflictError. Used by the RPC
+  // path; tests/coordinator.run() use the plain createCoordinatorRun insert.
+  startCoordinatorRun(run: {
+    spec: string
+    coordinatorHandle: string
+    pollIntervalMs?: number
+  }): CoordinatorRun {
+    this.db.exec('BEGIN IMMEDIATE')
+    let committed = false
+    try {
+      const active = this.db
+        .prepare(
+          "SELECT * FROM coordinator_runs WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
+        )
+        .get() as CoordinatorRun | undefined
+      if (active) {
+        throw new CoordinatorRunConflictError(`Coordinator already running: ${active.id}`)
+      }
+      const id = generateId('run')
+      this.db
+        .prepare(
+          "INSERT INTO coordinator_runs (id, spec, status, coordinator_handle, poll_interval_ms) VALUES (?, ?, 'running', ?, ?)"
+        )
+        .run(id, run.spec, run.coordinatorHandle, run.pollIntervalMs ?? 2000)
+      this.db.exec('COMMIT')
+      committed = true
+      return this.db
+        .prepare('SELECT * FROM coordinator_runs WHERE id = ?')
+        .get(id) as CoordinatorRun
+    } finally {
+      if (!committed) {
+        try {
+          this.db.exec('ROLLBACK')
+        } catch {
+          // No active transaction to roll back — ignore.
+        }
+      }
+    }
   }
 
   getCoordinatorRun(id: string): CoordinatorRun | undefined {
@@ -866,35 +1057,45 @@ export class OrchestrationDb {
 
   // Why: cheap counts for the supervision dot — outstanding work means tasks
   // not yet in a terminal state (pending/ready/dispatched/blocked).
-  countOutstandingTasks(): number {
+  countOutstandingTasks(coordinatorRunId?: string): number {
+    const runClause = coordinatorRunId !== undefined ? 'AND coordinator_run_id = ?' : ''
+    const params: Database.BindValue[] = coordinatorRunId !== undefined ? [coordinatorRunId] : []
     const row = this.db
       .prepare(
-        "SELECT COUNT(*) AS n FROM tasks WHERE status IN ('pending', 'ready', 'dispatched', 'blocked')"
+        `SELECT COUNT(*) AS n FROM tasks WHERE status IN ('pending', 'ready', 'dispatched', 'blocked') ${runClause}`
       )
-      .get() as { n: number }
+      .get(...params) as { n: number }
     return row.n
   }
 
   // Why: a worker is still busy while its dispatch is pending or dispatched.
-  countActiveDispatches(): number {
+  // `coordinatorRunId` scopes the count to one run (#12); omit for a global tally.
+  countActiveDispatches(coordinatorRunId?: string): number {
+    const runClause = coordinatorRunId !== undefined ? 'AND coordinator_run_id = ?' : ''
+    const params: Database.BindValue[] = coordinatorRunId !== undefined ? [coordinatorRunId] : []
     const row = this.db
       .prepare(
-        "SELECT COUNT(*) AS n FROM dispatch_contexts WHERE status IN ('pending', 'dispatched')"
+        `SELECT COUNT(*) AS n FROM dispatch_contexts WHERE status IN ('pending', 'dispatched') ${runClause}`
       )
-      .get() as { n: number }
+      .get(...params) as { n: number }
     return row.n
   }
 
   // ── Queries for Coordinator ──
 
-  getIdleTerminals(excludeHandles: string[] = []): string[] {
+  getIdleTerminals(excludeHandles: string[] = [], coordinatorRunId?: string): string[] {
     // Why: returns terminal handles that have no active dispatch, so the
     // coordinator knows which terminals are available for new task assignments.
+    // `coordinatorRunId` keeps a run from seeing another run's busy terminals
+    // or candidate handles (#12).
+    const activeRunClause = coordinatorRunId !== undefined ? 'AND coordinator_run_id = ?' : ''
+    const activeParams: Database.BindValue[] =
+      coordinatorRunId !== undefined ? [coordinatorRunId] : []
     const active = this.db
       .prepare(
-        "SELECT DISTINCT assignee_handle FROM dispatch_contexts WHERE status IN ('pending', 'dispatched')"
+        `SELECT DISTINCT assignee_handle FROM dispatch_contexts WHERE status IN ('pending', 'dispatched') ${activeRunClause}`
       )
-      .all() as { assignee_handle: string }[]
+      .all(...activeParams) as { assignee_handle: string }[]
     const busyHandles = new Set(active.map((r) => r.assignee_handle))
     for (const h of excludeHandles) {
       busyHandles.add(h)
