@@ -55,8 +55,9 @@ export const createOrchestratorsSlice: StateCreator<AppState, [], [], Orchestrat
     try {
       await get().removeWorktree(entry.worktreeId, true)
     } catch (error) {
-      // The registry entry is dropped regardless, but a teardown failure can leave
-      // an orphaned worktree behind — surface it instead of silently succeeding.
+      // Roll back the optimistic removal: if teardown fails the worktree is still
+      // on disk, so the entry must stay in the sidebar to remain reachable for retry.
+      set((s) => ({ orchestrators: [...s.orchestrators.filter((e) => e.id !== entry.id), entry] }))
       console.error(`Failed to tear down Orcastrator worktree ${entry.worktreeId}:`, error)
     }
   },

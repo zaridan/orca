@@ -103,7 +103,7 @@ If the task genuinely is a one-line fix in an existing branch, say so and skip t
 
 Output exactly this shape so it's easy to scan and to log:
 
-```
+```text
 Plan: <one-line task summary>
 Worktrees (<N> total — <M> parallel, <K> sequential):
 
@@ -227,7 +227,7 @@ Recommendation heuristics (these are themselves tunable — adjust if they fire 
 
 Report format:
 
-```
+```text
 Orcastrate review — <window>
 Plans: <n>  | accepted as-is: <%>  modified: <%>  rejected: <%>
 Worktrees: <n>  | shipped <n>  over_split <n>  under_split <n>  conflict <n>  seq_miss <n>  killed_clean <n>

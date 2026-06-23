@@ -61,7 +61,7 @@ Fail either test → it is the next step inside an existing worktree — still d
 
 Produce this before writing any code. Wait for explicit approval before executing.
 
-```
+```text
 Plan: <one-line task summary>
 Worktrees (<N> total — <M> parallel, <K> sequential):
 
