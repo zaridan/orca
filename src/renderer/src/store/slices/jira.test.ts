@@ -404,4 +404,18 @@ describe('createJiraSlice credential errors', () => {
 
     expect(store.getState().jiraStatus.connected).toBe(true)
   })
+
+  it('surfaces endpoint-level search errors without disconnecting Jira', async () => {
+    const store = createTestStore()
+    store.setState({
+      jiraStatus: { connected: true, viewer: null, selectedSiteId: 'site-1' }
+    })
+    jiraSearchIssues.mockRejectedValueOnce(new Error('Malformed JQL'))
+
+    await expect(store.getState().searchJiraIssues('project =', 30)).rejects.toThrow(
+      'Malformed JQL'
+    )
+
+    expect(store.getState().jiraStatus.connected).toBe(true)
+  })
 })

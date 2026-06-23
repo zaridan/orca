@@ -4057,6 +4057,60 @@ describe('connectPanePty', () => {
     expect(mockStoreState.clearAgentLaunchConfig).toHaveBeenCalledWith(paneKey)
   })
 
+  it('clears launch config when an agent startup spawn produces no PTY', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport()
+    transportFactoryQueue.push(transport)
+    const paneKey = makePaneKey('tab-1', LEAF_1)
+    const launchConfig = { agentCommand: 'codex', agentArgs: '', agentEnv: {} }
+    mockStoreState = {
+      ...mockStoreState,
+      tabsByWorktree: { 'wt-1': [{ id: 'tab-1', ptyId: null }] },
+      ptyIdsByTabId: { 'tab-1': [] },
+      terminalLayoutsByTabId: {
+        'tab-1': {
+          root: { type: 'leaf', leafId: LEAF_1 },
+          activeLeafId: LEAF_1,
+          expandedLeafId: null,
+          ptyIdsByLeafId: {}
+        }
+      }
+    } as StoreState
+
+    const binding = connectPanePty(
+      createPane(1) as never,
+      createManager(1) as never,
+      createDeps({
+        startup: {
+          command: 'codex',
+          launchConfig,
+          launchToken: 'launch-token-1',
+          launchAgent: 'codex'
+        }
+      }) as never
+    )
+    try {
+      await flushAsyncTicks(20)
+      await new Promise((resolve) => setTimeout(resolve, 70))
+
+      expect(mockStoreState.registerAgentLaunchConfig).toHaveBeenCalledWith(paneKey, launchConfig, {
+        agentType: 'codex',
+        launchToken: 'launch-token-1',
+        tabId: 'tab-1',
+        leafId: LEAF_1
+      })
+      expect(mockStoreState.clearAgentLaunchConfig).toHaveBeenCalledWith(paneKey)
+
+      const registerOrder = mockStoreState.registerAgentLaunchConfig.mock.invocationCallOrder[0]
+      const clearOrder = mockStoreState.clearAgentLaunchConfig.mock.invocationCallOrder[0]
+      expect(registerOrder).toBeDefined()
+      expect(clearOrder).toBeDefined()
+      expect(registerOrder!).toBeLessThan(clearOrder!)
+    } finally {
+      binding.dispose()
+    }
+  })
+
   it('prefers live-entry launch config for pane cold restore when status survived PTY loss', async () => {
     const { connectPanePty } = await import('./pty-connection')
     const transport = createMockTransport('fresh-pty')
@@ -4732,6 +4786,48 @@ describe('connectPanePty', () => {
     binding.dispose()
   })
 
+  it('keeps hidden Grok telemetry startup output parsing briefly', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport('pty-id')
+    const capturedDataCallback: { current: ((data: string) => void) | null } = { current: null }
+    transport.connect.mockImplementation(async ({ callbacks }: { callbacks: ConnectCallbacks }) => {
+      capturedDataCallback.current = callbacks.onData ?? null
+      return 'pty-id'
+    })
+    transportFactoryQueue.push(transport)
+
+    const pane = createPane(1)
+    const manager = createManager(1)
+    const binding = connectPanePty(
+      pane as never,
+      manager as never,
+      createDeps({
+        isVisibleRef: { current: false },
+        startup: {
+          command: 'wrapped-agent',
+          telemetry: {
+            agent_kind: 'grok',
+            launch_source: 'tab_bar_quick_launch',
+            request_kind: 'new'
+          }
+        }
+      }) as never
+    )
+    await flushAsyncTicks(6)
+
+    expect(capturedDataCallback.current).not.toBeNull()
+
+    capturedDataCallback.current?.('\x1b]11;?\x1b\\startup frame\r\n')
+
+    expect(pane.terminal.write).toHaveBeenCalledWith('\x1b]11;?\x1b\\', expect.any(Function))
+    expect(pane.terminal.write).not.toHaveBeenCalledWith(
+      '\x1b]11;?\x1b\\startup frame\r\n',
+      expect.any(Function)
+    )
+
+    binding.dispose()
+  })
+
   it('keeps hidden bare Codex startup commands parsing briefly', async () => {
     const { connectPanePty } = await import('./pty-connection')
     const transport = createMockTransport('pty-id')
@@ -4750,6 +4846,41 @@ describe('connectPanePty', () => {
       createDeps({
         isVisibleRef: { current: false },
         startup: { command: 'codex' }
+      }) as never
+    )
+    await flushAsyncTicks(6)
+
+    expect(capturedDataCallback.current).not.toBeNull()
+
+    capturedDataCallback.current?.('\x1b]11;?\x1b\\startup frame\r\n')
+
+    expect(pane.terminal.write).toHaveBeenCalledWith('\x1b]11;?\x1b\\', expect.any(Function))
+    expect(pane.terminal.write).not.toHaveBeenCalledWith(
+      '\x1b]11;?\x1b\\startup frame\r\n',
+      expect.any(Function)
+    )
+
+    binding.dispose()
+  })
+
+  it('keeps hidden bare Grok startup commands parsing briefly', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport('pty-id')
+    const capturedDataCallback: { current: ((data: string) => void) | null } = { current: null }
+    transport.connect.mockImplementation(async ({ callbacks }: { callbacks: ConnectCallbacks }) => {
+      capturedDataCallback.current = callbacks.onData ?? null
+      return 'pty-id'
+    })
+    transportFactoryQueue.push(transport)
+
+    const pane = createPane(1)
+    const manager = createManager(1)
+    const binding = connectPanePty(
+      pane as never,
+      manager as never,
+      createDeps({
+        isVisibleRef: { current: false },
+        startup: { command: '/Users/me/.grok/bin/grok --permission-mode bypassPermissions' }
       }) as never
     )
     await flushAsyncTicks(6)
@@ -6380,6 +6511,54 @@ describe('connectPanePty', () => {
     expect(pane.terminal.write).toHaveBeenCalledWith('remote prompt\r\n$ ', expect.any(Function))
     expect(refresh).toHaveBeenCalledWith(0, 39, true)
     expect(manager.rebuildPaneWebgl).toHaveBeenCalledWith(1)
+    disposable.dispose()
+  })
+
+  it('coalesces remote replay payloads that overlap before parsing starts', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    enableActiveRuntimeEnvironment()
+    const transport = createMockTransport('remote:env-1@@terminal-1')
+    const capturedReplayCallback: {
+      current: ((data: string) => void) | null
+    } = { current: null }
+    transport.connect.mockImplementation(async ({ callbacks }: { callbacks: ConnectCallbacks }) => {
+      capturedReplayCallback.current = callbacks.onReplayData ?? null
+      return { id: 'remote:env-1@@terminal-1', replay: '' }
+    })
+    transportFactoryQueue.push(transport)
+
+    const pane = createPane(1)
+    const pendingParses: (() => void)[] = []
+    pane.terminal.write = vi.fn((_data: string, callback?: () => void) => {
+      if (callback) {
+        pendingParses.push(callback)
+      }
+    })
+    const manager = createManager(1)
+    const deps = createDeps()
+    const disposable = connectPanePty(pane as never, manager as never, deps as never)
+    await flushAsyncTicks(6)
+
+    capturedReplayCallback.current?.('first replay')
+    capturedReplayCallback.current?.('second replay')
+    await flushAsyncTicks(2)
+
+    expect(pane.terminal.write).toHaveBeenCalledTimes(1)
+    expect(pane.terminal.write).toHaveBeenNthCalledWith(
+      1,
+      '\x1b[2J\x1b[3J\x1b[H',
+      expect.any(Function)
+    )
+
+    for (let index = 0; index < 8; index += 1) {
+      await flushAsyncTicks(2)
+      pendingParses.shift()?.()
+    }
+    await flushAsyncTicks(4)
+
+    expect(pane.terminal.write).not.toHaveBeenCalledWith('first replay', expect.any(Function))
+    expect(pane.terminal.write).toHaveBeenCalledWith('second replay', expect.any(Function))
+    expect(manager.rebuildPaneWebgl).toHaveBeenCalledTimes(1)
     disposable.dispose()
   })
 
