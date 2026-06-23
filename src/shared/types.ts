@@ -2017,6 +2017,12 @@ export type CreateWorktreeResult = {
     tabId?: string
     surface?: 'visible' | 'background'
   }
+  // Why (F2 #13): when no startup agent is launched, createManagedWorktree still
+  // opens a plain interactive terminal in the worktree. Surfacing its handle lets
+  // callers (the orchestration createWorktree adapter) dispatch into the known
+  // interactive shell instead of re-discovering a terminal positionally, which
+  // could grab the separate "Setup" runner terminal.
+  initialTerminal?: { handle: string }
   timing?: WorktreeCreateTiming
 }
 

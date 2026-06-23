@@ -1,7 +1,9 @@
 import { randomBytes } from 'crypto'
 import { z } from 'zod'
+import type { TuiAgent } from '../../../../shared/types'
+import { TUI_AGENT_CONFIG } from '../../../../shared/tui-agent-config'
 import { defineMethod, type RpcMethod } from '../core'
-import { OptionalFiniteNumber, OptionalString, requiredString } from '../schemas'
+import { OptionalBoolean, OptionalFiniteNumber, OptionalString, requiredString } from '../schemas'
 import { CoordinatorRunConflictError, type GateStatus } from '../../orchestration/db'
 import { Coordinator } from '../../orchestration/coordinator'
 
@@ -25,7 +27,13 @@ const RunParams = z.object({
   from: OptionalString,
   pollIntervalMs: OptionalFiniteNumber,
   maxConcurrent: OptionalFiniteNumber,
-  worktree: OptionalString
+  worktree: OptionalString,
+  // Why (F2 #13): opt-in, default OFF. When set, each task runs in its own
+  // lineage-visible child worktree (parent = the --worktree director) so the
+  // run appears in Mission Control. Requires --worktree.
+  worktreeBacked: OptionalBoolean,
+  // Why (F2 #13): agent launched inside each worktree-backed track worktree.
+  workerAgent: OptionalString
 })
 
 const RunStopParams = z.object({})
@@ -56,6 +64,16 @@ export const ORCHESTRATION_GATE_METHODS: RpcMethod[] = [
     params: RunParams,
     handler: async (params, { runtime }) => {
       const db = runtime.getOrchestrationDb()
+
+      // Why (F2 #13, round 2): reject an unknown --worker-agent fast at the
+      // boundary. Otherwise an invalid id flows to createManagedWorktree, which
+      // throws 'Selected agent is disabled…' on every dispatch — feeding the
+      // worktree-create retry/breaker path with a permanent error.
+      if (params.workerAgent && !(params.workerAgent in TUI_AGENT_CONFIG)) {
+        throw new Error(
+          `Invalid --worker-agent '${params.workerAgent}'. Pass a known agent id (e.g. claude, codex).`
+        )
+      }
 
       const coordinatorHandle = params.from ?? deriveCoordinatorHandle()
 
@@ -101,7 +119,9 @@ export const ORCHESTRATION_GATE_METHODS: RpcMethod[] = [
         coordinatorHandle,
         pollIntervalMs: params.pollIntervalMs,
         maxConcurrent: params.maxConcurrent,
-        worktree: params.worktree
+        worktree: params.worktree,
+        ...(params.worktreeBacked ? { worktreeBacked: true } : {}),
+        ...(params.workerAgent ? { workerAgent: params.workerAgent as TuiAgent } : {})
       })
 
       activeCoordinator = coordinator

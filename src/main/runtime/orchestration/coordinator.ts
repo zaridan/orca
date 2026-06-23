@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- Why: the coordinator keeps message processing, task dispatch, gate handling, escalation, and convergence checking in one class so the polling loop can make atomic decisions across all these concerns without split-brain behavior. */
+import type { TuiAgent } from '../../../shared/types'
 import type { OrchestrationDb } from './db'
 import type { MessageRow, TaskRow, CoordinatorStatus } from './types'
 import { buildDispatchPreamble } from './preamble'
@@ -28,6 +29,25 @@ export type CoordinatorRuntime = {
     behind: number
     recentSubjects: string[]
   } | null>
+  // Why (F2 #13): create a child worktree whose lineage parent is the director
+  // worktree, so coordinator-driven work becomes visible in Mission Control
+  // (selectSpawnedWorktreeIds keys on parentWorktreeId === directorWorktreeId).
+  // OPTIONAL so existing implementers (the test mock, other runtimes) keep
+  // compiling and the legacy bare-terminal dispatch path is unaffected when a
+  // runtime doesn't provide it. Thin adapter over OrcaRuntimeService.createManagedWorktree.
+  createWorktree?(opts: {
+    parentWorktree: string
+    name: string
+    baseBranch?: string
+    orchestrationRunId?: string
+    taskId?: string
+    coordinatorHandle?: string
+    startup?: { agent: TuiAgent; prompt?: string }
+  }): Promise<{ worktreeId: string; branch: string; terminalHandle?: string }>
+  // Why (F2 #13, round 2): tear down a just-created child worktree when a
+  // post-create dispatch step fails, so repeated failures don't accumulate
+  // orphan worktrees. OPTIONAL for the same additive reason as createWorktree.
+  removeWorktree?(worktreeId: string): Promise<void>
 }
 
 // Why (§3.1): single threshold, no warn/refuse split. Coordinator picked 20
@@ -60,12 +80,41 @@ export function parseAllowStaleBaseFromSpec(spec: string): {
   return { allowStale: true, strippedSpec }
 }
 
+// Why (F2 #13): a deterministic, branch-safe worktree name (Orca: worktree name
+// IS branch name) per task. A readable slug from the task title/spec aids the
+// Mission Control display; the unique task-id suffix prevents collisions when
+// two tasks share a first line. createManagedWorktree further sanitizes and
+// resolves any residual branch conflict. The per-run namespacing / track-based
+// naming from design §6 is slice 2.
+export function worktreeNameForTask(task: Pick<TaskRow, 'id' | 'spec' | 'task_title'>): string {
+  const source = (task.task_title ?? task.spec).split('\n')[0] ?? ''
+  const slug = source
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32)
+    .replace(/-+$/g, '')
+  const shortTask = task.id.replace(/^task_/, '')
+  return slug ? `orch-${slug}-${shortTask}` : `orch-${shortTask}`
+}
+
 export type CoordinatorOptions = {
   spec: string
   coordinatorHandle: string
   pollIntervalMs?: number
   maxConcurrent?: number
   worktree?: string
+  // Why (F2 #13): opt-in, default OFF. When off the coordinator dispatches to
+  // bare terminals in `worktree` exactly as before (byte-for-byte legacy path).
+  // When on, each ready task gets its own lineage-visible child worktree so the
+  // run shows up in Mission Control. Requires `worktree` (the director / lineage
+  // parent) and a runtime that implements `createWorktree`.
+  worktreeBacked?: boolean
+  // Why (F2 #13): agent launched inside each track worktree via the startup
+  // option; the dispatch preamble is then sent unchanged (design Q3 leaning).
+  // When unset, a plain terminal is created in the worktree instead — the
+  // lineage bridge still works; agent selection is deferred.
+  workerAgent?: TuiAgent
   onLog?: (msg: string) => void
 }
 
@@ -87,14 +136,45 @@ const MAX_CONCURRENT_DEFAULT = 4
 // the places this constant must be kept in sync.
 const HUNG_THRESHOLD_MS = 10 * 60 * 1000
 
+// Why (F2 #13, round 2): the worktree-backed path launches the worker agent and
+// must not fire the preamble into a still-booting TUI (keystrokes get dropped).
+// We wait for the agent terminal to reach tui-idle before sending. 60s is a
+// generous-but-bounded ceiling for agent boot; on timeout the dispatch is
+// failed through the circuit breaker (not retried forever) so a worker that
+// never comes up gives up after the usual strikes.
+const DISPATCH_READINESS_TIMEOUT_MS = 60 * 1000
+
+type DriftResult = {
+  base: string
+  behind: number
+  recentSubjects: string[]
+} | null
+
+// Why (F2 #13, round 3): the resolved stale-base pre-flight. `skip` means the
+// base is too far behind and dispatch should be refused (recoverable, no breaker
+// burn); `baseDrift` (when behind > 0 but under threshold) is threaded into the
+// preamble; `strippedSpec` drops the `allow-stale-base` infra line. Computing it
+// ONCE — before createWorktree in worktree-backed mode — lets a stale base skip
+// without first creating (then tearing down) a worktree.
+type DispatchDrift = {
+  skip: boolean
+  baseDrift: DriftResult
+  strippedSpec: string
+}
+
 export class Coordinator {
   private db: OrchestrationDb
   private runtime: CoordinatorRuntime
   private state: CoordinatorState
   private stopped = false
-  private opts: Required<Omit<CoordinatorOptions, 'onLog' | 'worktree'>> & {
+  // Why (F2 #13, round 2): log the worktreeBacked→legacy downgrade exactly once
+  // so an operator who asked for worktree-backed dispatch sees the signal
+  // without a per-tick warning storm.
+  private warnedMissingCreateWorktree = false
+  private opts: Required<Omit<CoordinatorOptions, 'onLog' | 'worktree' | 'workerAgent'>> & {
     onLog: (msg: string) => void
     worktree?: string
+    workerAgent?: TuiAgent
   }
 
   constructor(db: OrchestrationDb, runtime: CoordinatorRuntime, options: CoordinatorOptions) {
@@ -106,6 +186,8 @@ export class Coordinator {
       pollIntervalMs: options.pollIntervalMs ?? DEFAULT_POLL_MS,
       maxConcurrent: options.maxConcurrent ?? MAX_CONCURRENT_DEFAULT,
       worktree: options.worktree,
+      worktreeBacked: options.worktreeBacked ?? false,
+      workerAgent: options.workerAgent,
       onLog: options.onLog ?? (() => {})
     }
     this.state = {
@@ -477,6 +559,27 @@ export class Coordinator {
   }
 
   private async dispatchReadyTasks(): Promise<void> {
+    // Why (F2 #13): worktree-backed dispatch is a separate, opt-in path so the
+    // legacy bare-terminal flow below stays byte-for-byte unchanged when off.
+    // Guard on the runtime capability too: a runtime without createWorktree can
+    // never satisfy worktreeBacked, so it safely falls through to legacy.
+    if (this.opts.worktreeBacked && this.runtime.createWorktree) {
+      await this.dispatchReadyTasksInWorktrees()
+      return
+    }
+    if (
+      this.opts.worktreeBacked &&
+      !this.runtime.createWorktree &&
+      !this.warnedMissingCreateWorktree
+    ) {
+      // Why (round 2, nit): don't silently downgrade. Surface the fallback once.
+      this.warnedMissingCreateWorktree = true
+      this.opts.onLog(
+        'worktreeBacked requested but this runtime does not implement createWorktree; ' +
+          'falling back to legacy bare-terminal dispatch'
+      )
+    }
+
     this.state.phase = 'dispatching'
     const readyTasks = this.db.listTasks({ ready: true, coordinatorRunId: this.state.runId })
     if (readyTasks.length === 0) {
@@ -525,48 +628,241 @@ export class Coordinator {
     }
   }
 
-  private async dispatchTask(task: TaskRow, targetHandle: string): Promise<void> {
-    // Why (§3.1): pre-flight drift check BEFORE `createDispatchContext` so a
-    // refusal does NOT increment failure_count. createDispatchContext carries
-    // `MAX(failure_count)` forward across contexts (db.ts:301-306), so burning
-    // the circuit-breaker budget here would convert a recoverable "fetch and
-    // retry" into a hard `failed` task within ~6s of polling. Silent return
-    // leaves the task in `ready`; the next `dispatchReadyTasks` tick retries
-    // naturally, and once the coordinator's worktree has been refreshed
-    // dispatch proceeds cleanly.
-    const { allowStale, strippedSpec } = parseAllowStaleBaseFromSpec(task.spec)
-    let baseDrift: {
-      base: string
-      behind: number
-      recentSubjects: string[]
-    } | null = null
+  // Why (F2 #13, slice 1): worktree-backed dispatch. Each ready task gets its
+  // OWN child worktree (trackKey = task id — the safe degenerate default; the
+  // implement→review track-reuse model is slice 2). The worktree's lineage
+  // parent is the director (`opts.worktree`), so selectSpawnedWorktreeIds finds
+  // the worker with no Mission Control change. Concurrency is still bounded by
+  // maxConcurrent; same-task serialization is inherent (one worktree per task).
+  private async dispatchReadyTasksInWorktrees(): Promise<void> {
+    this.state.phase = 'dispatching'
+    const readyTasks = this.db.listTasks({ ready: true, coordinatorRunId: this.state.runId })
+    if (readyTasks.length === 0) {
+      return
+    }
 
     if (!this.opts.worktree) {
+      // Why: lineage needs a parent. Without a director worktree there is no
+      // parent edge for Mission Control to key on, so worktree-backed dispatch
+      // cannot do its job. Fail loud-but-soft: log and leave tasks ready rather
+      // than silently creating orphan (parentless) worktrees.
+      this.opts.onLog(
+        'worktree-backed dispatch requires a --worktree (director) for lineage; skipping dispatch'
+      )
+      return
+    }
+
+    const dispatched = this.db.listTasks({
+      status: 'dispatched',
+      coordinatorRunId: this.state.runId
+    })
+    let slotsAvailable = this.opts.maxConcurrent - dispatched.length
+    if (slotsAvailable <= 0) {
+      return
+    }
+
+    for (const task of readyTasks) {
+      if (slotsAvailable <= 0) {
+        break
+      }
+
+      // Why (round 3): resolve drift on the DIRECTOR BEFORE creating the child.
+      // The child branches from the director's base, so a stale local base would
+      // make every fresh child report behind>threshold and be torn down — an
+      // unbounded create→skip→teardown churn loop. Pre-checking skips a stale base
+      // WITHOUT creating anything (recoverable, exactly like the legacy path, no
+      // churn). The resolved drift is threaded into dispatchTask so the fresh
+      // child is not re-probed.
+      const drift = await this.resolveDispatchDrift(task, this.opts.worktree)
+      if (drift.skip) {
+        continue
+      }
+
+      let created: { worktreeId: string; branch: string; terminalHandle?: string }
+      try {
+        created = await this.runtime.createWorktree!({
+          parentWorktree: this.opts.worktree,
+          name: worktreeNameForTask(task),
+          orchestrationRunId: this.state.runId,
+          taskId: task.id,
+          coordinatorHandle: this.opts.coordinatorHandle,
+          ...(this.opts.workerAgent ? { startup: { agent: this.opts.workerAgent } } : {})
+        })
+      } catch (err) {
+        // Why (round 2): createManagedWorktree validation (e.g. a disabled/invalid
+        // agent) throws BEFORE a worktree is created, so there is nothing to
+        // orphan here. Route the failure through the SAME breaker F1 uses so a
+        // task that can never be provisioned (disk full, stale director, bad
+        // agent) gives up after N strikes instead of retrying every tick forever.
+        this.recordWorktreeProvisionFailure(task, err)
+        continue
+      }
+
+      // Why (round 2): the adapter returns a handle for the agent it launched,
+      // or — when no agent was requested — the plain terminal createManagedWorktree
+      // already opened (it does NOT create a second one). A missing handle means
+      // the worktree exists but has no usable terminal: tear it down so it does
+      // not orphan, and breaker-account so we don't loop recreating it.
+      if (!created.terminalHandle) {
+        this.opts.onLog(
+          `No worker terminal in worktree ${created.worktreeId} for task ${task.id}; removing it`
+        )
+        await this.teardownWorktree(created.worktreeId)
+        this.recordWorktreeProvisionFailure(
+          task,
+          new Error('created worktree had no usable worker terminal')
+        )
+        continue
+      }
+
+      slotsAvailable--
+
+      // Why (round 2): wait for the agent TUI to be ready before sending the
+      // preamble only when we actually launched an agent. A plain shell (no
+      // workerAgent) accepts input immediately, so gating it on tui-idle would
+      // just risk a needless timeout.
+      const awaitReady = this.opts.workerAgent !== undefined
+      try {
+        // Drift was already resolved (skip=false) above, so pass it through:
+        // dispatchTask will NOT re-probe the fresh child and cannot drift-skip
+        // here — it dispatches or throws, so there is no created-but-undispatched
+        // worktree to churn.
+        await this.dispatchTask(
+          task,
+          created.terminalHandle,
+          `id:${created.worktreeId}`,
+          awaitReady,
+          drift
+        )
+      } catch (err) {
+        // dispatchTask already breaker-accounted the readiness/send failure.
+        // Tear down the worktree on failure so retries (or a give-up) don't
+        // leave an orphan behind.
+        this.opts.onLog(
+          `Failed to dispatch task ${task.id} in worktree ${created.worktreeId}: ${err}`
+        )
+        await this.teardownWorktree(created.worktreeId)
+        continue
+      }
+
+      this.opts.onLog(`Created worktree ${created.branch} for task ${task.id}`)
+    }
+  }
+
+  // Why (round 2): worktree/terminal provisioning fails BEFORE a real dispatch
+  // context exists (there is no worker handle yet), so we route the strike
+  // through the SAME circuit breaker F1 uses — create a context against a unique
+  // per-task sentinel handle, then immediately failDispatch it. failDispatch
+  // carries failure_count forward (db.ts createDispatchContext MAX), so these
+  // strikes accumulate with real dispatch failures: after 3 the task is marked
+  // failed instead of retrying forever; below 3 it returns to 'ready' to retry.
+  private recordWorktreeProvisionFailure(task: TaskRow, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error)
+    try {
+      const sentinelHandle = `orch-provision:${task.id}`
+      const ctx = this.db.createDispatchContext(task.id, sentinelHandle)
+      const updated = this.db.failDispatch(ctx.id, message)
+      if (updated?.status === 'circuit_broken') {
+        this.state.failedTasks.push(task.id)
+        this.opts.onLog(
+          `Task ${task.id} failed: could not provision a worktree after repeated attempts (${message})`
+        )
+      } else {
+        this.opts.onLog(
+          `Worktree provisioning for ${task.id} failed (strike ${updated?.failure_count ?? '?'}/3): ${message}`
+        )
+      }
+    } catch (err) {
+      this.opts.onLog(`Failed to record provisioning failure for ${task.id}: ${err}`)
+    }
+  }
+
+  // Why (round 2): best-effort teardown of a just-created child worktree so a
+  // failed dispatch does not leak an orphan. force-removes via the runtime; a
+  // teardown error is logged, not thrown (cleanup must never mask the original
+  // dispatch failure).
+  private async teardownWorktree(worktreeId: string): Promise<void> {
+    if (!this.runtime.removeWorktree) {
+      return
+    }
+    try {
+      await this.runtime.removeWorktree(worktreeId)
+    } catch (err) {
+      this.opts.onLog(`Failed to remove worktree ${worktreeId}: ${err}`)
+    }
+  }
+
+  // Returns true when the task was dispatched, false when the drift pre-flight
+  // skipped it (task left 'ready'). Throws when the dispatch itself fails (the
+  // failure is breaker-accounted before the throw).
+  // Why (§3.1): pre-flight drift check BEFORE `createDispatchContext` so a
+  // refusal does NOT increment failure_count. createDispatchContext carries
+  // `MAX(failure_count)` forward across contexts (db.ts:301-306), so burning
+  // the circuit-breaker budget here would convert a recoverable "fetch and
+  // retry" into a hard `failed` task within ~6s of polling. A `skip` leaves the
+  // task in `ready`; the next `dispatchReadyTasks` tick retries naturally, and
+  // once the base has been refreshed dispatch proceeds cleanly.
+  private async resolveDispatchDrift(
+    task: TaskRow,
+    driftSelector: string | undefined
+  ): Promise<DispatchDrift> {
+    const { allowStale, strippedSpec } = parseAllowStaleBaseFromSpec(task.spec)
+
+    if (!driftSelector) {
       // Why (§7.4): CoordinatorOptions.worktree is optional. When undefined,
       // probeWorktreeDrift cannot resolve a selector; log once so operators
       // can see the guard did not run for this task and proceed. v2 may
       // always resolve a worktree via the coordinator-terminal handle.
       this.opts.onLog(`stale-base guard inert for ${task.id}: coordinator has no worktree selector`)
-    } else {
-      baseDrift = await this.runtime.probeWorktreeDrift(this.opts.worktree).catch((err) => {
-        this.opts.onLog(`probeWorktreeDrift failed for ${this.opts.worktree}: ${err}`)
-        return null
-      })
-
-      if (baseDrift && baseDrift.behind > DISPATCH_STALE_THRESHOLD && !allowStale) {
-        // Why (§3.1): silent-return, NOT failDispatch (which would burn the
-        // circuit-breaker budget). The message lists three remediations so
-        // the operator can recover via any of them.
-        this.opts.onLog(
-          `Skipping dispatch of ${task.id}: worktree is ${baseDrift.behind} commits ` +
-            `behind ${baseDrift.base}. Pull/rebase the worktree, recreate it with ` +
-            `--base-branch ${baseDrift.base}, or include 'allow-stale-base: true' ` +
-            `in the task spec to override. Task remains in 'ready'; coordinator ` +
-            `will retry on the next tick.`
-        )
-        return
-      }
+      return { skip: false, baseDrift: null, strippedSpec }
     }
+
+    const baseDrift = await this.runtime.probeWorktreeDrift(driftSelector).catch((err) => {
+      this.opts.onLog(`probeWorktreeDrift failed for ${driftSelector}: ${err}`)
+      return null
+    })
+
+    if (baseDrift && baseDrift.behind > DISPATCH_STALE_THRESHOLD && !allowStale) {
+      // Why (§3.1): skip, NOT failDispatch (which would burn the circuit-breaker
+      // budget). The message lists three remediations so the operator can recover.
+      this.opts.onLog(
+        `Skipping dispatch of ${task.id}: worktree is ${baseDrift.behind} commits ` +
+          `behind ${baseDrift.base}. Pull/rebase the worktree, recreate it with ` +
+          `--base-branch ${baseDrift.base}, or include 'allow-stale-base: true' ` +
+          `in the task spec to override. Task remains in 'ready'; coordinator ` +
+          `will retry on the next tick.`
+      )
+      return { skip: true, baseDrift, strippedSpec }
+    }
+
+    return { skip: false, baseDrift, strippedSpec }
+  }
+
+  private async dispatchTask(
+    task: TaskRow,
+    targetHandle: string,
+    // Why (F2 #13): the worktree to drift-probe when this method computes drift
+    // itself (the legacy path passes nothing → defaults to the director). The
+    // worktree-backed path pre-computes drift before creating the worktree and
+    // passes it via `precomputedDrift`, so this selector is unused there.
+    driftWorktreeSelector?: string,
+    // Why (F2 #13, round 2): wait for the agent TUI to reach tui-idle before
+    // sending the preamble. Default false → the legacy path is byte-for-byte
+    // unchanged (it dispatches to already-idle terminals, so no wait is needed).
+    awaitTerminalReady = false,
+    // Why (F2 #13, round 3): the worktree-backed path resolves drift on the
+    // director BEFORE createWorktree (so a stale base skips without churning a
+    // worktree) and threads the result here so we don't re-probe the fresh child.
+    // Omitted on the legacy path → drift is resolved here exactly as before.
+    precomputedDrift?: DispatchDrift
+  ): Promise<boolean> {
+    const drift =
+      precomputedDrift ??
+      (await this.resolveDispatchDrift(task, driftWorktreeSelector ?? this.opts.worktree))
+    if (drift.skip) {
+      return false
+    }
+    const { baseDrift, strippedSpec } = drift
 
     const dispatch = this.db.createDispatchContext(task.id, targetHandle)
 
@@ -602,6 +898,18 @@ export class Coordinator {
     }
 
     try {
+      // Why (round 2, BLOCKER): gate the preamble on agent readiness. createWorktree
+      // returns as soon as the startup PTY is spawned, NOT when the agent TUI
+      // accepts input — sending immediately drops keystrokes into a booting
+      // claude/codex and the worker never sees its task. Reuse the runtime's
+      // existing readiness signal (waitForTerminal tui-idle) rather than
+      // hand-rolling a poller. A timeout rejects and is breaker-accounted below.
+      if (awaitTerminalReady) {
+        await this.runtime.waitForTerminal(targetHandle, {
+          condition: 'tui-idle',
+          timeoutMs: DISPATCH_READINESS_TIMEOUT_MS
+        })
+      }
       await this.runtime.sendTerminal(targetHandle, {
         text: preamble + gateContext,
         enter: true
@@ -619,6 +927,7 @@ export class Coordinator {
 
     this.opts.onLog(`Dispatched task ${task.id} to ${targetHandle}`)
     this.state.phase = 'monitoring'
+    return true
   }
 
   private async getAvailableTerminals(): Promise<string[]> {

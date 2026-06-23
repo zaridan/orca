@@ -12583,6 +12583,11 @@ export class OrcaRuntimeService {
     let didSpawnSetup = false
     let startupTerminalHandle: string | null = null
     let startupTerminalTabId: string | null = null
+    // Why (F2 #13): hoisted so the plain initial terminal's handle (opened in the
+    // no-startup branch below) can be surfaced on the result for the orchestration
+    // createWorktree adapter — letting it target the known interactive shell
+    // rather than positionally re-discovering (and risking the "Setup" terminal).
+    let initialTerminalHandle: string | null = null
     if (effectiveStartup && this.ptyController?.spawn) {
       try {
         // Why: automation startup must not depend on a renderer TerminalPane
@@ -12673,7 +12678,6 @@ export class OrcaRuntimeService {
       }
     } else if (this.ptyController?.spawn) {
       try {
-        let initialTerminalHandle: string | null = null
         if (!didSpawnStartup) {
           const terminal = await this.createTerminal(`id:${worktree.id}`)
           initialTerminalHandle = terminal.handle
@@ -12739,8 +12743,77 @@ export class OrcaRuntimeService {
               surface: 'background' as const
             }
           }
-        : {})
+        : {}),
+      ...(initialTerminalHandle ? { initialTerminal: { handle: initialTerminalHandle } } : {})
     }
+  }
+
+  // Why (F2 #13): the coordinator's `createWorktree` capability (CoordinatorRuntime).
+  // A thin adapter over createManagedWorktree that stamps the lineage parent =
+  // director worktree via orchestrationContext, so coordinator-driven workers
+  // become visible in Mission Control (selectSpawnedWorktreeIds keys on
+  // parentWorktreeId === directorWorktreeId). No git logic is forked — base-ref
+  // handling, SSH/relay parity, and lineage recording are all inherited. The
+  // run's F1 `target_key` stays the director worktree; these children are new
+  // worktrees with their own ids and do not change it.
+  async createWorktree(opts: {
+    parentWorktree: string
+    name: string
+    baseBranch?: string
+    orchestrationRunId?: string
+    taskId?: string
+    coordinatorHandle?: string
+    startup?: { agent: TuiAgent; prompt?: string }
+  }): Promise<{ worktreeId: string; branch: string; terminalHandle?: string }> {
+    // Resolve the director selector to its stable id + repo so the child is
+    // created in the same repo and the lineage edge points at a concrete id.
+    const parent = await this.resolveWorktreeSelector(opts.parentWorktree)
+    const result = await this.createManagedWorktree({
+      repoSelector: `id:${parent.repoId}`,
+      name: opts.name,
+      ...(opts.baseBranch ? { baseBranch: opts.baseBranch } : {}),
+      lineage: {
+        orchestrationContext: {
+          parentWorktreeId: parent.id,
+          ...(opts.orchestrationRunId ? { orchestrationRunId: opts.orchestrationRunId } : {}),
+          ...(opts.taskId ? { taskId: opts.taskId } : {}),
+          ...(opts.coordinatorHandle ? { coordinatorHandle: opts.coordinatorHandle } : {})
+        }
+      },
+      // Why (design Q3): launch the worker agent IN the worktree; the coordinator
+      // sends the dispatch preamble afterwards via sendTerminal (dispatchTask
+      // mechanics unchanged). When no agent is given, createManagedWorktree still
+      // opens a plain initial terminal in the worktree (see the no-startup branch
+      // in createManagedWorktree); we reuse THAT handle below rather than spawn a
+      // second terminal.
+      ...(opts.startup
+        ? {
+            startupAgent: opts.startup.agent,
+            ...(opts.startup.prompt ? { startupPrompt: opts.startup.prompt } : {})
+          }
+        : {})
+    })
+    // Why (round 3): use the handles createManagedWorktree returns DIRECTLY — the
+    // startup-agent terminal when one was launched, else the plain initial
+    // (interactive) terminal it opened. This avoids the prior positional
+    // listTerminals[0] pick, which could grab the separate "Setup" runner terminal
+    // and dispatch the preamble into the setup process instead of the shell. A
+    // missing handle (no PTY controller / spawn failed) stays undefined so the
+    // coordinator tears the worktree down instead of dispatching into nothing.
+    const terminalHandle = result.startupTerminal?.handle ?? result.initialTerminal?.handle
+    return {
+      worktreeId: result.worktree.id,
+      branch: result.worktree.git?.branch ?? opts.name,
+      ...(terminalHandle ? { terminalHandle } : {})
+    }
+  }
+
+  // Why (F2 #13, round 2): the coordinator's `removeWorktree` capability — tears
+  // down a child worktree it created when a post-create dispatch step fails, so
+  // repeated failures don't accumulate orphan worktrees. force=true because the
+  // target is a freshly created, unpublished worktree with no work to protect.
+  async removeWorktree(worktreeId: string): Promise<void> {
+    await this.removeManagedWorktree(`id:${worktreeId}`, true)
   }
 
   private async createManagedRemoteWorktree(
