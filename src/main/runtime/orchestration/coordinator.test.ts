@@ -35,10 +35,18 @@ function createMockRuntime(): CoordinatorRuntime & {
   terminals: { handle: string; worktreeId: string; connected: boolean; writable: boolean }[]
   createdTerminals: string[]
   createdWorktrees: CreatedWorktree[]
+  removedWorktrees: string[]
+  waitForTerminalCalls: { handle: string; condition?: string }[]
+  callOrder: string[]
   probeDriftCalls: string[]
   probeDriftResult: DriftResult
   setProbeDrift(result: DriftResult): void
   throwProbeDrift: Error | null
+  // round 2 knobs: faithful to the real adapter, which returns a handle only
+  // when it found/launched a terminal and can throw on provisioning failure.
+  createWorktreeReturnsHandle: boolean
+  throwCreateWorktree: Error | null
+  throwWaitForTerminal: Error | null
 } {
   const mock = {
     sentMessages: [] as { handle: string; text: string }[],
@@ -50,13 +58,20 @@ function createMockRuntime(): CoordinatorRuntime & {
     }[],
     createdTerminals: [] as string[],
     createdWorktrees: [] as CreatedWorktree[],
+    removedWorktrees: [] as string[],
+    waitForTerminalCalls: [] as { handle: string; condition?: string }[],
+    callOrder: [] as string[],
     probeDriftCalls: [] as string[],
     probeDriftResult: null as DriftResult,
     throwProbeDrift: null as Error | null,
+    createWorktreeReturnsHandle: true,
+    throwCreateWorktree: null as Error | null,
+    throwWaitForTerminal: null as Error | null,
     setProbeDrift(result: DriftResult): void {
       mock.probeDriftResult = result
     },
     async sendTerminal(handle: string, action: { text?: string }) {
+      mock.callOrder.push(`send:${handle}`)
       mock.sentMessages.push({ handle, text: action.text ?? '' })
       return { handle, accepted: true, bytesWritten: 0 }
     },
@@ -73,8 +88,13 @@ function createMockRuntime(): CoordinatorRuntime & {
       mock.terminals.push({ handle, worktreeId, connected: true, writable: true })
       return { handle, worktreeId, title: opts?.title ?? '' }
     },
-    async waitForTerminal(handle: string) {
-      return { handle, condition: 'exit' }
+    async waitForTerminal(handle: string, options?: { condition?: string; timeoutMs?: number }) {
+      mock.callOrder.push(`wait:${handle}`)
+      mock.waitForTerminalCalls.push({ handle, condition: options?.condition })
+      if (mock.throwWaitForTerminal) {
+        throw mock.throwWaitForTerminal
+      }
+      return { handle, condition: options?.condition ?? 'exit' }
     },
     async probeWorktreeDrift(worktreeSelector: string): Promise<DriftResult> {
       mock.probeDriftCalls.push(worktreeSelector)
@@ -85,26 +105,42 @@ function createMockRuntime(): CoordinatorRuntime & {
     },
     // Why (F2 #13): records the lineage parent the coordinator requested and
     // hands back a terminal in the new child worktree, mirroring the real
-    // OrcaRuntimeService.createWorktree adapter contract.
+    // OrcaRuntimeService.createWorktree adapter contract. Round 2: it can throw
+    // (provisioning failure) and can return NO handle (real adapter returns one
+    // only when a terminal was found/launched) so both failure paths are covered.
     async createWorktree(opts: {
       parentWorktree: string
       name: string
       taskId?: string
       startup?: { agent: string }
     }): Promise<{ worktreeId: string; branch: string; terminalHandle?: string }> {
+      if (mock.throwCreateWorktree) {
+        throw mock.throwCreateWorktree
+      }
       const idx = mock.createdWorktrees.length
       const worktreeId = `wt_child_${idx}`
       const parentWorktreeId = opts.parentWorktree.replace(/^id:/, '')
-      const handle = `term_wt_${idx}`
       mock.createdWorktrees.push({
         worktreeId,
         parentWorktreeId,
-        branch: opts.name,
+        // Why (round 2): the real adapter returns result.worktree.git?.branch,
+        // which may be sanitized/conflict-suffixed — not the raw name. Reflect
+        // that the branch can differ so tests don't assume branch === opts.name.
+        branch: `${opts.name}-resolved`,
         taskId: opts.taskId,
         ...(opts.startup ? { startupAgent: opts.startup.agent } : {})
       })
+      if (!mock.createWorktreeReturnsHandle) {
+        // No usable terminal in the created worktree → coordinator must tear it
+        // down and breaker-account, not dispatch into nothing.
+        return { worktreeId, branch: `${opts.name}-resolved` }
+      }
+      const handle = `term_wt_${idx}`
       mock.terminals.push({ handle, worktreeId, connected: true, writable: true })
-      return { worktreeId, branch: opts.name, terminalHandle: handle }
+      return { worktreeId, branch: `${opts.name}-resolved`, terminalHandle: handle }
+    },
+    async removeWorktree(worktreeId: string): Promise<void> {
+      mock.removedWorktrees.push(worktreeId)
     }
   }
   return mock
@@ -661,6 +697,17 @@ describe('Coordinator', () => {
       expect(runtime.createdTerminals).toHaveLength(0)
       expect(runtime.sentMessages.some((m) => m.handle === `term_wt_0`)).toBe(true)
 
+      // Round 2 (BLOCKER): the preamble waited for the agent TUI to be ready
+      // (tui-idle) before being sent — and the wait happened BEFORE the send.
+      expect(
+        runtime.waitForTerminalCalls.some(
+          (c) => c.handle === 'term_wt_0' && c.condition === 'tui-idle'
+        )
+      ).toBe(true)
+      expect(runtime.callOrder.indexOf('wait:term_wt_0')).toBeLessThan(
+        runtime.callOrder.indexOf('send:term_wt_0')
+      )
+
       // The drift pre-flight targeted the NEW track worktree, not the director.
       expect(runtime.probeDriftCalls).toContain(`id:${child.worktreeId}`)
       expect(runtime.probeDriftCalls).not.toContain(directorWorktreeId)
@@ -738,6 +785,170 @@ describe('Coordinator', () => {
       expect(logs.some((m) => m.includes('worktree-backed dispatch requires a --worktree'))).toBe(
         true
       )
+    })
+
+    // Round 2 BLOCKER: the preamble must not be fired into a still-booting TUI.
+    it('does NOT send the preamble when the agent never becomes ready, and breaker-fails the task', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+      // The agent terminal never reaches tui-idle → waitForTerminal rejects.
+      runtime.throwWaitForTerminal = new Error('timeout')
+
+      const task = db.createTask({ spec: 'cold-boot worker' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 10,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+
+      const result = await coordinator.run()
+
+      // The preamble was NEVER sent (would have been dropped into a booting TUI).
+      expect(runtime.sentMessages).toHaveLength(0)
+      // The readiness failure burned the breaker (3 strikes) → task failed,
+      // not retried forever.
+      expect(result.status).toBe('failed')
+      expect(result.failedTasks).toContain(task.id)
+      expect(db.getTask(task.id)?.status).toBe('failed')
+      // Each failed attempt tore its worktree down — no orphans left behind.
+      expect(runtime.removedWorktrees.length).toBeGreaterThan(0)
+      expect(runtime.removedWorktrees.length).toBe(runtime.createdWorktrees.length)
+    })
+
+    // Round 2 SHOULD-FIX #2: createWorktree failures route through the breaker
+    // (bounded retry → failed), instead of retrying every tick forever.
+    it('breaker-fails a task whose worktree can never be created (no infinite retry)', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+      runtime.throwCreateWorktree = new Error('disk full')
+
+      const task = db.createTask({ spec: 'unprovisionable' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 10,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+
+      const result = await coordinator.run()
+
+      expect(result.status).toBe('failed')
+      expect(result.failedTasks).toContain(task.id)
+      expect(db.getTask(task.id)?.status).toBe('failed')
+      // createWorktree threw before creating anything → nothing to tear down.
+      expect(runtime.createdWorktrees).toHaveLength(0)
+      expect(runtime.removedWorktrees).toHaveLength(0)
+    })
+
+    // Round 2 SHOULD-FIX #2: a worktree created without a usable terminal is
+    // torn down (no orphan) and the strike is breaker-accounted.
+    it('tears down a worktree that has no usable terminal and breaker-fails the task', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+      runtime.createWorktreeReturnsHandle = false
+
+      const task = db.createTask({ spec: 'no terminal' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 10,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+
+      const result = await coordinator.run()
+
+      expect(runtime.sentMessages).toHaveLength(0)
+      expect(result.status).toBe('failed')
+      expect(result.failedTasks).toContain(task.id)
+      // Every created-but-unusable worktree was removed → no orphans.
+      expect(runtime.removedWorktrees.length).toBe(runtime.createdWorktrees.length)
+      expect(runtime.removedWorktrees.length).toBeGreaterThan(0)
+    })
+
+    // Round 2 SHOULD-FIX #3: the no-workerAgent path must NOT create a second
+    // terminal (the real adapter reuses the one createManagedWorktree opened),
+    // and it must NOT wait on tui-idle (a plain shell accepts input immediately).
+    it('no-agent path dispatches without a second terminal and without a readiness wait', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+
+      const task = db.createTask({ spec: 'no agent configured' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 50,
+        worktree: 'director-wt',
+        worktreeBacked: true
+        // workerAgent omitted → no startup agent
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 100)
+      })
+
+      expect(runtime.createdWorktrees).toHaveLength(1)
+      const child = runtime.createdWorktrees[0]
+      expect(child.startupAgent).toBeUndefined()
+      // The coordinator dispatched into the worktree's terminal and created NO
+      // extra terminal of its own (no double-terminal).
+      expect(runtime.createdTerminals).toHaveLength(0)
+      expect(runtime.sentMessages.some((m) => m.handle === 'term_wt_0')).toBe(true)
+      // No readiness wait for the plain-shell (no-agent) case.
+      expect(runtime.waitForTerminalCalls).toHaveLength(0)
+
+      insertWorkerDone(db, { taskId: task.id, from: 'term_wt_0' })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+    })
+
+    // Round 2 NIT: surface the worktreeBacked→legacy downgrade once.
+    it('logs once when worktreeBacked is set but the runtime lacks createWorktree', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+      // Strip the capability to simulate a runtime that cannot create worktrees.
+      delete (runtime as { createWorktree?: unknown }).createWorktree
+      runtime.terminals = [
+        { handle: 'term_a', worktreeId: 'director-wt', connected: true, writable: true }
+      ]
+      const logs: string[] = []
+
+      const task = db.createTask({ spec: 'falls back to legacy' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 20,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        onLog: (m) => logs.push(m)
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 100)
+      })
+
+      // Fell back to legacy bare-terminal dispatch, and said so exactly once.
+      expect(runtime.createdWorktrees).toHaveLength(0)
+      expect(runtime.sentMessages.some((m) => m.handle === 'term_a')).toBe(true)
+      const downgradeLogs = logs.filter((m) => m.includes('does not implement createWorktree'))
+      expect(downgradeLogs).toHaveLength(1)
+
+      insertWorkerDone(db, { taskId: task.id, from: 'term_a' })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
     })
   })
 
