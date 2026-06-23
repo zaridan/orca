@@ -144,6 +144,24 @@ const HUNG_THRESHOLD_MS = 10 * 60 * 1000
 // never comes up gives up after the usual strikes.
 const DISPATCH_READINESS_TIMEOUT_MS = 60 * 1000
 
+type DriftResult = {
+  base: string
+  behind: number
+  recentSubjects: string[]
+} | null
+
+// Why (F2 #13, round 3): the resolved stale-base pre-flight. `skip` means the
+// base is too far behind and dispatch should be refused (recoverable, no breaker
+// burn); `baseDrift` (when behind > 0 but under threshold) is threaded into the
+// preamble; `strippedSpec` drops the `allow-stale-base` infra line. Computing it
+// ONCE — before createWorktree in worktree-backed mode — lets a stale base skip
+// without first creating (then tearing down) a worktree.
+type DispatchDrift = {
+  skip: boolean
+  baseDrift: DriftResult
+  strippedSpec: string
+}
+
 export class Coordinator {
   private db: OrchestrationDb
   private runtime: CoordinatorRuntime
@@ -648,6 +666,18 @@ export class Coordinator {
         break
       }
 
+      // Why (round 3): resolve drift on the DIRECTOR BEFORE creating the child.
+      // The child branches from the director's base, so a stale local base would
+      // make every fresh child report behind>threshold and be torn down — an
+      // unbounded create→skip→teardown churn loop. Pre-checking skips a stale base
+      // WITHOUT creating anything (recoverable, exactly like the legacy path, no
+      // churn). The resolved drift is threaded into dispatchTask so the fresh
+      // child is not re-probed.
+      const drift = await this.resolveDispatchDrift(task, this.opts.worktree)
+      if (drift.skip) {
+        continue
+      }
+
       let created: { worktreeId: string; branch: string; terminalHandle?: string }
       try {
         created = await this.runtime.createWorktree!({
@@ -692,13 +722,17 @@ export class Coordinator {
       // workerAgent) accepts input immediately, so gating it on tui-idle would
       // just risk a needless timeout.
       const awaitReady = this.opts.workerAgent !== undefined
-      let dispatched = false
       try {
-        dispatched = await this.dispatchTask(
+        // Drift was already resolved (skip=false) above, so pass it through:
+        // dispatchTask will NOT re-probe the fresh child and cannot drift-skip
+        // here — it dispatches or throws, so there is no created-but-undispatched
+        // worktree to churn.
+        await this.dispatchTask(
           task,
           created.terminalHandle,
           `id:${created.worktreeId}`,
-          awaitReady
+          awaitReady,
+          drift
         )
       } catch (err) {
         // dispatchTask already breaker-accounted the readiness/send failure.
@@ -711,15 +745,7 @@ export class Coordinator {
         continue
       }
 
-      if (dispatched) {
-        this.opts.onLog(`Created worktree ${created.branch} for task ${task.id}`)
-      } else {
-        // Drift-skip (or guard-inert) left the task ready without dispatching.
-        // For a fresh worktree this is effectively unreachable (it branches from
-        // base, so drift ≈ 0), but tear down defensively so a skip can't
-        // accumulate orphans across ticks.
-        await this.teardownWorktree(created.worktreeId)
-      }
+      this.opts.onLog(`Created worktree ${created.branch} for task ${task.id}`)
     }
   }
 
@@ -769,34 +795,18 @@ export class Coordinator {
   // Returns true when the task was dispatched, false when the drift pre-flight
   // skipped it (task left 'ready'). Throws when the dispatch itself fails (the
   // failure is breaker-accounted before the throw).
-  private async dispatchTask(
+  // Why (§3.1): pre-flight drift check BEFORE `createDispatchContext` so a
+  // refusal does NOT increment failure_count. createDispatchContext carries
+  // `MAX(failure_count)` forward across contexts (db.ts:301-306), so burning
+  // the circuit-breaker budget here would convert a recoverable "fetch and
+  // retry" into a hard `failed` task within ~6s of polling. A `skip` leaves the
+  // task in `ready`; the next `dispatchReadyTasks` tick retries naturally, and
+  // once the base has been refreshed dispatch proceeds cleanly.
+  private async resolveDispatchDrift(
     task: TaskRow,
-    targetHandle: string,
-    // Why (F2 #13): the worktree to drift-probe. Defaults to the director
-    // worktree (legacy). The worktree-backed path passes the freshly-created
-    // track worktree so the pre-flight checks the worker's actual checkout, not
-    // the director's. Omitting it preserves the legacy behavior exactly.
-    driftWorktreeSelector?: string,
-    // Why (F2 #13, round 2): wait for the agent TUI to reach tui-idle before
-    // sending the preamble. Default false → the legacy path is byte-for-byte
-    // unchanged (it dispatches to already-idle terminals, so no wait is needed).
-    awaitTerminalReady = false
-  ): Promise<boolean> {
-    // Why (§3.1): pre-flight drift check BEFORE `createDispatchContext` so a
-    // refusal does NOT increment failure_count. createDispatchContext carries
-    // `MAX(failure_count)` forward across contexts (db.ts:301-306), so burning
-    // the circuit-breaker budget here would convert a recoverable "fetch and
-    // retry" into a hard `failed` task within ~6s of polling. Silent return
-    // leaves the task in `ready`; the next `dispatchReadyTasks` tick retries
-    // naturally, and once the coordinator's worktree has been refreshed
-    // dispatch proceeds cleanly.
-    const driftSelector = driftWorktreeSelector ?? this.opts.worktree
+    driftSelector: string | undefined
+  ): Promise<DispatchDrift> {
     const { allowStale, strippedSpec } = parseAllowStaleBaseFromSpec(task.spec)
-    let baseDrift: {
-      base: string
-      behind: number
-      recentSubjects: string[]
-    } | null = null
 
     if (!driftSelector) {
       // Why (§7.4): CoordinatorOptions.worktree is optional. When undefined,
@@ -804,26 +814,55 @@ export class Coordinator {
       // can see the guard did not run for this task and proceed. v2 may
       // always resolve a worktree via the coordinator-terminal handle.
       this.opts.onLog(`stale-base guard inert for ${task.id}: coordinator has no worktree selector`)
-    } else {
-      baseDrift = await this.runtime.probeWorktreeDrift(driftSelector).catch((err) => {
-        this.opts.onLog(`probeWorktreeDrift failed for ${driftSelector}: ${err}`)
-        return null
-      })
-
-      if (baseDrift && baseDrift.behind > DISPATCH_STALE_THRESHOLD && !allowStale) {
-        // Why (§3.1): silent-return, NOT failDispatch (which would burn the
-        // circuit-breaker budget). The message lists three remediations so
-        // the operator can recover via any of them.
-        this.opts.onLog(
-          `Skipping dispatch of ${task.id}: worktree is ${baseDrift.behind} commits ` +
-            `behind ${baseDrift.base}. Pull/rebase the worktree, recreate it with ` +
-            `--base-branch ${baseDrift.base}, or include 'allow-stale-base: true' ` +
-            `in the task spec to override. Task remains in 'ready'; coordinator ` +
-            `will retry on the next tick.`
-        )
-        return false
-      }
+      return { skip: false, baseDrift: null, strippedSpec }
     }
+
+    const baseDrift = await this.runtime.probeWorktreeDrift(driftSelector).catch((err) => {
+      this.opts.onLog(`probeWorktreeDrift failed for ${driftSelector}: ${err}`)
+      return null
+    })
+
+    if (baseDrift && baseDrift.behind > DISPATCH_STALE_THRESHOLD && !allowStale) {
+      // Why (§3.1): skip, NOT failDispatch (which would burn the circuit-breaker
+      // budget). The message lists three remediations so the operator can recover.
+      this.opts.onLog(
+        `Skipping dispatch of ${task.id}: worktree is ${baseDrift.behind} commits ` +
+          `behind ${baseDrift.base}. Pull/rebase the worktree, recreate it with ` +
+          `--base-branch ${baseDrift.base}, or include 'allow-stale-base: true' ` +
+          `in the task spec to override. Task remains in 'ready'; coordinator ` +
+          `will retry on the next tick.`
+      )
+      return { skip: true, baseDrift, strippedSpec }
+    }
+
+    return { skip: false, baseDrift, strippedSpec }
+  }
+
+  private async dispatchTask(
+    task: TaskRow,
+    targetHandle: string,
+    // Why (F2 #13): the worktree to drift-probe when this method computes drift
+    // itself (the legacy path passes nothing → defaults to the director). The
+    // worktree-backed path pre-computes drift before creating the worktree and
+    // passes it via `precomputedDrift`, so this selector is unused there.
+    driftWorktreeSelector?: string,
+    // Why (F2 #13, round 2): wait for the agent TUI to reach tui-idle before
+    // sending the preamble. Default false → the legacy path is byte-for-byte
+    // unchanged (it dispatches to already-idle terminals, so no wait is needed).
+    awaitTerminalReady = false,
+    // Why (F2 #13, round 3): the worktree-backed path resolves drift on the
+    // director BEFORE createWorktree (so a stale base skips without churning a
+    // worktree) and threads the result here so we don't re-probe the fresh child.
+    // Omitted on the legacy path → drift is resolved here exactly as before.
+    precomputedDrift?: DispatchDrift
+  ): Promise<boolean> {
+    const drift =
+      precomputedDrift ??
+      (await this.resolveDispatchDrift(task, driftWorktreeSelector ?? this.opts.worktree))
+    if (drift.skip) {
+      return false
+    }
+    const { baseDrift, strippedSpec } = drift
 
     const dispatch = this.db.createDispatchContext(task.id, targetHandle)
 

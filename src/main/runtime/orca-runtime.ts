@@ -12583,6 +12583,11 @@ export class OrcaRuntimeService {
     let didSpawnSetup = false
     let startupTerminalHandle: string | null = null
     let startupTerminalTabId: string | null = null
+    // Why (F2 #13): hoisted so the plain initial terminal's handle (opened in the
+    // no-startup branch below) can be surfaced on the result for the orchestration
+    // createWorktree adapter — letting it target the known interactive shell
+    // rather than positionally re-discovering (and risking the "Setup" terminal).
+    let initialTerminalHandle: string | null = null
     if (effectiveStartup && this.ptyController?.spawn) {
       try {
         // Why: automation startup must not depend on a renderer TerminalPane
@@ -12673,7 +12678,6 @@ export class OrcaRuntimeService {
       }
     } else if (this.ptyController?.spawn) {
       try {
-        let initialTerminalHandle: string | null = null
         if (!didSpawnStartup) {
           const terminal = await this.createTerminal(`id:${worktree.id}`)
           initialTerminalHandle = terminal.handle
@@ -12739,7 +12743,8 @@ export class OrcaRuntimeService {
               surface: 'background' as const
             }
           }
-        : {})
+        : {}),
+      ...(initialTerminalHandle ? { initialTerminal: { handle: initialTerminalHandle } } : {})
     }
   }
 
@@ -12788,17 +12793,14 @@ export class OrcaRuntimeService {
           }
         : {})
     })
-    // Why (round 2): the adapter returns the startup-agent terminal when one was
-    // launched, otherwise the plain initial terminal createManagedWorktree
-    // already opened — found via listTerminals so the coordinator does NOT
-    // create a second terminal (the prior double-terminal bug). A missing handle
-    // (no PTY controller / spawn failed) is surfaced as undefined so the
-    // coordinator can tear the worktree down instead of dispatching into nothing.
-    let terminalHandle = result.startupTerminal?.handle
-    if (!terminalHandle) {
-      const listed = await this.listTerminals(`id:${result.worktree.id}`, 1).catch(() => null)
-      terminalHandle = listed?.terminals[0]?.handle
-    }
+    // Why (round 3): use the handles createManagedWorktree returns DIRECTLY — the
+    // startup-agent terminal when one was launched, else the plain initial
+    // (interactive) terminal it opened. This avoids the prior positional
+    // listTerminals[0] pick, which could grab the separate "Setup" runner terminal
+    // and dispatch the preamble into the setup process instead of the shell. A
+    // missing handle (no PTY controller / spawn failed) stays undefined so the
+    // coordinator tears the worktree down instead of dispatching into nothing.
+    const terminalHandle = result.startupTerminal?.handle ?? result.initialTerminal?.handle
     return {
       worktreeId: result.worktree.id,
       branch: result.worktree.git?.branch ?? opts.name,
