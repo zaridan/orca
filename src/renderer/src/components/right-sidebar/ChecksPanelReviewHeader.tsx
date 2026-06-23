@@ -46,6 +46,9 @@ type ChecksPanelReviewHeaderProps = {
   review: ChecksPanelReview
   isRefreshing: boolean
   canUnlinkPullRequest: boolean
+  // Link/unlink edit worktree meta; hide the menu when there's no live worktree
+  // (a shipped/worktree-less card) so the actions aren't shown enabled-but-no-op.
+  canManagePullRequestLink: boolean
   showSystemBrowserHint: boolean
   onRefresh: () => void
   onOpenReview: (event: React.MouseEvent<HTMLButtonElement>) => void
@@ -57,6 +60,7 @@ export function ChecksPanelReviewHeader({
   review,
   isRefreshing,
   canUnlinkPullRequest,
+  canManagePullRequestLink,
   showSystemBrowserHint,
   onRefresh,
   onOpenReview,
@@ -69,7 +73,8 @@ export function ChecksPanelReviewHeader({
     numberPrefix
   } = reviewProviderPresentation(review.provider)
   const reviewNumberLabel = `${numberPrefix}${review.number}`
-  const showPullRequestMenu = review.provider === 'github'
+  // Hide link/unlink edits on shipped/worktree-less cards so they aren't shown enabled-but-no-op.
+  const showPullRequestMenu = review.provider === 'github' && canManagePullRequestLink
   const openTitle = translate(
     'auto.components.right.sidebar.ChecksPanel.5c88c6db07',
     'Open on {{value0}}',
@@ -100,7 +105,9 @@ export function ChecksPanelReviewHeader({
       </span>
       <div className="flex-1" />
       <button
+        type="button"
         className="cursor-pointer rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-50"
+        aria-label={translate('auto.components.right.sidebar.ChecksPanel.7f4489f370', 'Refresh')}
         title={translate('auto.components.right.sidebar.ChecksPanel.7f4489f370', 'Refresh')}
         onClick={onRefresh}
         disabled={isRefreshing}
