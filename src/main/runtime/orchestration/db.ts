@@ -34,13 +34,14 @@ function generateId(prefix: string): string {
   return `${prefix}_${randomBytes(6).toString('hex')}`
 }
 
-// Why (#12): raised by startCoordinatorRun when another run is already active.
-// startCoordinatorRun wraps the check+insert in BEGIN IMMEDIATE so the guard is
-// atomic across processes (two runtimes / SSH sharing one DB file) — the prior
-// in-memory `getActiveCoordinatorRun()` check did not span processes, which is
-// how two coordinators clashed. Callers map this to a friendly RPC error.
+// Why (#12): raised by startCoordinatorRun when a run is already active *for the
+// same target* (repo/worktree). startCoordinatorRun wraps the check+insert in
+// BEGIN IMMEDIATE so the guard is atomic across processes (two runtimes / SSH
+// sharing one DB file) — the prior in-memory `getActiveCoordinatorRun()` check
+// did not span processes, which is how two coordinators clashed. Runs on
+// different targets start in parallel. Callers map this to a friendly RPC error.
 export class CoordinatorRunConflictError extends Error {
-  constructor(message = 'A coordinator run is already in progress') {
+  constructor(message = 'A coordinator run is already in progress for this target') {
     super(message)
     this.name = 'CoordinatorRunConflictError'
   }
@@ -55,9 +56,12 @@ export class CoordinatorRunConflictError extends Error {
 // explicit task_title/display_name fields for orchestration worker UI labels.
 // v5 → v6 adds `coordinator_run_id` to tasks/dispatch_contexts/decision_gates
 // (plus run-scoped lookup indexes) so concurrent runs sharing one DB no longer
-// poach each other's work (#12). The single-running invariant is enforced at
-// write time by startCoordinatorRun (BEGIN IMMEDIATE), not by a schema index.
-const SCHEMA_VERSION = 6
+// poach each other's work (#12). v6 → v7 adds `coordinator_runs.target_key` so
+// the run-start guard can reject only a *duplicate run on the same target*
+// (repo/worktree) while letting Orcastrators in different repos run in parallel.
+// The guard is enforced at write time by startCoordinatorRun (BEGIN IMMEDIATE),
+// not by a schema index.
+const SCHEMA_VERSION = 7
 
 export class OrchestrationDb {
   private db: Database.Database
@@ -161,16 +165,17 @@ export class OrchestrationDb {
           CHECK(status IN ('idle', 'running', 'completed', 'failed')),
         coordinator_handle  TEXT NOT NULL,
         poll_interval_ms    INTEGER NOT NULL DEFAULT 2000,
+        target_key          TEXT,
         created_at          TEXT NOT NULL DEFAULT (datetime('now')),
         completed_at        TEXT
       );
     `)
     this.createUndeliveredInboxIndexIfPossible()
-    // Why: run-scoped indexes + the single-running UNIQUE index depend on the
-    // coordinator_run_id columns, which on an upgraded DB only exist after
-    // migrate() runs. createTables() runs first (CREATE TABLE IF NOT EXISTS is a
-    // no-op on the old shape), so guard on the column and (re)attach after
-    // migration too. Fresh DBs already have the columns, so this attaches now.
+    // Why: the run-scoped lookup indexes depend on the coordinator_run_id
+    // columns, which on an upgraded DB only exist after migrate() runs.
+    // createTables() runs first (CREATE TABLE IF NOT EXISTS is a no-op on the
+    // old shape), so guard on the column and (re)attach after migration too.
+    // Fresh DBs already have the columns, so this attaches now.
     this.createRunScopedIndexesIfPossible()
   }
 
@@ -272,7 +277,8 @@ export class OrchestrationDb {
         }
       }
       // v5 → v6: per-run isolation (#12). Add coordinator_run_id to the
-      // run-scoped tables and enforce the single-running invariant atomically.
+      // run-scoped tables so each run's task DAG / dispatches / gates are
+      // queried in isolation.
       if (current < 6) {
         if (!this.hasColumn('tasks', 'coordinator_run_id')) {
           this.db.exec(`ALTER TABLE tasks ADD COLUMN coordinator_run_id TEXT`)
@@ -284,9 +290,17 @@ export class OrchestrationDb {
           this.db.exec(`ALTER TABLE decision_gates ADD COLUMN coordinator_run_id TEXT`)
         }
       }
+      // v6 → v7: per-target run-start guard (#12). target_key identifies the
+      // run's repo/worktree so startCoordinatorRun blocks only a duplicate run
+      // on the same target, not all concurrency.
+      if (current < 7) {
+        if (!this.hasColumn('coordinator_runs', 'target_key')) {
+          this.db.exec(`ALTER TABLE coordinator_runs ADD COLUMN target_key TEXT`)
+        }
+      }
       this.createUndeliveredInboxIndexIfPossible()
-      // Why: attach run-scoped + single-running indexes now that the v6 columns
-      // exist (createTables ran before the ALTERs above on an upgraded DB).
+      // Why: attach run-scoped lookup indexes now that the v6 columns exist
+      // (createTables ran before the ALTERs above on an upgraded DB).
       this.createRunScopedIndexesIfPossible()
 
       this.db.pragma(`user_version = ${SCHEMA_VERSION}`)
@@ -961,45 +975,55 @@ export class OrchestrationDb {
     spec: string
     coordinatorHandle: string
     pollIntervalMs?: number
+    targetKey?: string | null
   }): CoordinatorRun {
     const id = generateId('run')
     this.db
       .prepare(
-        "INSERT INTO coordinator_runs (id, spec, status, coordinator_handle, poll_interval_ms) VALUES (?, ?, 'running', ?, ?)"
+        "INSERT INTO coordinator_runs (id, spec, status, coordinator_handle, poll_interval_ms, target_key) VALUES (?, ?, 'running', ?, ?, ?)"
       )
-      .run(id, run.spec, run.coordinatorHandle, run.pollIntervalMs ?? 2000)
+      .run(id, run.spec, run.coordinatorHandle, run.pollIntervalMs ?? 2000, run.targetKey ?? null)
     return this.db.prepare('SELECT * FROM coordinator_runs WHERE id = ?').get(id) as CoordinatorRun
   }
 
-  // Why (#12): atomic run-start. The previous flow ("getActiveCoordinatorRun()
-  // in the RPC, then createCoordinatorRun") had a TOCTOU window that two
-  // runtimes sharing one DB file could both pass, starting two clashing
-  // coordinators. BEGIN IMMEDIATE takes the write lock up front, so the
-  // check+insert is serialized across connections/processes: the loser sees the
-  // winner's running row and gets a CoordinatorRunConflictError. Used by the RPC
-  // path; tests/coordinator.run() use the plain createCoordinatorRun insert.
+  // Why (#12): atomic, per-target run-start. The previous flow
+  // ("getActiveCoordinatorRun() in the RPC, then createCoordinatorRun") had a
+  // TOCTOU window that two runtimes sharing one DB file could both pass,
+  // starting two clashing coordinators. BEGIN IMMEDIATE takes the write lock up
+  // front, so the check+insert is serialized across connections/processes: the
+  // loser sees the winner's running row and gets a CoordinatorRunConflictError.
+  // The check is scoped to `target_key` (repo/worktree) so a *duplicate* run on
+  // the same target is rejected while Orcastrators in different repos start in
+  // parallel. A null target_key (no worktree given at run-start) shares one
+  // slot — unidentified targets fall back to single-run. Used by the RPC path;
+  // tests/coordinator.run() use the plain createCoordinatorRun insert.
   startCoordinatorRun(run: {
     spec: string
     coordinatorHandle: string
     pollIntervalMs?: number
+    targetKey?: string | null
   }): CoordinatorRun {
+    const targetKey = run.targetKey ?? null
     this.db.exec('BEGIN IMMEDIATE')
     let committed = false
     try {
+      // `IS ?` so a null target_key matches other null-target running rows.
       const active = this.db
         .prepare(
-          "SELECT * FROM coordinator_runs WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
+          "SELECT * FROM coordinator_runs WHERE status = 'running' AND target_key IS ? ORDER BY created_at DESC LIMIT 1"
         )
-        .get() as CoordinatorRun | undefined
+        .get(targetKey) as CoordinatorRun | undefined
       if (active) {
-        throw new CoordinatorRunConflictError(`Coordinator already running: ${active.id}`)
+        throw new CoordinatorRunConflictError(
+          `Coordinator already running for this target: ${active.id}`
+        )
       }
       const id = generateId('run')
       this.db
         .prepare(
-          "INSERT INTO coordinator_runs (id, spec, status, coordinator_handle, poll_interval_ms) VALUES (?, ?, 'running', ?, ?)"
+          "INSERT INTO coordinator_runs (id, spec, status, coordinator_handle, poll_interval_ms, target_key) VALUES (?, ?, 'running', ?, ?, ?)"
         )
-        .run(id, run.spec, run.coordinatorHandle, run.pollIntervalMs ?? 2000)
+        .run(id, run.spec, run.coordinatorHandle, run.pollIntervalMs ?? 2000, targetKey)
       this.db.exec('COMMIT')
       committed = true
       return this.db
@@ -1079,34 +1103,6 @@ export class OrchestrationDb {
       )
       .get(...params) as { n: number }
     return row.n
-  }
-
-  // ── Queries for Coordinator ──
-
-  getIdleTerminals(excludeHandles: string[] = [], coordinatorRunId?: string): string[] {
-    // Why: returns terminal handles that have no active dispatch, so the
-    // coordinator knows which terminals are available for new task assignments.
-    // `coordinatorRunId` keeps a run from seeing another run's busy terminals
-    // or candidate handles (#12).
-    const activeRunClause = coordinatorRunId !== undefined ? 'AND coordinator_run_id = ?' : ''
-    const activeParams: Database.BindValue[] =
-      coordinatorRunId !== undefined ? [coordinatorRunId] : []
-    const active = this.db
-      .prepare(
-        `SELECT DISTINCT assignee_handle FROM dispatch_contexts WHERE status IN ('pending', 'dispatched') ${activeRunClause}`
-      )
-      .all(...activeParams) as { assignee_handle: string }[]
-    const busyHandles = new Set(active.map((r) => r.assignee_handle))
-    for (const h of excludeHandles) {
-      busyHandles.add(h)
-    }
-    // Return handles from message history that aren't busy
-    const allHandles = this.db
-      .prepare(
-        'SELECT DISTINCT to_handle FROM messages UNION SELECT DISTINCT from_handle FROM messages'
-      )
-      .all() as { to_handle: string }[]
-    return [...new Set(allHandles.map((r) => r.to_handle))].filter((h) => !busyHandles.has(h))
   }
 
   // ── Lifecycle ──

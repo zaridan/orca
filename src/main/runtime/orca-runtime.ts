@@ -2454,6 +2454,24 @@ export class OrcaRuntimeService {
     this._orchestrationDb = db
   }
 
+  // Why (#12): the run-start guard rejects only a duplicate run on the *same
+  // target* (repo/worktree). Resolve the coordinator's worktree selector to a
+  // stable worktree id so the same worktree addressed via different selector
+  // forms maps to one key. Fall back to the raw selector when it can't resolve
+  // (headless/stale) so distinct targets still get distinct keys, and to null
+  // when no worktree was given (those runs share a single-run slot).
+  async resolveOrchestrationTargetKey(selector?: string): Promise<string | null> {
+    if (!selector) {
+      return null
+    }
+    try {
+      const worktree = await this.resolveWorktreeSelector(selector)
+      return `worktree:${worktree.id}`
+    } catch {
+      return `selector:${selector}`
+    }
+  }
+
   setAutomationService(service: AutomationService): void {
     this.automationService = service
   }
@@ -7526,7 +7544,15 @@ export class OrcaRuntimeService {
     // Why: create an escalation message so the coordinator is notified about
     // the unexpected exit on its next check cycle, even if the circuit breaker
     // hasn't tripped yet.
-    const run = this._orchestrationDb.getActiveCoordinatorRun()
+    // Why (#12): route to the dispatch's OWN run, not getActiveCoordinatorRun()
+    // (latest running). With concurrent runs, the latest run's handle may belong
+    // to a different coordinator that never reads this inbox — black-holing the
+    // escalation. Fall back to the active run only for legacy dispatches with no
+    // recorded run id.
+    const run = dispatch.coordinator_run_id
+      ? (this._orchestrationDb.getCoordinatorRun(dispatch.coordinator_run_id) ??
+        this._orchestrationDb.getActiveCoordinatorRun())
+      : this._orchestrationDb.getActiveCoordinatorRun()
     if (run) {
       this._orchestrationDb.insertMessage({
         from: handle,

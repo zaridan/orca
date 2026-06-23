@@ -88,6 +88,10 @@ export type CoordinatorRun = {
   status: CoordinatorStatus
   coordinator_handle: string
   poll_interval_ms: number
+  // Why (#12): identifies the run's repo/worktree so the run-start guard rejects
+  // only a duplicate run on the same target, not all concurrency. NULL when no
+  // worktree was given at run-start (those runs share a single-run slot).
+  target_key: string | null
   created_at: string
   completed_at: string | null
 }
