@@ -708,9 +708,11 @@ describe('Coordinator', () => {
         runtime.callOrder.indexOf('send:term_wt_0')
       )
 
-      // The drift pre-flight targeted the NEW track worktree, not the director.
-      expect(runtime.probeDriftCalls).toContain(`id:${child.worktreeId}`)
-      expect(runtime.probeDriftCalls).not.toContain(directorWorktreeId)
+      // Round 3: drift is probed on the DIRECTOR before the child is created (so
+      // a stale base can't churn-create worktrees); the fresh child is NOT
+      // re-probed.
+      expect(runtime.probeDriftCalls).toContain(directorWorktreeId)
+      expect(runtime.probeDriftCalls).not.toContain(`id:${child.worktreeId}`)
 
       // The produced lineage edge is exactly what Mission Control keys on
       // (parentWorktreeId === directorWorktreeId). The selectSpawnedWorktreeIds
@@ -911,6 +913,54 @@ describe('Coordinator', () => {
       insertWorkerDone(db, { taskId: task.id, from: 'term_wt_0' })
       const result = await runPromise
       expect(result.status).toBe('completed')
+    })
+
+    // Round 3 SHOULD-FIX #1: a stale base must not churn create→skip→teardown
+    // every tick. Drift is probed on the director BEFORE createWorktree, so a
+    // stale base skips WITHOUT ever creating (or removing) a worktree.
+    it('does not churn worktrees when the base is stale: skips before creating, no create/remove', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+      // Director base is far behind origin → every dispatch should drift-skip.
+      runtime.setProbeDrift({
+        base: 'origin/main',
+        behind: DISPATCH_STALE_THRESHOLD + 50,
+        recentSubjects: ['ahead 1', 'ahead 2']
+      })
+      const logs: string[] = []
+
+      const task = db.createTask({ spec: 'work on a stale base' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 10,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude',
+        onLog: (m) => logs.push(m)
+      })
+
+      const runPromise = coordinator.run()
+      // Let several poll ticks elapse so a churn loop would be obvious.
+      await new Promise((r) => {
+        setTimeout(r, 120)
+      })
+      coordinator.stop()
+      await runPromise
+
+      // The fix: NO worktree was ever created (so none had to be removed) — the
+      // skip happened before createWorktree. Without the fix this would be a
+      // create→teardown pair on every tick (createdWorktrees/removedWorktrees
+      // climbing with the tick count).
+      expect(runtime.createdWorktrees).toHaveLength(0)
+      expect(runtime.removedWorktrees).toHaveLength(0)
+      expect(runtime.sentMessages).toHaveLength(0)
+      // Drift was probed on the director, not on a (never-created) child.
+      expect(runtime.probeDriftCalls.every((s) => s === 'director-wt')).toBe(true)
+      // The task stays ready (recoverable, like legacy) — never breaker-failed.
+      expect(db.getTask(task.id)?.status).toBe('ready')
+      expect(logs.some((m) => m.includes('Skipping dispatch'))).toBe(true)
     })
 
     // Round 2 NIT: surface the worktreeBacked→legacy downgrade once.

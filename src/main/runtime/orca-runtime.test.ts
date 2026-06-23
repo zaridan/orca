@@ -7,6 +7,7 @@ import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { ipcMain } from 'electron'
 import type {
+  CreateWorktreeResult,
   FolderWorkspace,
   ProjectGroup,
   Tab,
@@ -1883,6 +1884,93 @@ describe('OrcaRuntimeService', () => {
     await expect(freshLookup).resolves.toMatchObject({
       id: result.worktree.id,
       path: createdWorktree.path
+    })
+  })
+
+  // F2 #13 round 3 — the orchestration createWorktree adapter must pick the
+  // dispatch terminal from createManagedWorktree's RESULT (startup agent, else
+  // the known initial interactive terminal), never re-discover one positionally
+  // (which could grab the separate "Setup" runner). createManagedWorktree is
+  // stubbed so this isolates the adapter's terminal-selection contract.
+  describe('createWorktree adapter terminal selection', () => {
+    function stubResolveParent(runtime: OrcaRuntimeService): void {
+      vi.spyOn(
+        runtime as unknown as { resolveWorktreeSelector: (s: string) => Promise<unknown> },
+        'resolveWorktreeSelector'
+      ).mockResolvedValue({ id: 'repo-1::/wt/parent', repoId: 'repo-1' })
+    }
+
+    it('dispatches into the known initial terminal, not a positionally-discovered Setup terminal', async () => {
+      const runtime = new OrcaRuntimeService(store)
+      stubResolveParent(runtime)
+      // No startup agent → createManagedWorktree opened a plain initial terminal
+      // AND a separate "Setup" terminal; the result names the interactive one.
+      vi.spyOn(runtime, 'createManagedWorktree').mockResolvedValue({
+        worktree: { id: 'repo-1::/wt/child', git: { branch: 'orch-child' } },
+        initialTerminal: { handle: 'term-initial' }
+      } as unknown as CreateWorktreeResult)
+      // If the adapter regressed to a positional pick, THIS list (Setup first) is
+      // what it would grab — assert it neither consults the list nor returns Setup.
+      const listSpy = vi.spyOn(runtime, 'listTerminals').mockResolvedValue({
+        terminals: [
+          {
+            handle: 'term-setup',
+            worktreeId: 'repo-1::/wt/child',
+            connected: true,
+            writable: true
+          },
+          {
+            handle: 'term-initial',
+            worktreeId: 'repo-1::/wt/child',
+            connected: true,
+            writable: true
+          }
+        ]
+      } as unknown as Awaited<ReturnType<OrcaRuntimeService['listTerminals']>>)
+
+      const result = await runtime.createWorktree({
+        parentWorktree: 'id:repo-1::/wt/parent',
+        name: 'orch-child'
+      })
+
+      expect(result.terminalHandle).toBe('term-initial')
+      expect(result.terminalHandle).not.toBe('term-setup')
+      expect(result.worktreeId).toBe('repo-1::/wt/child')
+      expect(result.branch).toBe('orch-child')
+      expect(listSpy).not.toHaveBeenCalled()
+    })
+
+    it('returns the startup-agent terminal when one was launched', async () => {
+      const runtime = new OrcaRuntimeService(store)
+      stubResolveParent(runtime)
+      vi.spyOn(runtime, 'createManagedWorktree').mockResolvedValue({
+        worktree: { id: 'repo-1::/wt/child', git: { branch: 'orch-child' } },
+        startupTerminal: { spawned: true, handle: 'term-agent', surface: 'background' },
+        initialTerminal: { handle: 'term-initial' }
+      } as unknown as CreateWorktreeResult)
+
+      const result = await runtime.createWorktree({
+        parentWorktree: 'id:repo-1::/wt/parent',
+        name: 'orch-child',
+        startup: { agent: 'claude' }
+      })
+
+      expect(result.terminalHandle).toBe('term-agent')
+    })
+
+    it('returns no terminalHandle when createManagedWorktree opened no terminal', async () => {
+      const runtime = new OrcaRuntimeService(store)
+      stubResolveParent(runtime)
+      vi.spyOn(runtime, 'createManagedWorktree').mockResolvedValue({
+        worktree: { id: 'repo-1::/wt/child', git: { branch: 'orch-child' } }
+      } as unknown as CreateWorktreeResult)
+
+      const result = await runtime.createWorktree({
+        parentWorktree: 'id:repo-1::/wt/parent',
+        name: 'orch-child'
+      })
+
+      expect(result.terminalHandle).toBeUndefined()
     })
   })
 
@@ -17724,7 +17812,11 @@ describe('OrcaRuntimeService', () => {
           ORCA_ROOT_PATH: '/tmp/repo',
           ORCA_WORKTREE_PATH: '/tmp/workspaces/runtime-hook-skip'
         }
-      }
+      },
+      // F2 #13: the plain initial (interactive) terminal — spawn #1, NOT the
+      // Setup terminal (spawn #2) — is surfaced so the orchestration adapter can
+      // target it directly instead of re-discovering positionally.
+      initialTerminal: { handle: expect.any(String) }
     })
     expect(activateWorktree).not.toHaveBeenCalled()
     expect(spawn).toHaveBeenNthCalledWith(
