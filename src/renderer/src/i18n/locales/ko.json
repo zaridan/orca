@@ -9229,7 +9229,7 @@
             "pr_closed": "closed",
             "pr_draft": "draft",
             "shipped": "Shipped",
-            "shipped_note": "From the director’s log. Worktrees are torn down after merge, so PR numbers aren’t recorded here.",
+            "shipped_note": "디렉터의 로그 기준 — 병합 후 워크트리는 제거되지만, 각 브랜치는 병합된 풀 리퀘스트에 매칭됩니다.",
             "pr_number": "PR #{{value0}}",
             "view_pr": "View PR"
           },

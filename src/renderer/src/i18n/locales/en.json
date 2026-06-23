@@ -9229,7 +9229,7 @@
             "pr_closed": "closed",
             "pr_draft": "draft",
             "shipped": "Shipped",
-            "shipped_note": "From the director’s log. Worktrees are torn down after merge, so PR numbers aren’t recorded here.",
+            "shipped_note": "From the director’s log — the worktrees are torn down after merge; each branch is matched to its merged pull request.",
             "pr_number": "PR #{{value0}}",
             "view_pr": "View PR"
           },

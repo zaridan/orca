@@ -9229,7 +9229,7 @@
             "pr_closed": "closed",
             "pr_draft": "draft",
             "shipped": "Shipped",
-            "shipped_note": "From the director’s log. Worktrees are torn down after merge, so PR numbers aren’t recorded here.",
+            "shipped_note": "ディレクターのログより — マージ後にワークツリーは削除されますが、各ブランチは対応するマージ済みのプルリクエストに紐付けられます。",
             "pr_number": "PR #{{value0}}",
             "view_pr": "View PR"
           },
