@@ -255,7 +255,9 @@ export default function OrchestratorMissionControl({
     return () => {
       cancelled = true
     }
-  }, [directorRepo?.path, directorRepo?.id, shippedWork.length])
+    // Why: key on shippedWork itself (memoized), not its length — a same-size
+    // branch-set change must still refetch so branch→PR matching stays current.
+  }, [directorRepo?.path, directorRepo?.id, shippedWork])
 
   // Direct PR link when a matching PR is found; otherwise a GitHub head-ref search
   // as a fallback (e.g. gh not authed). Null when there's nothing to link to.
@@ -268,7 +270,7 @@ export default function OrchestratorMissionControl({
   }
 
   const directorTabIds = (tabsByWorktree[worktreeId] ?? []).map((tab) => tab.id)
-  const directorDot = deriveWorktreeAgentDotState(directorTabIds, agentStatusByPaneKey)
+  const directorDot = deriveWorktreeAgentDotState(worktreeId, directorTabIds, agentStatusByPaneKey)
   const directorName =
     entry?.projectName ??
     translate('auto.components.right.sidebar.OrchestratorMissionControl.fallback', 'Orcastrator')
@@ -318,7 +320,7 @@ export default function OrchestratorMissionControl({
             {workerIds.map((id) => {
               const worker = worktreesById.get(id)
               const tabIds = (tabsByWorktree[id] ?? []).map((tab) => tab.id)
-              const dot = deriveWorktreeAgentDotState(tabIds, agentStatusByPaneKey)
+              const dot = deriveWorktreeAgentDotState(id, tabIds, agentStatusByPaneKey)
               const prBadge = prBadgeForWorker(worker)
               const prUrl = prBadge?.url
               // Why: row + PR link are siblings (not nested buttons) so the link

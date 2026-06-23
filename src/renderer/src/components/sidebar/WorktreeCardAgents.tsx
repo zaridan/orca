@@ -62,11 +62,15 @@ const WorktreeCardAgents = React.memo(function WorktreeCardAgents({
 }: Props) {
   const allAgents = useWorktreeAgentRows(worktreeId)
   const orchestrators = useAppStore((s) => s.orchestrators)
+  // Why: only suppress director rows when the experiment is on. With it off,
+  // directors live in WorktreeList as ordinary agents — filtering them here
+  // would strip their coordinator row/dot state for no reason.
+  const orchestratorsEnabled = useAppStore((s) => s.settings?.experimentalOrchestrators ?? false)
   // Why: an Orcastrator (director) is surfaced only in the ORCASTRATORS sidebar
   // section, never as an agent row under its project's worktree. Exclude its
   // agent tab here so the worktree card doesn't double-list it.
   const agents = useMemo(() => {
-    if (!orchestrators || orchestrators.length === 0) {
+    if (!orchestratorsEnabled || !orchestrators || orchestrators.length === 0) {
       return allAgents
     }
     const orchestratorTabIds = new Set(orchestrators.map((entry) => entry.tabId))
@@ -74,7 +78,7 @@ const WorktreeCardAgents = React.memo(function WorktreeCardAgents({
       const parsed = parsePaneKey(agent.paneKey)
       return !parsed || !orchestratorTabIds.has(parsed.tabId)
     })
-  }, [allAgents, orchestrators])
+  }, [allAgents, orchestrators, orchestratorsEnabled])
   if (agents.length === 0) {
     return null
   }

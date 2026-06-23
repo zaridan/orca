@@ -16811,9 +16811,16 @@ describe('OrcaRuntimeService', () => {
       listCoordinatorRuns: vi.fn(() => [
         { id: 'run-active', coordinator_handle: coordinatorHandle }
       ]),
-      countOutstandingTasks: vi.fn(() => 3),
-      countActiveDispatches: vi.fn(() => 2),
-      getStaleDispatches: vi.fn(() => [{ id: 'ctx-stale' }])
+      // Run-scoped counters keyed by the coordinator handle that owns the work.
+      countOutstandingTasksForCoordinator: vi.fn((handle: string) =>
+        handle === coordinatorHandle ? 3 : 0
+      ),
+      countActiveDispatchesForCoordinator: vi.fn((handle: string) =>
+        handle === coordinatorHandle ? 2 : 0
+      ),
+      getStaleDispatchesForCoordinator: vi.fn((handle: string) =>
+        handle === coordinatorHandle ? [{ id: 'ctx-stale' }] : []
+      )
     } as never)
     runtime.attachWindow(1)
 

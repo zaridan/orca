@@ -565,6 +565,27 @@ describe('OrchestrationDb', () => {
       expect(d.countOutstandingTasks()).toBe(1)
       expect(d.countActiveDispatches()).toBe(0)
     })
+
+    it('scopes outstanding/active/stale counts per coordinator handle', () => {
+      const d = createDb()
+      const aTask = d.createTask({ spec: 'a-work', createdByTerminalHandle: 'coord_a' })
+      d.createTask({ spec: 'b-work', createdByTerminalHandle: 'coord_b' })
+
+      // Each coordinator sees only its own outstanding work — no global bleed.
+      expect(d.countOutstandingTasksForCoordinator('coord_a')).toBe(1)
+      expect(d.countOutstandingTasksForCoordinator('coord_b')).toBe(1)
+      expect(d.countOutstandingTasksForCoordinator('coord_other')).toBe(0)
+
+      d.createDispatchContext(aTask.id, 'worker_a')
+      expect(d.countActiveDispatchesForCoordinator('coord_a')).toBe(1)
+      expect(d.countActiveDispatchesForCoordinator('coord_b')).toBe(0)
+
+      // A future threshold reads the only dispatched worker as stale, but the
+      // staleness is attributed solely to the run that owns it.
+      const future = '2999-01-01T00:00:00.000Z'
+      expect(d.getStaleDispatchesForCoordinator('coord_a', future)).toHaveLength(1)
+      expect(d.getStaleDispatchesForCoordinator('coord_b', future)).toHaveLength(0)
+    })
   })
 
   describe('lifecycle', () => {

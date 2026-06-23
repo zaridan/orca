@@ -17407,9 +17407,9 @@ export class OrcaRuntimeService {
   // while it still supervises background workers/watchers. The orchestration DB
   // knows the run is alive, so surface it keyed by the coordinator's own pane —
   // the renderer maps that pane to its Orcastrator and shows a "supervising"
-  // dot instead of a misleading completion check. Counts are global to the DB
-  // (one orchestration namespace), so with multiple concurrent runs they are
-  // shared; `runId`/coordinator attribution stays per-run accurate.
+  // dot instead of a misleading completion check. Counts are scoped per run (by
+  // the coordinator handle that owns each task/dispatch) so concurrent runs
+  // report independent metrics and one run's stale worker never marks another's.
   private buildOrchestrationActivityByPaneKey(): Record<string, OrchestrationActivity> | undefined {
     const db = this.getOrchestrationDbIfAvailable()
     if (!db?.listCoordinatorRuns) {
@@ -17419,12 +17419,9 @@ export class OrcaRuntimeService {
     if (runningRuns.length === 0) {
       return undefined
     }
-    const pendingTasks = db.countOutstandingTasks?.() ?? 0
-    const activeDispatches = db.countActiveDispatches?.() ?? 0
     // Why: mirror the coordinator's own hung-worker threshold (10 min) so the
     // sidebar's "stalled" read agrees with the coordinator's escalation logic.
     const staleThresholdIso = new Date(Date.now() - ORCHESTRATION_HUNG_THRESHOLD_MS).toISOString()
-    const staleDispatches = db.getStaleDispatches?.(staleThresholdIso)?.length ?? 0
 
     const activityByPaneKey: Record<string, OrchestrationActivity> = {}
     for (const run of runningRuns) {
@@ -17434,6 +17431,14 @@ export class OrcaRuntimeService {
       if (!paneKey) {
         continue
       }
+      // Why: scope every count to THIS run's coordinator so concurrent
+      // Orcastrators don't share one global total — tasks/dispatches link to a
+      // run through the coordinator handle that created them.
+      const pendingTasks = db.countOutstandingTasksForCoordinator?.(run.coordinator_handle) ?? 0
+      const activeDispatches = db.countActiveDispatchesForCoordinator?.(run.coordinator_handle) ?? 0
+      const staleDispatches =
+        db.getStaleDispatchesForCoordinator?.(run.coordinator_handle, staleThresholdIso)?.length ??
+        0
       activityByPaneKey[paneKey] = {
         runId: run.id,
         pendingTasks,

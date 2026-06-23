@@ -5,6 +5,7 @@ import { useSidebarResize } from '@/hooks/useSidebarResize'
 import SidebarHeader from './SidebarHeader'
 import SidebarNav from './SidebarNav'
 import { OrchestratorsSidebarSection } from './OrchestratorsSidebarSection'
+import { useReattachOrchestrators } from './use-reattach-orchestrators'
 import SetupScriptPromptCard from './SetupScriptPromptCard'
 import WorktreeList from './WorktreeList'
 import SidebarToolbar from './SidebarToolbar'
@@ -39,6 +40,9 @@ function Sidebar({
   worktreeScrollAnchorRef
 }: SidebarProps): React.JSX.Element {
   const sidebarOpen = useAppStore((s) => s.sidebarOpen)
+  // Why: run regardless of sidebarOpen so orchestrator state stays fresh even
+  // while the sidebar (and its Orcastrators section) is collapsed.
+  useReattachOrchestrators()
   const sidebarWidth = useAppStore((s) => s.sidebarWidth)
   const setSidebarWidth = useAppStore((s) => s.setSidebarWidth)
   const repos = useAppStore((s) => s.repos)

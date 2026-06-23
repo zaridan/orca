@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { Network, Plus, X } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
@@ -59,7 +59,6 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
   const closeOrchestrator = useAppStore((s) => s.closeOrchestrator)
   const updateOrchestrator = useAppStore((s) => s.updateOrchestrator)
   const updateWorktreeMeta = useAppStore((s) => s.updateWorktreeMeta)
-  const reattachOrchestrators = useAppStore((s) => s.reattachOrchestrators)
 
   // Why: rename mirrors the worktree-title rename. Persist the prefixed
   // displayName on the durable worktree FIRST (throwOnPersistError so a failed
@@ -89,14 +88,8 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
     [setActiveTab]
   )
 
-  // Why: the in-memory registry doesn't survive a reload, but director worktrees
-  // do — rebuild it from them on load (and whenever worktrees change) so a
-  // director re-hides from Projects and re-shows here. Idempotent.
-  useEffect(() => {
-    if (enabled) {
-      reattachOrchestrators()
-    }
-  }, [enabled, worktreesByRepo, reattachOrchestrators])
+  // Why: reattach now runs from the sidebar root (see useReattachOrchestrators)
+  // so it fires even while this section is unmounted (sidebar collapsed).
 
   // Why: a director exists as long as its worktree does; key off worktree
   // existence (not a possibly-stale tab id, which changes on reattach).
@@ -134,6 +127,7 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
       {live.map((entry) => {
         const worktreeTabIds = (tabsByWorktree[entry.worktreeId] ?? []).map((tab) => tab.id)
         const dotState = deriveOrcastratorDotState(
+          entry.worktreeId,
           worktreeTabIds,
           agentStatusByPaneKey,
           orchestrationActivityByPaneKey
@@ -173,7 +167,7 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
                   activate(entry.worktreeId, focusTabId)
                 }
               }}
-              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-[13px] tracking-tight text-worktree-sidebar-foreground/80 outline-none"
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] tracking-tight text-worktree-sidebar-foreground/80 outline-none focus-visible:ring-2 focus-visible:ring-worktree-sidebar-ring/70 focus-visible:ring-offset-1 focus-visible:ring-offset-worktree-sidebar"
               title={dotTitle}
             >
               <AgentStateDot state={dotState} size="sm" />

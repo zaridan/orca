@@ -113,9 +113,9 @@ export type RuntimeSyncWindowGraph = {
  *  graph-sync result by the coordinator's own paneKey. Lets the renderer show a
  *  director that has handed control back (its Stop hook fired `done`) but is
  *  still supervising background work — a state the per-pane agent hook cannot
- *  express. Counts come from the global orchestration DB (one namespace, no
- *  per-run association), so with multiple concurrent runs they are shared
- *  across runs; `coordinatorRunning` stays per-run accurate. */
+ *  express. Counts are scoped to this run (by the coordinator handle that owns
+ *  each task/dispatch), so concurrent runs report independent metrics and one
+ *  run's stale worker never bleeds into another coordinator's row. */
 export type OrchestrationActivity = {
   /** Coordinator run id (coordinator_runs.id) that is still `running`. */
   runId: string

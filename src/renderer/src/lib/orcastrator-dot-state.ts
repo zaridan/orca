@@ -10,14 +10,21 @@ function findOrchestrationActivityForTabs(
   tabIds: readonly string[],
   orchestrationActivityByPaneKey: Record<string, OrchestrationActivity>
 ): OrchestrationActivity | null {
+  // Why: scan every matching pane rather than returning the first — object entry
+  // order is not meaningful, so a stalled run must win deterministically over a
+  // healthy one regardless of where it sits in the map.
+  let candidate: OrchestrationActivity | null = null
   for (const [paneKey, activity] of Object.entries(orchestrationActivityByPaneKey)) {
     const colon = paneKey.indexOf(':')
     if (colon <= 0 || !tabIds.includes(paneKey.slice(0, colon))) {
       continue
     }
-    return activity
+    if (activity.staleDispatches > 0) {
+      return activity
+    }
+    candidate = candidate ?? activity
   }
-  return null
+  return candidate
 }
 
 // Why: an Orcastrator is a long-lived supervisor, so a director hook reporting
@@ -29,11 +36,12 @@ function findOrchestrationActivityForTabs(
 // shows a calm pulse and only a truly idle one shows a neutral dot. The check
 // glyph is intentionally never produced here.
 export function deriveOrcastratorDotState(
+  worktreeId: string,
   tabIds: readonly string[],
   agentStatusByPaneKey: Record<string, AgentStatusEntry>,
   orchestrationActivityByPaneKey: Record<string, OrchestrationActivity>
 ): AgentDotState {
-  const base = deriveWorktreeAgentDotState(tabIds, agentStatusByPaneKey)
+  const base = deriveWorktreeAgentDotState(worktreeId, tabIds, agentStatusByPaneKey)
   // Foreground states win: the director needs the user (blocked/waiting) or is
   // actively producing (working). These take precedence over background runs.
   if (base === 'working' || base === 'blocked' || base === 'waiting') {

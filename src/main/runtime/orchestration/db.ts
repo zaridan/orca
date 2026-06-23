@@ -701,6 +701,27 @@ export class OrchestrationDb {
       .all(thresholdIso, thresholdIso) as DispatchContextRow[]
   }
 
+  // Why: run-scoped variant of getStaleDispatches. A dispatch belongs to a run
+  // via the task's coordinator handle (the coordinator that created the task),
+  // so joining through tasks keeps concurrent runs from seeing each other's
+  // stale workers — without it, one hung run marks every Orcastrator stalled.
+  getStaleDispatchesForCoordinator(
+    coordinatorHandle: string,
+    thresholdIso: string
+  ): DispatchContextRow[] {
+    return this.db
+      .prepare(
+        `SELECT d.* FROM dispatch_contexts d
+         JOIN tasks t ON t.id = d.task_id
+         WHERE d.status = 'dispatched'
+           AND d.dispatched_at IS NOT NULL
+           AND d.dispatched_at < ?
+           AND (d.last_heartbeat_at IS NULL OR d.last_heartbeat_at < ?)
+           AND t.created_by_terminal_handle = ?`
+      )
+      .all(thresholdIso, thresholdIso, coordinatorHandle) as DispatchContextRow[]
+  }
+
   failDispatch(ctxId: string, error: string): DispatchContextRow | undefined {
     const ctx = this.db.prepare('SELECT * FROM dispatch_contexts WHERE id = ?').get(ctxId) as
       | DispatchContextRow
@@ -875,6 +896,20 @@ export class OrchestrationDb {
     return row.n
   }
 
+  // Why: run-scoped variant — a task belongs to a run via the coordinator that
+  // created it, so each concurrent Orcastrator reports only its own outstanding
+  // work instead of a shared global total that bleeds across panes.
+  countOutstandingTasksForCoordinator(coordinatorHandle: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM tasks
+         WHERE status IN ('pending', 'ready', 'dispatched', 'blocked')
+           AND created_by_terminal_handle = ?`
+      )
+      .get(coordinatorHandle) as { n: number }
+    return row.n
+  }
+
   // Why: a worker is still busy while its dispatch is pending or dispatched.
   countActiveDispatches(): number {
     const row = this.db
@@ -882,6 +917,21 @@ export class OrchestrationDb {
         "SELECT COUNT(*) AS n FROM dispatch_contexts WHERE status IN ('pending', 'dispatched')"
       )
       .get() as { n: number }
+    return row.n
+  }
+
+  // Why: run-scoped variant — joins through tasks so a dispatch counts only for
+  // the run whose coordinator created its task, keeping one run's active workers
+  // out of another's pane metrics.
+  countActiveDispatchesForCoordinator(coordinatorHandle: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM dispatch_contexts d
+         JOIN tasks t ON t.id = d.task_id
+         WHERE d.status IN ('pending', 'dispatched')
+           AND t.created_by_terminal_handle = ?`
+      )
+      .get(coordinatorHandle) as { n: number }
     return row.n
   }
 

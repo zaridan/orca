@@ -120,7 +120,7 @@ export const AgentStateDot = React.memo(function AgentStateDot({
           className={cn(
             'block rounded-full [animation:pulse_1.6s_ease-in-out_infinite]',
             inner,
-            state === 'stalled' ? 'bg-amber-500' : 'bg-emerald-500/70'
+            state === 'stalled' ? 'bg-status-warning' : 'bg-status-success/70'
           )}
         />
       </span>

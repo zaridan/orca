@@ -106,14 +106,10 @@ export async function launchOrchestratorForProject(
     allowEmptyPromptLaunch: true
   })
 
-  const activation = activateAndRevealWorktree(worktreeId, {
-    sidebarRevealBehavior: 'auto',
-    setup,
-    ...buildDirectWorkItemStartupOpts(agent, startupPlan, 'sidebar')
-  })
-  if (!activation) {
-    // The worktree was created but never surfaced — tear it down so a failed
-    // launch doesn't leave an orphaned hidden director workspace behind.
+  // Why: tear down the freshly created worktree on any launch failure so an
+  // orphaned hidden director workspace isn't left behind. Shared by both the
+  // falsy-return and thrown-activation paths below.
+  const teardownAfterFailedLaunch = async (): Promise<void> => {
     try {
       await store.removeWorktree(worktreeId, true)
     } catch (error) {
@@ -125,6 +121,24 @@ export async function launchOrchestratorForProject(
     toast.error(
       translate('auto.lib.orchestrator.launch.no_workspace', 'Could not open the Orcastrator.')
     )
+  }
+
+  let activation: ReturnType<typeof activateAndRevealWorktree>
+  try {
+    activation = activateAndRevealWorktree(worktreeId, {
+      sidebarRevealBehavior: 'auto',
+      setup,
+      ...buildDirectWorkItemStartupOpts(agent, startupPlan, 'sidebar')
+    })
+  } catch (error) {
+    // Why: activation can throw, not just return falsy — without this the worktree
+    // created above would leak when reveal/startup fails mid-flight.
+    console.error(`Orcastrator activation threw for worktree ${worktreeId}:`, error)
+    await teardownAfterFailedLaunch()
+    return false
+  }
+  if (!activation) {
+    await teardownAfterFailedLaunch()
     return false
   }
 
