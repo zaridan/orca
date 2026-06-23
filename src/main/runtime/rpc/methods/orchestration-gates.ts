@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto'
 import { z } from 'zod'
 import type { TuiAgent } from '../../../../shared/types'
+import { TUI_AGENT_CONFIG } from '../../../../shared/tui-agent-config'
 import { defineMethod, type RpcMethod } from '../core'
 import { OptionalBoolean, OptionalFiniteNumber, OptionalString, requiredString } from '../schemas'
 import { CoordinatorRunConflictError, type GateStatus } from '../../orchestration/db'
@@ -63,6 +64,16 @@ export const ORCHESTRATION_GATE_METHODS: RpcMethod[] = [
     params: RunParams,
     handler: async (params, { runtime }) => {
       const db = runtime.getOrchestrationDb()
+
+      // Why (F2 #13, round 2): reject an unknown --worker-agent fast at the
+      // boundary. Otherwise an invalid id flows to createManagedWorktree, which
+      // throws 'Selected agent is disabled…' on every dispatch — feeding the
+      // worktree-create retry/breaker path with a permanent error.
+      if (params.workerAgent && !(params.workerAgent in TUI_AGENT_CONFIG)) {
+        throw new Error(
+          `Invalid --worker-agent '${params.workerAgent}'. Pass a known agent id (e.g. claude, codex).`
+        )
+      }
 
       const coordinatorHandle = params.from ?? deriveCoordinatorHandle()
 

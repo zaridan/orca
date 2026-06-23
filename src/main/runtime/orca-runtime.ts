@@ -12777,8 +12777,10 @@ export class OrcaRuntimeService {
       },
       // Why (design Q3): launch the worker agent IN the worktree; the coordinator
       // sends the dispatch preamble afterwards via sendTerminal (dispatchTask
-      // mechanics unchanged). When no agent is given, no startup terminal is
-      // spawned and the coordinator opens a plain terminal in the worktree.
+      // mechanics unchanged). When no agent is given, createManagedWorktree still
+      // opens a plain initial terminal in the worktree (see the no-startup branch
+      // in createManagedWorktree); we reuse THAT handle below rather than spawn a
+      // second terminal.
       ...(opts.startup
         ? {
             startupAgent: opts.startup.agent,
@@ -12786,11 +12788,30 @@ export class OrcaRuntimeService {
           }
         : {})
     })
+    // Why (round 2): the adapter returns the startup-agent terminal when one was
+    // launched, otherwise the plain initial terminal createManagedWorktree
+    // already opened — found via listTerminals so the coordinator does NOT
+    // create a second terminal (the prior double-terminal bug). A missing handle
+    // (no PTY controller / spawn failed) is surfaced as undefined so the
+    // coordinator can tear the worktree down instead of dispatching into nothing.
+    let terminalHandle = result.startupTerminal?.handle
+    if (!terminalHandle) {
+      const listed = await this.listTerminals(`id:${result.worktree.id}`, 1).catch(() => null)
+      terminalHandle = listed?.terminals[0]?.handle
+    }
     return {
       worktreeId: result.worktree.id,
       branch: result.worktree.git?.branch ?? opts.name,
-      ...(result.startupTerminal?.handle ? { terminalHandle: result.startupTerminal.handle } : {})
+      ...(terminalHandle ? { terminalHandle } : {})
     }
+  }
+
+  // Why (F2 #13, round 2): the coordinator's `removeWorktree` capability — tears
+  // down a child worktree it created when a post-create dispatch step fails, so
+  // repeated failures don't accumulate orphan worktrees. force=true because the
+  // target is a freshly created, unpublished worktree with no work to protect.
+  async removeWorktree(worktreeId: string): Promise<void> {
+    await this.removeManagedWorktree(`id:${worktreeId}`, true)
   }
 
   private async createManagedRemoteWorktree(
