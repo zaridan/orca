@@ -12743,6 +12743,56 @@ export class OrcaRuntimeService {
     }
   }
 
+  // Why (F2 #13): the coordinator's `createWorktree` capability (CoordinatorRuntime).
+  // A thin adapter over createManagedWorktree that stamps the lineage parent =
+  // director worktree via orchestrationContext, so coordinator-driven workers
+  // become visible in Mission Control (selectSpawnedWorktreeIds keys on
+  // parentWorktreeId === directorWorktreeId). No git logic is forked — base-ref
+  // handling, SSH/relay parity, and lineage recording are all inherited. The
+  // run's F1 `target_key` stays the director worktree; these children are new
+  // worktrees with their own ids and do not change it.
+  async createWorktree(opts: {
+    parentWorktree: string
+    name: string
+    baseBranch?: string
+    orchestrationRunId?: string
+    taskId?: string
+    coordinatorHandle?: string
+    startup?: { agent: TuiAgent; prompt?: string }
+  }): Promise<{ worktreeId: string; branch: string; terminalHandle?: string }> {
+    // Resolve the director selector to its stable id + repo so the child is
+    // created in the same repo and the lineage edge points at a concrete id.
+    const parent = await this.resolveWorktreeSelector(opts.parentWorktree)
+    const result = await this.createManagedWorktree({
+      repoSelector: `id:${parent.repoId}`,
+      name: opts.name,
+      ...(opts.baseBranch ? { baseBranch: opts.baseBranch } : {}),
+      lineage: {
+        orchestrationContext: {
+          parentWorktreeId: parent.id,
+          ...(opts.orchestrationRunId ? { orchestrationRunId: opts.orchestrationRunId } : {}),
+          ...(opts.taskId ? { taskId: opts.taskId } : {}),
+          ...(opts.coordinatorHandle ? { coordinatorHandle: opts.coordinatorHandle } : {})
+        }
+      },
+      // Why (design Q3): launch the worker agent IN the worktree; the coordinator
+      // sends the dispatch preamble afterwards via sendTerminal (dispatchTask
+      // mechanics unchanged). When no agent is given, no startup terminal is
+      // spawned and the coordinator opens a plain terminal in the worktree.
+      ...(opts.startup
+        ? {
+            startupAgent: opts.startup.agent,
+            ...(opts.startup.prompt ? { startupPrompt: opts.startup.prompt } : {})
+          }
+        : {})
+    })
+    return {
+      worktreeId: result.worktree.id,
+      branch: result.worktree.git?.branch ?? opts.name,
+      ...(result.startupTerminal?.handle ? { terminalHandle: result.startupTerminal.handle } : {})
+    }
+  }
+
   private async createManagedRemoteWorktree(
     repo: Repo,
     args: {

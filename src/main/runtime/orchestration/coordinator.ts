@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- Why: the coordinator keeps message processing, task dispatch, gate handling, escalation, and convergence checking in one class so the polling loop can make atomic decisions across all these concerns without split-brain behavior. */
+import type { TuiAgent } from '../../../shared/types'
 import type { OrchestrationDb } from './db'
 import type { MessageRow, TaskRow, CoordinatorStatus } from './types'
 import { buildDispatchPreamble } from './preamble'
@@ -28,6 +29,21 @@ export type CoordinatorRuntime = {
     behind: number
     recentSubjects: string[]
   } | null>
+  // Why (F2 #13): create a child worktree whose lineage parent is the director
+  // worktree, so coordinator-driven work becomes visible in Mission Control
+  // (selectSpawnedWorktreeIds keys on parentWorktreeId === directorWorktreeId).
+  // OPTIONAL so existing implementers (the test mock, other runtimes) keep
+  // compiling and the legacy bare-terminal dispatch path is unaffected when a
+  // runtime doesn't provide it. Thin adapter over OrcaRuntimeService.createManagedWorktree.
+  createWorktree?(opts: {
+    parentWorktree: string
+    name: string
+    baseBranch?: string
+    orchestrationRunId?: string
+    taskId?: string
+    coordinatorHandle?: string
+    startup?: { agent: TuiAgent; prompt?: string }
+  }): Promise<{ worktreeId: string; branch: string; terminalHandle?: string }>
 }
 
 // Why (§3.1): single threshold, no warn/refuse split. Coordinator picked 20
@@ -60,12 +76,41 @@ export function parseAllowStaleBaseFromSpec(spec: string): {
   return { allowStale: true, strippedSpec }
 }
 
+// Why (F2 #13): a deterministic, branch-safe worktree name (Orca: worktree name
+// IS branch name) per task. A readable slug from the task title/spec aids the
+// Mission Control display; the unique task-id suffix prevents collisions when
+// two tasks share a first line. createManagedWorktree further sanitizes and
+// resolves any residual branch conflict. The per-run namespacing / track-based
+// naming from design §6 is slice 2.
+export function worktreeNameForTask(task: Pick<TaskRow, 'id' | 'spec' | 'task_title'>): string {
+  const source = (task.task_title ?? task.spec).split('\n')[0] ?? ''
+  const slug = source
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32)
+    .replace(/-+$/g, '')
+  const shortTask = task.id.replace(/^task_/, '')
+  return slug ? `orch-${slug}-${shortTask}` : `orch-${shortTask}`
+}
+
 export type CoordinatorOptions = {
   spec: string
   coordinatorHandle: string
   pollIntervalMs?: number
   maxConcurrent?: number
   worktree?: string
+  // Why (F2 #13): opt-in, default OFF. When off the coordinator dispatches to
+  // bare terminals in `worktree` exactly as before (byte-for-byte legacy path).
+  // When on, each ready task gets its own lineage-visible child worktree so the
+  // run shows up in Mission Control. Requires `worktree` (the director / lineage
+  // parent) and a runtime that implements `createWorktree`.
+  worktreeBacked?: boolean
+  // Why (F2 #13): agent launched inside each track worktree via the startup
+  // option; the dispatch preamble is then sent unchanged (design Q3 leaning).
+  // When unset, a plain terminal is created in the worktree instead — the
+  // lineage bridge still works; agent selection is deferred.
+  workerAgent?: TuiAgent
   onLog?: (msg: string) => void
 }
 
@@ -92,9 +137,10 @@ export class Coordinator {
   private runtime: CoordinatorRuntime
   private state: CoordinatorState
   private stopped = false
-  private opts: Required<Omit<CoordinatorOptions, 'onLog' | 'worktree'>> & {
+  private opts: Required<Omit<CoordinatorOptions, 'onLog' | 'worktree' | 'workerAgent'>> & {
     onLog: (msg: string) => void
     worktree?: string
+    workerAgent?: TuiAgent
   }
 
   constructor(db: OrchestrationDb, runtime: CoordinatorRuntime, options: CoordinatorOptions) {
@@ -106,6 +152,8 @@ export class Coordinator {
       pollIntervalMs: options.pollIntervalMs ?? DEFAULT_POLL_MS,
       maxConcurrent: options.maxConcurrent ?? MAX_CONCURRENT_DEFAULT,
       worktree: options.worktree,
+      worktreeBacked: options.worktreeBacked ?? false,
+      workerAgent: options.workerAgent,
       onLog: options.onLog ?? (() => {})
     }
     this.state = {
@@ -477,6 +525,15 @@ export class Coordinator {
   }
 
   private async dispatchReadyTasks(): Promise<void> {
+    // Why (F2 #13): worktree-backed dispatch is a separate, opt-in path so the
+    // legacy bare-terminal flow below stays byte-for-byte unchanged when off.
+    // Guard on the runtime capability too: a runtime without createWorktree can
+    // never satisfy worktreeBacked, so it safely falls through to legacy.
+    if (this.opts.worktreeBacked && this.runtime.createWorktree) {
+      await this.dispatchReadyTasksInWorktrees()
+      return
+    }
+
     this.state.phase = 'dispatching'
     const readyTasks = this.db.listTasks({ ready: true, coordinatorRunId: this.state.runId })
     if (readyTasks.length === 0) {
@@ -525,7 +582,96 @@ export class Coordinator {
     }
   }
 
-  private async dispatchTask(task: TaskRow, targetHandle: string): Promise<void> {
+  // Why (F2 #13, slice 1): worktree-backed dispatch. Each ready task gets its
+  // OWN child worktree (trackKey = task id — the safe degenerate default; the
+  // implement→review track-reuse model is slice 2). The worktree's lineage
+  // parent is the director (`opts.worktree`), so selectSpawnedWorktreeIds finds
+  // the worker with no Mission Control change. Concurrency is still bounded by
+  // maxConcurrent; same-task serialization is inherent (one worktree per task).
+  private async dispatchReadyTasksInWorktrees(): Promise<void> {
+    this.state.phase = 'dispatching'
+    const readyTasks = this.db.listTasks({ ready: true, coordinatorRunId: this.state.runId })
+    if (readyTasks.length === 0) {
+      return
+    }
+
+    if (!this.opts.worktree) {
+      // Why: lineage needs a parent. Without a director worktree there is no
+      // parent edge for Mission Control to key on, so worktree-backed dispatch
+      // cannot do its job. Fail loud-but-soft: log and leave tasks ready rather
+      // than silently creating orphan (parentless) worktrees.
+      this.opts.onLog(
+        'worktree-backed dispatch requires a --worktree (director) for lineage; skipping dispatch'
+      )
+      return
+    }
+
+    const dispatched = this.db.listTasks({
+      status: 'dispatched',
+      coordinatorRunId: this.state.runId
+    })
+    let slotsAvailable = this.opts.maxConcurrent - dispatched.length
+    if (slotsAvailable <= 0) {
+      return
+    }
+
+    for (const task of readyTasks) {
+      if (slotsAvailable <= 0) {
+        break
+      }
+
+      let created: { worktreeId: string; branch: string; terminalHandle?: string }
+      try {
+        created = await this.runtime.createWorktree!({
+          parentWorktree: this.opts.worktree,
+          name: worktreeNameForTask(task),
+          orchestrationRunId: this.state.runId,
+          taskId: task.id,
+          coordinatorHandle: this.opts.coordinatorHandle,
+          ...(this.opts.workerAgent ? { startup: { agent: this.opts.workerAgent } } : {})
+        })
+      } catch (err) {
+        this.opts.onLog(`Failed to create worktree for task ${task.id}: ${err}`)
+        continue
+      }
+
+      // Why: the startup agent terminal is the dispatch target. When no agent
+      // was launched (workerAgent unset), open a plain terminal in the new
+      // worktree so the preamble still has somewhere to land — the lineage
+      // bridge holds either way.
+      let targetHandle = created.terminalHandle
+      if (!targetHandle) {
+        try {
+          const terminal = await this.runtime.createTerminal(`id:${created.worktreeId}`, {
+            title: `Worker: ${task.spec.slice(0, 40)}`
+          })
+          targetHandle = terminal.handle
+        } catch (err) {
+          this.opts.onLog(`Failed to create terminal for task ${task.id}: ${err}`)
+          continue
+        }
+      }
+
+      slotsAvailable--
+
+      try {
+        await this.dispatchTask(task, targetHandle, `id:${created.worktreeId}`)
+        this.opts.onLog(`Created worktree ${created.branch} for task ${task.id}`)
+      } catch (err) {
+        this.opts.onLog(`Failed to dispatch task ${task.id}: ${err}`)
+      }
+    }
+  }
+
+  private async dispatchTask(
+    task: TaskRow,
+    targetHandle: string,
+    // Why (F2 #13): the worktree to drift-probe. Defaults to the director
+    // worktree (legacy). The worktree-backed path passes the freshly-created
+    // track worktree so the pre-flight checks the worker's actual checkout, not
+    // the director's. Omitting it preserves the legacy behavior exactly.
+    driftWorktreeSelector?: string
+  ): Promise<void> {
     // Why (§3.1): pre-flight drift check BEFORE `createDispatchContext` so a
     // refusal does NOT increment failure_count. createDispatchContext carries
     // `MAX(failure_count)` forward across contexts (db.ts:301-306), so burning
@@ -534,6 +680,7 @@ export class Coordinator {
     // leaves the task in `ready`; the next `dispatchReadyTasks` tick retries
     // naturally, and once the coordinator's worktree has been refreshed
     // dispatch proceeds cleanly.
+    const driftSelector = driftWorktreeSelector ?? this.opts.worktree
     const { allowStale, strippedSpec } = parseAllowStaleBaseFromSpec(task.spec)
     let baseDrift: {
       base: string
@@ -541,15 +688,15 @@ export class Coordinator {
       recentSubjects: string[]
     } | null = null
 
-    if (!this.opts.worktree) {
+    if (!driftSelector) {
       // Why (§7.4): CoordinatorOptions.worktree is optional. When undefined,
       // probeWorktreeDrift cannot resolve a selector; log once so operators
       // can see the guard did not run for this task and proceed. v2 may
       // always resolve a worktree via the coordinator-terminal handle.
       this.opts.onLog(`stale-base guard inert for ${task.id}: coordinator has no worktree selector`)
     } else {
-      baseDrift = await this.runtime.probeWorktreeDrift(this.opts.worktree).catch((err) => {
-        this.opts.onLog(`probeWorktreeDrift failed for ${this.opts.worktree}: ${err}`)
+      baseDrift = await this.runtime.probeWorktreeDrift(driftSelector).catch((err) => {
+        this.opts.onLog(`probeWorktreeDrift failed for ${driftSelector}: ${err}`)
         return null
       })
 
