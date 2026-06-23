@@ -2537,10 +2537,18 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
     } catch (err) {
       if (isRuntimeSelectorNotFoundError(err)) {
         void get().fetchWorktrees(getRepoIdFromWorktreeId(worktreeId))
+        if (options?.throwOnPersistError) {
+          throw err
+        }
         return
       }
       console.error('Failed to update worktree meta:', err)
+      // Refetch reverts the optimistic in-memory update to durable state before
+      // surfacing the failure, so an opted-in caller never sees a diverged name.
       void get().fetchWorktrees(getRepoIdFromWorktreeId(worktreeId))
+      if (options?.throwOnPersistError) {
+        throw err
+      }
     }
   },
 

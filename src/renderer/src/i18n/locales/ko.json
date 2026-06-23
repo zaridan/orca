@@ -520,7 +520,8 @@
           "no_command": "Could not build the Orcastrator launch command for this agent.",
           "no_workspace": "Could not open the Orcastrator workspace.",
           "no_repo": "This project has no repo to launch an Orcastrator in.",
-          "create_failed": "Failed to create the Orcastrator."
+          "create_failed": "Failed to create the Orcastrator.",
+          "seed_failed": "Orcastrator opened, but initial command seeding timed out."
         }
       }
     },

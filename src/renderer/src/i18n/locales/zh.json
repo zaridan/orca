@@ -520,7 +520,8 @@
           "no_command": "无法为此 Agent 构建 Orcastrator 启动命令。",
           "no_workspace": "无法打开 Orcastrator 工作区。",
           "no_repo": "此项目没有可用于启动 Orcastrator 的仓库。",
-          "create_failed": "创建 Orcastrator 失败。"
+          "create_failed": "创建 Orcastrator 失败。",
+          "seed_failed": "已打开 Orcastrator，但初始命令注入超时。"
         }
       }
     },

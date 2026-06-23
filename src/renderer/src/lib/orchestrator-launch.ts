@@ -141,6 +141,17 @@ export async function launchOrchestratorForProject(
   // the TUI is accepting input. Background so the click doesn't block on boot,
   // with a generous timeout since cold boots are slow.
   if (activation.primaryTabId) {
+    // Why: seeding is backgrounded so the launch doesn't block on TUI boot, but a
+    // timed-out paste means the coordinator never receives /orcastrate — surface
+    // that so the session doesn't sit silently idle.
+    const notifySeedFailed = (): void => {
+      toast.error(
+        translate(
+          'auto.lib.orchestrator.launch.seed_failed',
+          'Orcastrator opened, but initial command seeding timed out.'
+        )
+      )
+    }
     void pasteDraftWhenAgentReady({
       tabId: activation.primaryTabId,
       content: promptContent,
@@ -149,6 +160,12 @@ export async function launchOrchestratorForProject(
       forcePaste: true,
       timeoutMs: ORCASTRATE_PASTE_TIMEOUT_MS
     })
+      .then((ok) => {
+        if (!ok) {
+          notifySeedFailed()
+        }
+      })
+      .catch(notifySeedFailed)
   }
   return true
 }

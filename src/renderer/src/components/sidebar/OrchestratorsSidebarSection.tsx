@@ -29,18 +29,20 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
   const updateWorktreeMeta = useAppStore((s) => s.updateWorktreeMeta)
   const reattachOrchestrators = useAppStore((s) => s.reattachOrchestrators)
 
-  // Why: rename mirrors the worktree-title rename — update the in-memory entry
-  // for instant UI, then persist the prefixed displayName on the underlying
-  // worktree so reattachOrchestrators reconstructs the name after a reload.
+  // Why: rename mirrors the worktree-title rename. Persist the prefixed
+  // displayName on the durable worktree FIRST (throwOnPersistError so a failed
+  // save rejects instead of being swallowed), then mirror it into the in-memory
+  // entry only on success. If persistence fails the in-memory name is never
+  // touched and the inline editor surfaces the rejection, so the sidebar can't
+  // diverge from durable metadata for the session.
   const renameOrchestrator = useCallback(
     async (id: string, worktreeId: string, projectName: string): Promise<void> => {
-      // Why: optimistic update for instant UI. If the persist below throws, the
-      // in-memory name diverges only until the next reload, when reattach
-      // reconciles from the durable worktree displayName.
+      await updateWorktreeMeta(
+        worktreeId,
+        { displayName: `${ORCASTRATOR_DISPLAY_PREFIX}${projectName}` },
+        { throwOnPersistError: true }
+      )
       updateOrchestrator(id, { projectName })
-      await updateWorktreeMeta(worktreeId, {
-        displayName: `${ORCASTRATOR_DISPLAY_PREFIX}${projectName}`
-      })
     },
     [updateOrchestrator, updateWorktreeMeta]
   )
@@ -154,7 +156,7 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
               onClick={() => {
                 void closeOrchestrator(entry.id)
               }}
-              className="shrink-0 rounded p-0.5 text-worktree-sidebar-foreground/40 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+              className="shrink-0 rounded p-0.5 text-worktree-sidebar-foreground/40 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-worktree-sidebar-ring"
             >
               <X className="size-3.5" />
             </button>

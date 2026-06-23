@@ -94,6 +94,7 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
   const [name, setName] = useState('')
   const [agent, setAgent] = useState<TuiAgent | null>(null)
   const [prompt, setPrompt] = useState('')
+  const [isLaunching, setIsLaunching] = useState(false)
 
   // Why: seed the form only on the hidden→visible transition. Re-running on every
   // dependency change while open would clobber the user's in-progress edits when
@@ -127,18 +128,25 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
       : null
 
   const handleLaunch = async (): Promise<void> => {
-    if (!project) {
+    // Why: guard against rapid Enter/double-click firing concurrent launches —
+    // one intent must produce one worktree/director, not duplicates.
+    if (!project || isLaunching) {
       return
     }
+    setIsLaunching(true)
     // Why: only close on success — a failed launch (toast surfaced inside) should
     // keep the modal open so the user's input isn't discarded and re-entered.
-    const launched = await launchOrchestratorForProject(project, {
-      name: name.trim() || undefined,
-      agent: agent ?? undefined,
-      prompt: prompt.trim() || undefined
-    })
-    if (launched) {
-      closeModal()
+    try {
+      const launched = await launchOrchestratorForProject(project, {
+        name: name.trim() || undefined,
+        agent: agent ?? undefined,
+        prompt: prompt.trim() || undefined
+      })
+      if (launched) {
+        closeModal()
+      }
+    } finally {
+      setIsLaunching(false)
     }
   }
 
@@ -237,7 +245,7 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
             <Button type="button" variant="ghost" onClick={closeModal}>
               {translate('auto.components.OrchestratorLaunchModal.cancel', 'Cancel')}
             </Button>
-            <Button type="submit" disabled={!project}>
+            <Button type="submit" disabled={!project || isLaunching}>
               {translate('auto.components.OrchestratorLaunchModal.launch', 'Launch Orcastrator')}
             </Button>
           </DialogFooter>
