@@ -141,14 +141,17 @@ describe('orchestrators slice', () => {
     expect(store.getState().orchestrators).toHaveLength(0)
   })
 
-  it('closeOrchestrator still drops the entry when worktree removal fails', async () => {
+  it('closeOrchestrator rolls back the entry when worktree removal fails', async () => {
     const store = createTestStore()
-    const removeWorktree = vi.fn().mockRejectedValue(new Error('already gone'))
+    const removeWorktree = vi.fn().mockRejectedValue(new Error('filesystem locked'))
     store.setState({ removeWorktree })
     store.getState().registerOrchestrator(entry({ id: 'w1', worktreeId: 'wt1' }))
 
     await store.getState().closeOrchestrator('w1')
 
-    expect(store.getState().orchestrators).toHaveLength(0)
+    // Teardown failed → entry must stay so the director remains reachable for retry,
+    // and isn't duplicated.
+    expect(store.getState().orchestrators).toHaveLength(1)
+    expect(store.getState().orchestrators[0]).toMatchObject({ id: 'w1', worktreeId: 'wt1' })
   })
 })
