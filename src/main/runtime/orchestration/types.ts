@@ -42,6 +42,12 @@ export type TaskRow = {
   // can't see or dispatch each other's tasks. NULL until a run adopts it
   // (tasks are created before `orchestration.run`, so they start unowned).
   coordinator_run_id: string | null
+  // Why (#12): the task's repo/worktree target, stamped at creation. Adoption
+  // and mid-run stamping only bind a task to a run with the SAME target_key, so
+  // concurrent runs on different targets can't poach each other's tasks. NULL
+  // when the creator's target can't be resolved (shares the null slot, like a
+  // no-worktree run).
+  target_key: string | null
   task_title: string | null
   display_name: string | null
   spec: string

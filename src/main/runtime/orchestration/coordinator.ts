@@ -157,9 +157,10 @@ export class Coordinator {
 
     // Why (#12): tasks are created via orchestration.taskCreate before the run
     // exists, so they start unowned. Claim them for this run before decompose
-    // reads the (now run-scoped) DAG. The single-running invariant ensures no
-    // other run adopts concurrently.
-    this.db.adoptUnownedTasks(runId)
+    // reads the (now run-scoped) DAG — but only tasks on THIS run's target, so
+    // a concurrent run on another target can't have its tasks poached.
+    const targetKey = this.db.getCoordinatorRun(runId)?.target_key ?? null
+    this.db.adoptUnownedTasks(runId, targetKey)
 
     try {
       await this.decompose()

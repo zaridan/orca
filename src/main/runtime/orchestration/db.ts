@@ -59,9 +59,12 @@ export class CoordinatorRunConflictError extends Error {
 // poach each other's work (#12). v6 → v7 adds `coordinator_runs.target_key` so
 // the run-start guard can reject only a *duplicate run on the same target*
 // (repo/worktree) while letting Orcastrators in different repos run in parallel.
-// The guard is enforced at write time by startCoordinatorRun (BEGIN IMMEDIATE),
-// not by a schema index.
-const SCHEMA_VERSION = 7
+// v7 → v8 adds `tasks.target_key` so task OWNERSHIP is target-scoped too —
+// adoption and mid-run stamping only bind a task to a run on the same target,
+// closing the cross-target poaching gap that per-target run-start alone left
+// open. The guard is enforced at write time by startCoordinatorRun
+// (BEGIN IMMEDIATE), not by a schema index.
+const SCHEMA_VERSION = 8
 
 export class OrchestrationDb {
   private db: Database.Database
@@ -107,6 +110,7 @@ export class OrchestrationDb {
         parent_id     TEXT,
         created_by_terminal_handle TEXT,
         coordinator_run_id TEXT,
+        target_key    TEXT,
         task_title    TEXT,
         display_name  TEXT,
         spec          TEXT NOT NULL,
@@ -298,6 +302,15 @@ export class OrchestrationDb {
           this.db.exec(`ALTER TABLE coordinator_runs ADD COLUMN target_key TEXT`)
         }
       }
+      // v7 → v8: per-target task ownership (#12). Without a target on tasks,
+      // adoptUnownedTasks claims every unowned task regardless of target — the
+      // first concurrent run swallows another target's tasks. target_key scopes
+      // adoption and mid-run stamping to one target.
+      if (current < 8) {
+        if (!this.hasColumn('tasks', 'target_key')) {
+          this.db.exec(`ALTER TABLE tasks ADD COLUMN target_key TEXT`)
+        }
+      }
       this.createUndeliveredInboxIndexIfPossible()
       // Why: attach run-scoped lookup indexes now that the v6 columns exist
       // (createTables ran before the ALTERs above on an upgraded DB).
@@ -330,15 +343,22 @@ export class OrchestrationDb {
   // columns. Guard on column presence so this is safe to call from createTables
   // (fresh DB / no-op on old DB) and again after migrate() adds the columns.
   private createRunScopedIndexesIfPossible(): void {
-    if (!this.hasColumn('tasks', 'coordinator_run_id')) {
-      return
+    if (this.hasColumn('tasks', 'coordinator_run_id')) {
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_tasks_run ON tasks(coordinator_run_id, status);
+        CREATE INDEX IF NOT EXISTS idx_dispatch_run
+          ON dispatch_contexts(coordinator_run_id, status);
+        CREATE INDEX IF NOT EXISTS idx_gates_run ON decision_gates(coordinator_run_id, status);
+      `)
     }
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_tasks_run ON tasks(coordinator_run_id, status);
-      CREATE INDEX IF NOT EXISTS idx_dispatch_run
-        ON dispatch_contexts(coordinator_run_id, status);
-      CREATE INDEX IF NOT EXISTS idx_gates_run ON decision_gates(coordinator_run_id, status);
-    `)
+    // Why: tasks.target_key is the v8 column; on an upgraded DB it only exists
+    // after migrate() runs, so guard it separately (createTables calls this
+    // before migrate). Speeds the target-scoped adoption scan.
+    if (this.hasColumn('tasks', 'target_key')) {
+      this.db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_tasks_target ON tasks(target_key, coordinator_run_id)`
+      )
+    }
   }
 
   // Why: sqlite_master stores the original CREATE TABLE SQL including the
@@ -508,6 +528,9 @@ export class OrchestrationDb {
     // coordinator's run-scoped listTasks sees them. Pre-run tasks pass nothing
     // and stay unowned (NULL) until run-start adoptUnownedTasks() claims them.
     coordinatorRunId?: string
+    // Why (#12): the task's repo/worktree target, so adoption only binds it to a
+    // run on the same target. NULL when the creator's target is unresolvable.
+    targetKey?: string | null
   }): TaskRow {
     const id = generateId('task')
     const depsJson = JSON.stringify(task.deps ?? [])
@@ -520,13 +543,14 @@ export class OrchestrationDb {
     })
     this.db
       .prepare(
-        'INSERT INTO tasks (id, parent_id, created_by_terminal_handle, coordinator_run_id, task_title, display_name, spec, status, deps) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO tasks (id, parent_id, created_by_terminal_handle, coordinator_run_id, target_key, task_title, display_name, spec, status, deps) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         id,
         task.parentId ?? null,
         task.createdByTerminalHandle ?? null,
         task.coordinatorRunId ?? null,
+        task.targetKey ?? null,
         display.taskTitle || null,
         display.displayName || null,
         task.spec,
@@ -540,21 +564,26 @@ export class OrchestrationDb {
   // orchestration.run exists, so they start unowned (coordinator_run_id NULL).
   // Run-start adopts every still-unowned task — plus any task whose owning run
   // is no longer running — into the starting run. The "not running" clause is
-  // what makes isolation safe: a *concurrently running* run's tasks are never
-  // adopted (no poaching), while a stopped/crashed run's leftover tasks are not
-  // stranded and can be picked up by the next run. (Re-attaching a coordinator
-  // process to an existing run after a restart is F3's job, #14 — this only
-  // transfers task ownership.)
-  adoptUnownedTasks(coordinatorRunId: string): number {
+  // what makes isolation safe across time: a *concurrently running* run's tasks
+  // are never adopted, while a stopped/crashed run's leftover tasks are not
+  // stranded. The `target_key IS ?` clause makes it safe across *space*: a run
+  // adopts ONLY tasks on its own target, so two concurrent runs on different
+  // targets can't poach each other's unowned tasks (the round-3 blocker).
+  // (Re-attaching a coordinator process to an existing run after a restart is
+  // F3's job, #14 — this only transfers task ownership.)
+  adoptUnownedTasks(coordinatorRunId: string, targetKey: string | null): number {
     const info = this.db
       .prepare(
         `UPDATE tasks SET coordinator_run_id = ?
-         WHERE coordinator_run_id IS NULL
-            OR coordinator_run_id IN (
-              SELECT id FROM coordinator_runs WHERE status != 'running'
-            )`
+         WHERE target_key IS ?
+           AND (
+             coordinator_run_id IS NULL
+             OR coordinator_run_id IN (
+               SELECT id FROM coordinator_runs WHERE status != 'running'
+             )
+           )`
       )
-      .run(coordinatorRunId)
+      .run(coordinatorRunId, targetKey)
     // Why: dispatch_contexts/decision_gates copy their task's run at creation,
     // but a dispatch/gate created before the task was adopted (or owned by the
     // run we just reclaimed from) would carry a stale run id. Re-sync the
@@ -1063,6 +1092,19 @@ export class OrchestrationDb {
         "SELECT * FROM coordinator_runs WHERE status = 'running' ORDER BY created_at DESC LIMIT 1"
       )
       .get() as CoordinatorRun | undefined
+  }
+
+  // Why (#12): the active run *for a specific target*. taskCreate uses this to
+  // stamp a mid-run task with the run on its OWN target — never the global
+  // latest-running run, which under concurrency could belong to a different
+  // target and would poach the task. `IS ?` so a null target matches the
+  // null-slot run.
+  getActiveCoordinatorRunForTarget(targetKey: string | null): CoordinatorRun | undefined {
+    return this.db
+      .prepare(
+        "SELECT * FROM coordinator_runs WHERE status = 'running' AND target_key IS ? ORDER BY created_at DESC LIMIT 1"
+      )
+      .get(targetKey) as CoordinatorRun | undefined
   }
 
   // Why: getActiveCoordinatorRun returns only the latest. Per-Orcastrator
