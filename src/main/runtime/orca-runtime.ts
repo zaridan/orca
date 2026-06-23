@@ -2454,21 +2454,40 @@ export class OrcaRuntimeService {
     this._orchestrationDb = db
   }
 
-  // Why (#12): the run-start guard rejects only a duplicate run on the *same
-  // target* (repo/worktree). Resolve the coordinator's worktree selector to a
-  // stable worktree id so the same worktree addressed via different selector
-  // forms maps to one key. Fall back to the raw selector when it can't resolve
-  // (headless/stale) so distinct targets still get distinct keys, and to null
-  // when no worktree was given (those runs share a single-run slot).
+  // Why (#12): the per-target run-start guard and per-target task ownership are
+  // only correct if a given target resolves to ONE stable key everywhere. A
+  // worktree id is that stable identity. We deliberately do NOT fall back to the
+  // raw selector on failure: the same worktree could resolve in one runtime and
+  // throw in another (SSH/headless/transient), yielding two different keys and
+  // letting two coordinators run on the same target — the original #12 clash.
+  // So this FAILS CLOSED — it throws when a given selector can't be resolved to
+  // a stable id, and the caller refuses the run rather than guess. Returns null
+  // only when no selector was supplied (those runs share the null slot).
   async resolveOrchestrationTargetKey(selector?: string): Promise<string | null> {
     if (!selector) {
       return null
     }
+    const worktree = await this.resolveWorktreeSelector(selector)
+    return `worktree:${worktree.id}`
+  }
+
+  // Why (#12): tasks resolve their target from the creating terminal's worktree
+  // (taskCreate carries ORCA_TERMINAL_HANDLE, not a --worktree selector). The
+  // terminal's worktreeId IS the stable id used by resolveOrchestrationTargetKey,
+  // so the key matches a run started with --worktree on the same worktree.
+  // Unlike run-start this does NOT fail closed: an unresolvable/absent caller
+  // yields null (the task shares the null slot and is adopted only by a
+  // null-target run), so manual task creation never hard-errors on a stale
+  // handle. The cost is a possibly-stranded task when the handle can't resolve.
+  async resolveOrchestrationTargetKeyForTerminal(handle?: string): Promise<string | null> {
+    if (!handle) {
+      return null
+    }
     try {
-      const worktree = await this.resolveWorktreeSelector(selector)
-      return `worktree:${worktree.id}`
+      const terminal = await this.showTerminal(handle)
+      return `worktree:${terminal.worktreeId}`
     } catch {
-      return `selector:${selector}`
+      return null
     }
   }
 

@@ -62,7 +62,20 @@ export const ORCHESTRATION_GATE_METHODS: RpcMethod[] = [
       // Why (#12): resolve the coordinator's worktree to a stable target key so
       // the start guard rejects only a duplicate run on the *same* repo/worktree
       // — concurrent Orcastrators in different repos start in parallel.
-      const targetKey = await runtime.resolveOrchestrationTargetKey(params.worktree)
+      // resolveOrchestrationTargetKey fails closed (it does NOT guess a key) so a
+      // worktree that can't be resolved refuses the run rather than silently
+      // using a divergent key that would let two coordinators share a target.
+      let targetKey: string | null
+      try {
+        targetKey = await runtime.resolveOrchestrationTargetKey(params.worktree)
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        throw new Error(
+          `Cannot start coordinator: --worktree '${params.worktree}' did not resolve to a ` +
+            `known worktree (${detail}). Pass a resolvable --worktree so the run is isolated ` +
+            `to one target.`
+        )
+      }
 
       // Why (#12): atomic check+insert (BEGIN IMMEDIATE inside startCoordinatorRun)
       // closes the TOCTOU between "is a run active for this target?" and "insert

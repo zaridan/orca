@@ -370,7 +370,7 @@ export const ORCHESTRATION_METHODS: RpcMethod[] = [
   defineMethod({
     name: 'orchestration.taskCreate',
     params: TaskCreateParams,
-    handler: (params, { runtime }) => {
+    handler: async (params, { runtime }) => {
       const db = runtime.getOrchestrationDb()
       let deps: string[] | undefined
       if (params.deps) {
@@ -384,10 +384,17 @@ export const ORCHESTRATION_METHODS: RpcMethod[] = [
           throw new Error('Invalid --deps: must be a JSON array of task IDs')
         }
       }
+      // Why (#12): stamp the task with its OWN target (the creating terminal's
+      // worktree) so adoption only binds it to a same-target run — never poached
+      // by a concurrent run on another target.
+      const targetKey = await runtime.resolveOrchestrationTargetKeyForTerminal(
+        params.callerTerminalHandle
+      )
       // Why (#12): a task created while a run is active belongs to that run so
-      // the coordinator's run-scoped listTasks sees it. Tasks created before
-      // any run starts stay unowned (NULL) and are adopted at run-start.
-      const activeRunId = db.getActiveCoordinatorRun()?.id
+      // the coordinator's run-scoped listTasks sees it — but only the run on the
+      // SAME target (getActiveCoordinatorRunForTarget, not the global latest).
+      // No same-target run yet → stays unowned (NULL), adopted at run-start.
+      const activeRunId = db.getActiveCoordinatorRunForTarget(targetKey)?.id
       const task = db.createTask({
         spec: params.spec,
         taskTitle: params.taskTitle,
@@ -395,7 +402,8 @@ export const ORCHESTRATION_METHODS: RpcMethod[] = [
         deps,
         parentId: params.parent,
         createdByTerminalHandle: params.callerTerminalHandle,
-        coordinatorRunId: activeRunId
+        coordinatorRunId: activeRunId,
+        targetKey
       })
       return { task }
     }
