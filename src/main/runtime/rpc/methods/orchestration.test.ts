@@ -1259,6 +1259,74 @@ describe('orchestration RPC methods', () => {
     })
   })
 
+  describe('orchestration.run (per-run isolation #12)', () => {
+    it('derives a unique coordinator handle instead of the literal "coordinator"', async () => {
+      setup()
+      // Capture the handle passed to the atomic start and abort before the
+      // background loop is constructed (keeps the test deterministic / leak-free).
+      const startSpy = vi.spyOn(db, 'startCoordinatorRun').mockImplementation(() => {
+        throw new Error('abort-after-capture')
+      })
+
+      await expect(call('orchestration.run', { spec: 'build it' })).rejects.toThrow(
+        'abort-after-capture'
+      )
+
+      expect(startSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          coordinatorHandle: expect.stringMatching(/^coordinator-[0-9a-f]+$/)
+        })
+      )
+      const handle = startSpy.mock.calls[0][0].coordinatorHandle
+      expect(handle).not.toBe('coordinator')
+    })
+
+    it('honors an explicit --from handle without deriving one', async () => {
+      setup()
+      const startSpy = vi.spyOn(db, 'startCoordinatorRun').mockImplementation(() => {
+        throw new Error('abort-after-capture')
+      })
+
+      await expect(
+        call('orchestration.run', { spec: 'build it', from: 'coordinator-explicit' })
+      ).rejects.toThrow('abort-after-capture')
+
+      expect(startSpy.mock.calls[0][0].coordinatorHandle).toBe('coordinator-explicit')
+    })
+
+    it('rejects a second run while one is already active', async () => {
+      setup()
+      // Seed an active run directly (simulates another runtime's in-flight run).
+      db.createCoordinatorRun({ spec: 'first', coordinatorHandle: 'coordinator-aaa' })
+
+      await expect(call('orchestration.run', { spec: 'second' })).rejects.toThrow(
+        /Coordinator already running/
+      )
+    })
+  })
+
+  describe('orchestration.taskCreate run stamping (#12)', () => {
+    it('stamps the active run on tasks created mid-run', async () => {
+      setup()
+      const run = db.createCoordinatorRun({ spec: 'go', coordinatorHandle: 'coordinator-bbb' })
+
+      const result = (await call('orchestration.taskCreate', {
+        spec: 'subtask created during the run'
+      })) as { task: { id: string } }
+
+      expect(db.getTask(result.task.id)?.coordinator_run_id).toBe(run.id)
+    })
+
+    it('leaves tasks unowned when no run is active (adopted at run-start)', async () => {
+      setup()
+      const result = (await call('orchestration.taskCreate', {
+        spec: 'pre-run task'
+      })) as { task: { id: string } }
+
+      expect(db.getTask(result.task.id)?.coordinator_run_id).toBeNull()
+    })
+  })
+
   describe('orchestration.reset', () => {
     function seedResetState(): void {
       db.insertMessage({ from: 'a', to: 'b', subject: 'test' })
