@@ -24,15 +24,14 @@ function prStateLabel(state: HostedReviewState): string {
   }
 }
 
-// Why: PR state reads as a colored pill in GitHub's convention (merged = purple,
-// open = green, closed = red, draft = gray). The user asked for GitHub styling, so
-// these mirror GitHub's solid state-badge colors rather than Orca's neutral tokens
-// (the same exception the git-decoration palette makes for VS Code parity).
+// Why: PR state reads as a colored pill in GitHub's convention. Colors live as
+// `--pr-state-*` tokens in main.css (the same provider-parity exception the
+// git-decoration palette makes), so they aren't raw inline hex here.
 const PR_STATE_PILL_CLASS: Record<HostedReviewState, string> = {
-  merged: 'bg-[#8250df] text-white',
-  open: 'bg-[#1a7f37] text-white',
-  closed: 'bg-[#cf222e] text-white',
-  draft: 'bg-[#6e7781] text-white'
+  merged: 'bg-[var(--pr-state-merged)] text-white',
+  open: 'bg-[var(--pr-state-open)] text-white',
+  closed: 'bg-[var(--pr-state-closed)] text-white',
+  draft: 'bg-[var(--pr-state-draft)] text-white'
 }
 
 export function PrStatePill({ state }: { state: HostedReviewState }): React.JSX.Element {
