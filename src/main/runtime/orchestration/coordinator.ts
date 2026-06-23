@@ -155,6 +155,13 @@ export class Coordinator {
     this.state.runId = runId
     this.opts.onLog(`Coordinator run ${runId} started`)
 
+    // Why (#12): tasks are created via orchestration.taskCreate before the run
+    // exists, so they start unowned. Claim them for this run before decompose
+    // reads the (now run-scoped) DAG — but only tasks on THIS run's target, so
+    // a concurrent run on another target can't have its tasks poached.
+    const targetKey = this.db.getCoordinatorRun(runId)?.target_key ?? null
+    this.db.adoptUnownedTasks(runId, targetKey)
+
     try {
       await this.decompose()
 
@@ -168,7 +175,7 @@ export class Coordinator {
 
       // Why: if stopped early, treat it as failed since tasks are incomplete.
       // Also failed if any task explicitly failed.
-      const tasks = this.db.listTasks()
+      const tasks = this.db.listTasks({ coordinatorRunId: this.state.runId })
       const allDone = tasks.every((t) => t.status === 'completed' || t.status === 'failed')
       const failedTasks = [
         ...new Set([
@@ -205,7 +212,7 @@ export class Coordinator {
   // itself is an LLM agent.
   private async decompose(): Promise<void> {
     this.state.phase = 'decomposing'
-    const existing = this.db.listTasks()
+    const existing = this.db.listTasks({ coordinatorRunId: this.state.runId })
     if (existing.length === 0) {
       throw new Error(
         'No tasks found. Create tasks with orchestration.taskCreate before running the coordinator.'
@@ -231,7 +238,7 @@ export class Coordinator {
   // is a separate decision documented in R6 of DESIGN_DOC_PREAMBLE_FIX.md.
   private warnStaleDispatches(): void {
     const thresholdIso = new Date(Date.now() - HUNG_THRESHOLD_MS).toISOString()
-    const stale = this.db.getStaleDispatches(thresholdIso)
+    const stale = this.db.getStaleDispatches(thresholdIso, this.state.runId)
     for (const ctx of stale) {
       const minutes = Math.round(HUNG_THRESHOLD_MS / 60000)
       this.opts.onLog(
@@ -455,7 +462,10 @@ export class Coordinator {
     // here. In production, the coordinator UI or a human operator resolves
     // gates via orchestration.gateResolve. The coordinator does not auto-
     // resolve gates — that would defeat their purpose as approval checkpoints.
-    const pendingGates = this.db.listGates({ status: 'pending' })
+    const pendingGates = this.db.listGates({
+      status: 'pending',
+      coordinatorRunId: this.state.runId
+    })
     for (const gate of pendingGates) {
       const task = this.db.getTask(gate.task_id)
       if (task && task.status !== 'blocked') {
@@ -468,13 +478,16 @@ export class Coordinator {
 
   private async dispatchReadyTasks(): Promise<void> {
     this.state.phase = 'dispatching'
-    const readyTasks = this.db.listTasks({ ready: true })
+    const readyTasks = this.db.listTasks({ ready: true, coordinatorRunId: this.state.runId })
     if (readyTasks.length === 0) {
       return
     }
 
     // Why: count currently dispatched tasks to enforce concurrency limit.
-    const dispatched = this.db.listTasks({ status: 'dispatched' })
+    const dispatched = this.db.listTasks({
+      status: 'dispatched',
+      coordinatorRunId: this.state.runId
+    })
     let slotsAvailable = this.opts.maxConcurrent - dispatched.length
     if (slotsAvailable <= 0) {
       return
@@ -611,7 +624,10 @@ export class Coordinator {
   private async getAvailableTerminals(): Promise<string[]> {
     try {
       const result = await this.runtime.listTerminals(this.opts.worktree)
-      const dispatched = this.db.listTasks({ status: 'dispatched' })
+      const dispatched = this.db.listTasks({
+        status: 'dispatched',
+        coordinatorRunId: this.state.runId
+      })
       const busyHandles = new Set<string>()
 
       for (const task of dispatched) {
@@ -641,7 +657,7 @@ export class Coordinator {
   }
 
   private checkConvergence(): boolean {
-    const tasks = this.db.listTasks()
+    const tasks = this.db.listTasks({ coordinatorRunId: this.state.runId })
     if (tasks.length === 0) {
       return true
     }

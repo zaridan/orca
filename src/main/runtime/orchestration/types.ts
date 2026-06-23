@@ -38,6 +38,16 @@ export type TaskRow = {
   id: string
   parent_id: string | null
   created_by_terminal_handle: string | null
+  // Why (#12): scopes the task to a coordinator run so two runs sharing the DB
+  // can't see or dispatch each other's tasks. NULL until a run adopts it
+  // (tasks are created before `orchestration.run`, so they start unowned).
+  coordinator_run_id: string | null
+  // Why (#12): the task's repo/worktree target, stamped at creation. Adoption
+  // and mid-run stamping only bind a task to a run with the SAME target_key, so
+  // concurrent runs on different targets can't poach each other's tasks. NULL
+  // when the creator's target can't be resolved (shares the null slot, like a
+  // no-worktree run).
+  target_key: string | null
   task_title: string | null
   display_name: string | null
   spec: string
@@ -51,6 +61,9 @@ export type TaskRow = {
 export type DispatchContextRow = {
   id: string
   task_id: string
+  // Why (#12): copied from the dispatched task so dispatch queries (uniqueness
+  // guard, stale/active counts) stay scoped to one run.
+  coordinator_run_id: string | null
   assignee_handle: string | null
   status: DispatchStatus
   failure_count: number
@@ -64,6 +77,9 @@ export type DispatchContextRow = {
 export type DecisionGateRow = {
   id: string
   task_id: string
+  // Why (#12): copied from the gated task so listGates({status}) stays scoped
+  // to one run.
+  coordinator_run_id: string | null
   question: string
   options: string
   status: GateStatus
@@ -78,6 +94,10 @@ export type CoordinatorRun = {
   status: CoordinatorStatus
   coordinator_handle: string
   poll_interval_ms: number
+  // Why (#12): identifies the run's repo/worktree so the run-start guard rejects
+  // only a duplicate run on the same target, not all concurrency. NULL when no
+  // worktree was given at run-start (those runs share a single-run slot).
+  target_key: string | null
   created_at: string
   completed_at: string | null
 }

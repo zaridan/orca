@@ -2454,6 +2454,43 @@ export class OrcaRuntimeService {
     this._orchestrationDb = db
   }
 
+  // Why (#12): the per-target run-start guard and per-target task ownership are
+  // only correct if a given target resolves to ONE stable key everywhere. A
+  // worktree id is that stable identity. We deliberately do NOT fall back to the
+  // raw selector on failure: the same worktree could resolve in one runtime and
+  // throw in another (SSH/headless/transient), yielding two different keys and
+  // letting two coordinators run on the same target — the original #12 clash.
+  // So this FAILS CLOSED — it throws when a given selector can't be resolved to
+  // a stable id, and the caller refuses the run rather than guess. Returns null
+  // only when no selector was supplied (those runs share the null slot).
+  async resolveOrchestrationTargetKey(selector?: string): Promise<string | null> {
+    if (!selector) {
+      return null
+    }
+    const worktree = await this.resolveWorktreeSelector(selector)
+    return `worktree:${worktree.id}`
+  }
+
+  // Why (#12): tasks resolve their target from the creating terminal's worktree
+  // (taskCreate carries ORCA_TERMINAL_HANDLE, not a --worktree selector). The
+  // terminal's worktreeId IS the stable id used by resolveOrchestrationTargetKey,
+  // so the key matches a run started with --worktree on the same worktree.
+  // Unlike run-start this does NOT fail closed: an unresolvable/absent caller
+  // yields null (the task shares the null slot and is adopted only by a
+  // null-target run), so manual task creation never hard-errors on a stale
+  // handle. The cost is a possibly-stranded task when the handle can't resolve.
+  async resolveOrchestrationTargetKeyForTerminal(handle?: string): Promise<string | null> {
+    if (!handle) {
+      return null
+    }
+    try {
+      const terminal = await this.showTerminal(handle)
+      return `worktree:${terminal.worktreeId}`
+    } catch {
+      return null
+    }
+  }
+
   setAutomationService(service: AutomationService): void {
     this.automationService = service
   }
@@ -7526,7 +7563,15 @@ export class OrcaRuntimeService {
     // Why: create an escalation message so the coordinator is notified about
     // the unexpected exit on its next check cycle, even if the circuit breaker
     // hasn't tripped yet.
-    const run = this._orchestrationDb.getActiveCoordinatorRun()
+    // Why (#12): route to the dispatch's OWN run, not getActiveCoordinatorRun()
+    // (latest running). With concurrent runs, the latest run's handle may belong
+    // to a different coordinator that never reads this inbox — black-holing the
+    // escalation. Fall back to the active run only for legacy dispatches with no
+    // recorded run id.
+    const run = dispatch.coordinator_run_id
+      ? (this._orchestrationDb.getCoordinatorRun(dispatch.coordinator_run_id) ??
+        this._orchestrationDb.getActiveCoordinatorRun())
+      : this._orchestrationDb.getActiveCoordinatorRun()
     if (run) {
       this._orchestrationDb.insertMessage({
         from: handle,
@@ -17490,9 +17535,8 @@ export class OrcaRuntimeService {
   // while it still supervises background workers/watchers. The orchestration DB
   // knows the run is alive, so surface it keyed by the coordinator's own pane —
   // the renderer maps that pane to its Orcastrator and shows a "supervising"
-  // dot instead of a misleading completion check. Counts are global to the DB
-  // (one orchestration namespace), so with multiple concurrent runs they are
-  // shared; `runId`/coordinator attribution stays per-run accurate.
+  // dot instead of a misleading completion check. Counts are scoped per run
+  // (#12) so each Orcastrator's dot reflects only its own tasks/dispatches.
   private buildOrchestrationActivityByPaneKey(): Record<string, OrchestrationActivity> | undefined {
     const db = this.getOrchestrationDbIfAvailable()
     if (!db?.listCoordinatorRuns) {
@@ -17502,12 +17546,9 @@ export class OrcaRuntimeService {
     if (runningRuns.length === 0) {
       return undefined
     }
-    const pendingTasks = db.countOutstandingTasks?.() ?? 0
-    const activeDispatches = db.countActiveDispatches?.() ?? 0
     // Why: mirror the coordinator's own hung-worker threshold (10 min) so the
     // sidebar's "stalled" read agrees with the coordinator's escalation logic.
     const staleThresholdIso = new Date(Date.now() - ORCHESTRATION_HUNG_THRESHOLD_MS).toISOString()
-    const staleDispatches = db.getStaleDispatches?.(staleThresholdIso)?.length ?? 0
 
     const activityByPaneKey: Record<string, OrchestrationActivity> = {}
     for (const run of runningRuns) {
@@ -17519,9 +17560,9 @@ export class OrcaRuntimeService {
       }
       activityByPaneKey[paneKey] = {
         runId: run.id,
-        pendingTasks,
-        activeDispatches,
-        staleDispatches
+        pendingTasks: db.countOutstandingTasks?.(run.id) ?? 0,
+        activeDispatches: db.countActiveDispatches?.(run.id) ?? 0,
+        staleDispatches: db.getStaleDispatches?.(staleThresholdIso, run.id)?.length ?? 0
       }
     }
     return Object.keys(activityByPaneKey).length > 0 ? activityByPaneKey : undefined
