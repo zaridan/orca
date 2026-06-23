@@ -1,13 +1,22 @@
+import { randomBytes } from 'crypto'
 import { z } from 'zod'
 import { defineMethod, type RpcMethod } from '../core'
 import { OptionalFiniteNumber, OptionalString, requiredString } from '../schemas'
-import type { GateStatus } from '../../orchestration/db'
+import { CoordinatorRunConflictError, type GateStatus } from '../../orchestration/db'
 import { Coordinator } from '../../orchestration/coordinator'
 
 // Why: the coordinator instance is stored at module scope so orchestration.runStop
-// can signal it to halt. Only one coordinator can run at a time (enforced by
-// the DB's active-run check), so a single reference suffices.
+// can signal it to halt. Only one coordinator can run at a time (enforced
+// atomically by the DB's partial unique index on running runs), so a single
+// reference suffices.
 let activeCoordinator: Coordinator | null = null
+
+// Why (#12): each run gets a unique coordinator handle instead of the literal
+// 'coordinator' default, so two runs' message inboxes can't collide and one
+// run can't markAsRead another's worker_done/heartbeat (a silent-hang clash).
+function deriveCoordinatorHandle(): string {
+  return `coordinator-${randomBytes(3).toString('hex')}`
+}
 
 const RunParams = z.object({
   spec: requiredString('Missing --spec'),
@@ -46,12 +55,25 @@ export const ORCHESTRATION_GATE_METHODS: RpcMethod[] = [
     handler: (params, { runtime }) => {
       const db = runtime.getOrchestrationDb()
 
-      const existing = db.getActiveCoordinatorRun()
-      if (existing) {
-        throw new Error(`Coordinator already running: ${existing.id}`)
+      const coordinatorHandle = params.from ?? deriveCoordinatorHandle()
+
+      // Why (#12): atomic check+insert (BEGIN IMMEDIATE inside startCoordinatorRun)
+      // closes the TOCTOU between "is a run active?" and "insert a running run"
+      // that let two runtimes sharing one DB both start a coordinator.
+      let run
+      try {
+        run = db.startCoordinatorRun({
+          spec: params.spec,
+          coordinatorHandle,
+          pollIntervalMs: params.pollIntervalMs
+        })
+      } catch (err) {
+        if (err instanceof CoordinatorRunConflictError) {
+          throw new Error(err.message)
+        }
+        throw err
       }
 
-      const coordinatorHandle = params.from ?? 'coordinator'
       const coordinator = new Coordinator(db, runtime, {
         spec: params.spec,
         coordinatorHandle,
@@ -61,12 +83,6 @@ export const ORCHESTRATION_GATE_METHODS: RpcMethod[] = [
       })
 
       activeCoordinator = coordinator
-
-      const run = db.createCoordinatorRun({
-        spec: params.spec,
-        coordinatorHandle,
-        pollIntervalMs: params.pollIntervalMs
-      })
 
       // Why: fire-and-forget — the coordinator loop runs in the event loop
       // background. Results are persisted to the DB; callers query via

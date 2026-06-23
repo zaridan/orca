@@ -360,13 +360,18 @@ export const ORCHESTRATION_METHODS: RpcMethod[] = [
           throw new Error('Invalid --deps: must be a JSON array of task IDs')
         }
       }
+      // Why (#12): a task created while a run is active belongs to that run so
+      // the coordinator's run-scoped listTasks sees it. Tasks created before
+      // any run starts stay unowned (NULL) and are adopted at run-start.
+      const activeRunId = db.getActiveCoordinatorRun()?.id
       const task = db.createTask({
         spec: params.spec,
         taskTitle: params.taskTitle,
         displayName: params.displayName,
         deps,
         parentId: params.parent,
-        createdByTerminalHandle: params.callerTerminalHandle
+        createdByTerminalHandle: params.callerTerminalHandle,
+        coordinatorRunId: activeRunId
       })
       return { task }
     }

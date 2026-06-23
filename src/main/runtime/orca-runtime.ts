@@ -17490,9 +17490,8 @@ export class OrcaRuntimeService {
   // while it still supervises background workers/watchers. The orchestration DB
   // knows the run is alive, so surface it keyed by the coordinator's own pane —
   // the renderer maps that pane to its Orcastrator and shows a "supervising"
-  // dot instead of a misleading completion check. Counts are global to the DB
-  // (one orchestration namespace), so with multiple concurrent runs they are
-  // shared; `runId`/coordinator attribution stays per-run accurate.
+  // dot instead of a misleading completion check. Counts are scoped per run
+  // (#12) so each Orcastrator's dot reflects only its own tasks/dispatches.
   private buildOrchestrationActivityByPaneKey(): Record<string, OrchestrationActivity> | undefined {
     const db = this.getOrchestrationDbIfAvailable()
     if (!db?.listCoordinatorRuns) {
@@ -17502,12 +17501,9 @@ export class OrcaRuntimeService {
     if (runningRuns.length === 0) {
       return undefined
     }
-    const pendingTasks = db.countOutstandingTasks?.() ?? 0
-    const activeDispatches = db.countActiveDispatches?.() ?? 0
     // Why: mirror the coordinator's own hung-worker threshold (10 min) so the
     // sidebar's "stalled" read agrees with the coordinator's escalation logic.
     const staleThresholdIso = new Date(Date.now() - ORCHESTRATION_HUNG_THRESHOLD_MS).toISOString()
-    const staleDispatches = db.getStaleDispatches?.(staleThresholdIso)?.length ?? 0
 
     const activityByPaneKey: Record<string, OrchestrationActivity> = {}
     for (const run of runningRuns) {
@@ -17519,9 +17515,9 @@ export class OrcaRuntimeService {
       }
       activityByPaneKey[paneKey] = {
         runId: run.id,
-        pendingTasks,
-        activeDispatches,
-        staleDispatches
+        pendingTasks: db.countOutstandingTasks?.(run.id) ?? 0,
+        activeDispatches: db.countActiveDispatches?.(run.id) ?? 0,
+        staleDispatches: db.getStaleDispatches?.(staleThresholdIso, run.id)?.length ?? 0
       }
     }
     return Object.keys(activityByPaneKey).length > 0 ? activityByPaneKey : undefined
