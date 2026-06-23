@@ -60,23 +60,37 @@ export const createOrchestratorsSlice: StateCreator<AppState, [], [], Orchestrat
     // Why: drop the registry entry first so the UI removes it immediately; the
     // worktree teardown (force — a director branch is a throwaway) runs after.
     set((s) => ({ orchestrators: s.orchestrators.filter((e) => e.id !== id) }))
+    // Why: restore the entry if teardown fails — removeWorktree can resolve
+    // { ok: false } without throwing, so cover both that soft failure and the
+    // throw path, else a still-live director vanishes from the sidebar.
+    const rollback = (): void =>
+      set((s) =>
+        s.orchestrators.some((e) => e.id === entry.id)
+          ? s
+          : { orchestrators: [...s.orchestrators, entry] }
+      )
     try {
-      await get().removeWorktree(entry.worktreeId, true)
+      const result = await get().removeWorktree(entry.worktreeId, true)
+      if (!result.ok) {
+        rollback()
+      }
     } catch {
-      // Why: teardown failed, so the worktree likely still exists — restore the
-      // registry entry so the sidebar stays consistent with the actual worktree
-      // state instead of dropping a director that's still live.
-      set((s) => ({
-        orchestrators: [...s.orchestrators.filter((e) => e.id !== entry.id), entry]
-      }))
+      rollback()
     }
   },
   reattachOrchestrators: () => {
     const state = get()
     const registered = new Set(state.orchestrators.map((e) => e.worktreeId))
+    // Why: track every live director worktree so stale registry entries — whose
+    // worktree was removed or lost the prefix — are pruned, keeping reattach
+    // idempotent instead of leaving zombie cards in the sidebar.
+    const liveOrchestratorWorktreeIds = new Set<string>()
     const additions: OrchestratorEntry[] = []
     for (const [repoId, worktrees] of Object.entries(state.worktreesByRepo)) {
       for (const worktree of worktrees) {
+        if (worktree.displayName.startsWith(ORCASTRATOR_DISPLAY_PREFIX)) {
+          liveOrchestratorWorktreeIds.add(worktree.id)
+        }
         if (
           registered.has(worktree.id) ||
           !worktree.displayName.startsWith(ORCASTRATOR_DISPLAY_PREFIX)
@@ -99,8 +113,11 @@ export const createOrchestratorsSlice: StateCreator<AppState, [], [], Orchestrat
         })
       }
     }
-    if (additions.length > 0) {
-      set((s) => ({ orchestrators: [...s.orchestrators, ...additions] }))
-    }
+    set((s) => ({
+      orchestrators: [
+        ...s.orchestrators.filter((e) => liveOrchestratorWorktreeIds.has(e.worktreeId)),
+        ...additions
+      ]
+    }))
   }
 })

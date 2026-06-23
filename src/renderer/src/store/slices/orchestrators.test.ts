@@ -132,6 +132,24 @@ describe('orchestrators slice', () => {
     expect(store.getState().orchestrators).toHaveLength(1)
   })
 
+  it('reattach prunes stale entries whose director worktree is gone', () => {
+    const store = createTestStore()
+    // A registered director whose worktree has since been removed (or lost the
+    // prefix) must be pruned, not left as a zombie sidebar card.
+    store.getState().registerOrchestrator(entry({ id: 'gone', worktreeId: 'repo1::gone' }))
+    store.setState({
+      worktreesByRepo: { repo1: [directorWorktree('repo1::orc', 'repo1', 'Live')] },
+      projects: [],
+      tabsByWorktree: {}
+    })
+
+    store.getState().reattachOrchestrators()
+
+    const orchestrators = store.getState().orchestrators
+    expect(orchestrators).toHaveLength(1)
+    expect(orchestrators[0].worktreeId).toBe('repo1::orc')
+  })
+
   it('reattach falls back to repo id + stripped name when no project matches', () => {
     const store = createTestStore()
     store.setState({
@@ -149,7 +167,7 @@ describe('orchestrators slice', () => {
 
   it('closeOrchestrator tears down the worktree and drops the registry entry', async () => {
     const store = createTestStore()
-    const removeWorktree = vi.fn().mockResolvedValue(undefined)
+    const removeWorktree = vi.fn().mockResolvedValue({ ok: true })
     store.setState({ removeWorktree })
     store.getState().registerOrchestrator(entry({ id: 'w1', worktreeId: 'wt1' }))
 
@@ -159,7 +177,7 @@ describe('orchestrators slice', () => {
     expect(store.getState().orchestrators).toHaveLength(0)
   })
 
-  it('closeOrchestrator restores the entry when worktree removal fails', async () => {
+  it('closeOrchestrator restores the entry when worktree removal throws', async () => {
     const store = createTestStore()
     const removeWorktree = vi.fn().mockRejectedValue(new Error('teardown failed'))
     store.setState({ removeWorktree })
@@ -169,6 +187,20 @@ describe('orchestrators slice', () => {
 
     // Why: teardown failed, so the worktree likely still exists — the registry
     // must keep the director rather than dropping a still-live entry.
+    expect(store.getState().orchestrators).toHaveLength(1)
+    expect(store.getState().orchestrators[0]).toMatchObject({ id: 'w1', worktreeId: 'wt1' })
+  })
+
+  it('closeOrchestrator restores the entry on a soft removal failure', async () => {
+    const store = createTestStore()
+    // Why: removeWorktree can resolve { ok: false } without throwing — the entry
+    // must still be restored, same as the throw path.
+    const removeWorktree = vi.fn().mockResolvedValue({ ok: false, error: 'busy' })
+    store.setState({ removeWorktree })
+    store.getState().registerOrchestrator(entry({ id: 'w1', worktreeId: 'wt1' }))
+
+    await store.getState().closeOrchestrator('w1')
+
     expect(store.getState().orchestrators).toHaveLength(1)
     expect(store.getState().orchestrators[0]).toMatchObject({ id: 'w1', worktreeId: 'wt1' })
   })

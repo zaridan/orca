@@ -95,13 +95,20 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
   const [agent, setAgent] = useState<TuiAgent | null>(null)
   const [prompt, setPrompt] = useState('')
 
+  // Why: seed the form only on the closed→open transition. Re-seeding whenever a
+  // dependency changes while the modal is open would overwrite the user's
+  // in-progress edits (e.g. a prefill prop updating underneath them).
+  const wasVisibleRef = useRef(false)
   useEffect(() => {
-    if (visible) {
-      setSelectedOptionId(prefilledProjectOptionId ?? firstProjectOptionId)
-      setAgent(defaultTuiAgent && defaultTuiAgent !== 'blank' ? defaultTuiAgent : null)
-      setName(prefillName)
-      setPrompt(prefillPrompt)
+    const becameVisible = visible && !wasVisibleRef.current
+    wasVisibleRef.current = visible
+    if (!becameVisible) {
+      return
     }
+    setSelectedOptionId(prefilledProjectOptionId ?? firstProjectOptionId)
+    setAgent(defaultTuiAgent && defaultTuiAgent !== 'blank' ? defaultTuiAgent : null)
+    setName(prefillName)
+    setPrompt(prefillPrompt)
   }, [
     visible,
     firstProjectOptionId,

@@ -66,16 +66,23 @@ export default function OrchestratorMissionControl({
   }, [repos])
 
   // Why: a shipped branch usually has no live worktree, but if one still exists we
-  // pass it so the card's merge/push/publish actions stay functional.
+  // pass it so the card's merge/push/publish actions stay functional. Scope the
+  // lookup to the director's own repo — keying by branch alone lets a same-named
+  // branch in another repo collide and pair a foreign worktree with directorRepo,
+  // producing a mismatched action target on the card.
   const worktreeByBranch = useMemo(() => {
     const map = new Map<string, Worktree>()
-    for (const worktree of worktreesById.values()) {
+    const repoId = worktreesById.get(worktreeId)?.repoId
+    if (!repoId) {
+      return map
+    }
+    for (const worktree of worktreesByRepo?.[repoId] ?? []) {
       if (worktree.branch) {
         map.set(worktree.branch, worktree)
       }
     }
     return map
-  }, [worktreesById])
+  }, [worktreeId, worktreesById, worktreesByRepo])
 
   // Why: a worker's PR reads identically to the worktree card — compute the cache
   // key the same way and reuse the card's display derivation, so a live worker

@@ -131,7 +131,9 @@ The hard part — how `+` actually spawns a coordinator in a repo's existing **p
 >
 > **Known follow-ups:** if `buildAgentStartupPlan` returns null (agent unresolvable) the worktree is created without an agent; multi-director-per-project works but isn't yet stress-tested live.
 
-The original ordered plan (now implemented) follows.
+The original ordered plan follows — **superseded in two specifics by what shipped** (the BUILT summary above is the source of truth):
+> - **Registry entry shape (step 2).** Shipped `OrchestratorEntry` is `{ id, projectId, projectName, worktreeId, tabId, launchedAt }` — the field is `tabId` (not `agentTabId`) and there is **no `status` field**; live agent state is derived on render via the shared `AgentStateDot`, not stored on the entry.
+> - **Persistence + reattach (step 3).** Shipped reattach is **not** session-writer-backed. `reattachOrchestrators` rebuilds the in-memory registry from director worktrees detected by the durable `ORCASTRATOR_DISPLAY_PREFIX` displayName marker, rather than persisting the slice and re-binding to a retained agent tab.
 
 Concrete, ordered steps to take the current Phase-1 launch → the v2 director model. Sequenced low-risk first.
 

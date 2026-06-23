@@ -112,6 +112,10 @@ export async function launchOrchestratorForProject(
     ...buildDirectWorkItemStartupOpts(agent, startupPlan, 'sidebar')
   })
   if (!activation) {
+    // Why: activation failed, so roll back the worktree we just created —
+    // otherwise it lingers as an orphaned hidden worktree with no registered
+    // orchestrator owner. Best-effort, force: the director branch is a throwaway.
+    void store.removeWorktree(worktreeId, true)
     toast.error(
       translate('auto.lib.orchestrator.launch.no_workspace', 'Could not open the Orcastrator.')
     )
@@ -138,6 +142,17 @@ export async function launchOrchestratorForProject(
       submit: true,
       forcePaste: true,
       timeoutMs: ORCASTRATE_PASTE_TIMEOUT_MS
+    }).then((pasted) => {
+      // Why: if the prompt never lands the director boots without /orcastrate and
+      // sits idle with no feedback — surface it so the user can run it by hand.
+      if (!pasted) {
+        toast.error(
+          translate(
+            'auto.lib.orchestrator.launch.prompt_failed',
+            'Orcastrator started, but the initial prompt didn’t land. Open it and run /orcastrate manually.'
+          )
+        )
+      }
     })
   }
   return true
