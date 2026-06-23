@@ -38,6 +38,11 @@ export type WorktreeMetaUpdateGuard = (worktree: Worktree | DetectedWorktree | u
 
 export type WorktreeMetaUpdateOptions = {
   shouldApply?: WorktreeMetaUpdateGuard
+  // Why: persistence failures are swallowed by default (logged + refetch) so
+  // callers stay fire-and-forget. Opt in to rethrow so a caller that mirrors the
+  // name elsewhere (e.g. the Orcastrators sidebar) can detect a failed persist
+  // and avoid diverging from durable metadata.
+  throwOnPersistError?: boolean
 }
 
 export type WorktreeRenameRequest = {
