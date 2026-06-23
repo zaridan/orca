@@ -153,7 +153,8 @@ export function ChecksPanelInner({
   linkedGitLabMR,
   linkedBitbucketPR,
   linkedAzureDevOpsPR,
-  linkedGiteaPR
+  linkedGiteaPR,
+  isPanelActiveOverride
 }: ChecksPanelInnerProps): React.JSX.Element {
   const activeConnectionId = activeWorktreeId
     ? (getConnectionId(activeWorktreeId) ?? repo?.connectionId ?? null)
@@ -191,7 +192,9 @@ export function ChecksPanelInner({
   // when the panel isn't visible to the user.
   const rightSidebarOpen = useAppStore((s) => s.rightSidebarOpen)
   const rightSidebarTab = useAppStore((s) => s.rightSidebarTab)
-  const isPanelVisible = rightSidebarOpen && rightSidebarTab === 'checks'
+  // An embedded host (Mission Control card) mounts this only while on-screen and
+  // signals that via the override, so the Checks-tab gate doesn't suppress it.
+  const isPanelVisible = isPanelActiveOverride ?? (rightSidebarOpen && rightSidebarTab === 'checks')
 
   const fetchPRChecks = useAppStore((s) => s.fetchPRChecks)
   const fetchPRCheckDetails = useAppStore((s) => s.fetchPRCheckDetails)
@@ -603,6 +606,9 @@ export function ChecksPanelInner({
     !activeReview &&
     !isFolder &&
     Boolean(branch) &&
+    // Creating a review pushes the local checkout; without a live worktree (a
+    // shipped/worktree-less Mission Control card) the composer would no-op.
+    Boolean(activeWorktree) &&
     (hostedReviewCreation?.canCreate === true ||
       hostedReviewCreation?.blockedReason === 'needs_push')
   const handleGeneratePullRequestFieldsForActive = useCallback(
@@ -3076,13 +3082,16 @@ export function ChecksPanelInner({
     const canPushCreate = hostedReviewCreation?.blockedReason === 'needs_push'
     const shouldPushBeforeCreateReview = createPrPushFirst || canPushCreate
     const canPublishBranch =
-      isPublishingBranch ||
-      (!publishActionHasUncommittedChanges &&
-        shouldShowChecksPanelPublishBranchAction({
-          hostedReviewBlockedReason: hostedReviewCreation?.blockedReason,
-          hasUpstream: publishActionRemoteStatus?.hasUpstream,
-          hasCurrentBranch: Boolean(branch)
-        }))
+      // Publishing pushes the local checkout; its handler no-ops without a live
+      // worktree, so don't render the action enabled on a worktree-less card.
+      Boolean(activeWorktree) &&
+      (isPublishingBranch ||
+        (!publishActionHasUncommittedChanges &&
+          shouldShowChecksPanelPublishBranchAction({
+            hostedReviewBlockedReason: hostedReviewCreation?.blockedReason,
+            hasUpstream: publishActionRemoteStatus?.hasUpstream,
+            hasCurrentBranch: Boolean(branch)
+          })))
     const emptyStateCopy = getChecksPanelEmptyStateCopy({
       operationLabel,
       prRefreshStatus: emptyReviewIsGitLab ? undefined : prRefreshState?.status,
@@ -3148,7 +3157,7 @@ export function ChecksPanelInner({
             />
           </div>
         ) : null}
-        {!operationInProgress && (!createComposerOpen || canPublishBranch) && (
+        {!operationInProgress && activeWorktree && (!createComposerOpen || canPublishBranch) && (
           <div className="mt-3 flex flex-wrap gap-2">
             {canPublishBranch && (
               <Button
@@ -3208,6 +3217,7 @@ export function ChecksPanelInner({
           review={activeReview}
           isRefreshing={isRefreshing}
           canUnlinkPullRequest={linkedPR !== null}
+          canManagePullRequestLink={Boolean(activeWorktree)}
           showSystemBrowserHint={showHostedReviewSystemBrowserHint}
           onRefresh={() => void handleRefresh()}
           onOpenReview={handleOpenPR}

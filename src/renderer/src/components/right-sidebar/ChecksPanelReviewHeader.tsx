@@ -17,6 +17,9 @@ type ChecksPanelReviewHeaderProps = {
   review: ChecksPanelReview
   isRefreshing: boolean
   canUnlinkPullRequest: boolean
+  // Link/unlink edit worktree meta; hide the menu when there's no live worktree
+  // (a shipped/worktree-less card) so the actions aren't shown enabled-but-no-op.
+  canManagePullRequestLink: boolean
   showSystemBrowserHint: boolean
   onRefresh: () => void
   onOpenReview: (event: React.MouseEvent<HTMLButtonElement>) => void
@@ -28,6 +31,7 @@ export function ChecksPanelReviewHeader({
   review,
   isRefreshing,
   canUnlinkPullRequest,
+  canManagePullRequestLink,
   showSystemBrowserHint,
   onRefresh,
   onOpenReview,
@@ -37,7 +41,7 @@ export function ChecksPanelReviewHeader({
   const reviewNumberLabel = review.provider === 'gitlab' ? `!${review.number}` : `#${review.number}`
   const ReviewIcon = review.provider === 'gitlab' ? GitMerge : PullRequestIcon
   const reviewHostLabel = review.provider === 'gitlab' ? 'GitLab' : 'GitHub'
-  const showPullRequestMenu = review.provider === 'github'
+  const showPullRequestMenu = review.provider === 'github' && canManagePullRequestLink
   const openTitle = translate(
     'auto.components.right.sidebar.ChecksPanel.5c88c6db07',
     'Open on {{value0}}',

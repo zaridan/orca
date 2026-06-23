@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { ExternalLink, GitMerge, Network } from 'lucide-react'
 import { useAppStore } from '@/store'
-import { cn } from '@/lib/utils'
 import { AgentStateDot } from '@/components/AgentStateDot'
-import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { deriveWorktreeAgentDotState } from '@/lib/worktree-agent-dot-state'
 import { selectSpawnedWorktreeIds } from '@/lib/orchestrator-mission-control-data'
 import { deriveWorkerPrBadge } from '@/lib/orchestrator-worker-pr-badge'
@@ -15,59 +13,16 @@ import {
 import { buildGithubPrSearchUrl } from '@/lib/github-pr-search-url'
 import { matchesShippedBranch } from '@/lib/shipped-branch-pr-match'
 import { getHostedReviewCacheKey } from '@/store/slices/hosted-review'
+import { buildShippedCardTarget, buildWorkerCardTarget } from '@/lib/mission-control-card-target'
 import { joinPath } from '@/lib/path'
 import { translate } from '@/i18n/i18n'
-import type { HostedReviewState } from '../../../../shared/hosted-review'
+import { MissionControlPrReviewCard } from './MissionControlPrReviewCard'
+import { PrStatePill } from './MissionControlPrStatePill'
 import type { GitHubWorkItem, Repo, Worktree } from '../../../../shared/types'
 
 // Why: a director appends its outcomes to this log in its own worktree, so it
 // survives the worker worktrees being removed — the only durable shipped history.
 const ORCASTRATE_LOG_RELATIVE_PATH = '.orcastrate/log.jsonl'
-
-// Why: PR state words are user-facing, so map them through the catalog rather
-// than rendering the raw enum value.
-function prStateLabel(state: HostedReviewState): string {
-  switch (state) {
-    case 'open':
-      return translate('auto.components.right.sidebar.OrchestratorMissionControl.pr_open', 'open')
-    case 'merged':
-      return translate(
-        'auto.components.right.sidebar.OrchestratorMissionControl.pr_merged',
-        'merged'
-      )
-    case 'closed':
-      return translate(
-        'auto.components.right.sidebar.OrchestratorMissionControl.pr_closed',
-        'closed'
-      )
-    case 'draft':
-      return translate('auto.components.right.sidebar.OrchestratorMissionControl.pr_draft', 'draft')
-  }
-}
-
-// Why: PR state reads as a colored pill in GitHub's convention (merged = purple,
-// open = green, closed = red, draft = gray). The user asked for GitHub styling, so
-// these mirror GitHub's solid state-badge colors rather than Orca's neutral tokens
-// (the same exception the git-decoration palette makes for VS Code parity).
-const PR_STATE_PILL_CLASS: Record<HostedReviewState, string> = {
-  merged: 'bg-[#8250df] text-white',
-  open: 'bg-[#1a7f37] text-white',
-  closed: 'bg-[#cf222e] text-white',
-  draft: 'bg-[#6e7781] text-white'
-}
-
-function PrStatePill({ state }: { state: HostedReviewState }): React.JSX.Element {
-  return (
-    <span
-      className={cn(
-        'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium capitalize leading-none',
-        PR_STATE_PILL_CLASS[state]
-      )}
-    >
-      {prStateLabel(state)}
-    </span>
-  )
-}
 
 // Why: shown in the Source Control panel when a director's worktree is active,
 // in place of the publish/PR view a director has no use for. It is the director's
@@ -108,6 +63,18 @@ export default function OrchestratorMissionControl({
     }
     return map
   }, [repos])
+
+  // Why: a shipped branch usually has no live worktree, but if one still exists we
+  // pass it so the card's merge/push/publish actions stay functional.
+  const worktreeByBranch = useMemo(() => {
+    const map = new Map<string, Worktree>()
+    for (const worktree of worktreesById.values()) {
+      if (worktree.branch) {
+        map.set(worktree.branch, worktree)
+      }
+    }
+    return map
+  }, [worktreesById])
 
   // Why: a worker's PR reads identically to the worktree card — compute the cache
   // key the same way and reuse the card's display derivation, so a live worker
@@ -311,48 +278,50 @@ export default function OrchestratorMissionControl({
             )}
           </p>
         ) : (
-          <div className="flex flex-col gap-0.5">
+          <div className="flex flex-col gap-1.5">
             {workerIds.map((id) => {
               const worker = worktreesById.get(id)
+              if (!worker) {
+                return null
+              }
               const tabIds = (tabsByWorktree[id] ?? []).map((tab) => tab.id)
               const dot = deriveWorktreeAgentDotState(tabIds, agentStatusByPaneKey)
               const prBadge = prBadgeForWorker(worker)
               const prUrl = prBadge?.url
-              // Why: row + PR link are siblings (not nested buttons) so the link
-              // opens the PR while the row body reveals the worktree.
               return (
-                <div
+                <MissionControlPrReviewCard
                   key={id}
-                  className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-foreground transition-colors hover:bg-accent"
-                >
-                  <button
-                    type="button"
-                    onClick={() => activateAndRevealWorktree(id, { sidebarRevealBehavior: 'auto' })}
-                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                  >
-                    <AgentStateDot state={dot} size="sm" />
-                    <span className="min-w-0 flex-1 truncate">{worker?.displayName ?? id}</span>
-                  </button>
-                  {prBadge ? (
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      {prBadge.state ? <PrStatePill state={prBadge.state} /> : null}
-                      {prUrl ? (
-                        <button
-                          type="button"
-                          onClick={() => void window.api.shell.openUrl(prUrl)}
-                          className="flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground hover:underline"
-                        >
-                          {prBadge.label} #{prBadge.number}
-                          <ExternalLink className="size-3" aria-hidden />
-                        </button>
-                      ) : (
-                        <span className="flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground">
-                          {prBadge.label} #{prBadge.number}
-                        </span>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
+                  target={buildWorkerCardTarget(worker, reposById.get(worker.repoId) ?? null)}
+                  headerLeft={
+                    <>
+                      <AgentStateDot state={dot} size="sm" />
+                      <span className="min-w-0 flex-1 truncate">{worker.displayName ?? id}</span>
+                    </>
+                  }
+                  headerRight={
+                    prBadge ? (
+                      <>
+                        {prBadge.state ? <PrStatePill state={prBadge.state} /> : null}
+                        {/* Sibling of the expand trigger (not nested) so opening the
+                            PR externally stays distinct from expanding the card. */}
+                        {prUrl ? (
+                          <button
+                            type="button"
+                            onClick={() => void window.api.shell.openUrl(prUrl)}
+                            className="flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground hover:underline"
+                          >
+                            {prBadge.label} #{prBadge.number}
+                            <ExternalLink className="size-3" aria-hidden />
+                          </button>
+                        ) : (
+                          <span className="flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground">
+                            {prBadge.label} #{prBadge.number}
+                          </span>
+                        )}
+                      </>
+                    ) : undefined
+                  }
+                />
               )
             })}
           </div>
@@ -376,16 +345,22 @@ export default function OrchestratorMissionControl({
             {shippedWork.map((item) => {
               const prLink = shippedPrLink(item.name)
               return (
-                <div key={item.name} className="flex min-w-0 items-start gap-2 px-1 py-0.5">
-                  <GitMerge
-                    className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-                    aria-hidden
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="min-w-0 flex-1 truncate text-[13px] text-foreground">
-                        {item.name}
-                      </p>
+                <MissionControlPrReviewCard
+                  key={item.name}
+                  target={buildShippedCardTarget({
+                    repo: directorRepo ?? null,
+                    branch: item.name,
+                    linkedPR: prLink?.number ?? null,
+                    liveWorktree: worktreeByBranch.get(item.name) ?? null
+                  })}
+                  headerLeft={
+                    <>
+                      <GitMerge className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                    </>
+                  }
+                  headerRight={
+                    <>
                       <PrStatePill state="merged" />
                       {prLink ? (
                         <button
@@ -394,7 +369,11 @@ export default function OrchestratorMissionControl({
                           className="flex shrink-0 items-center gap-1 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground hover:underline"
                         >
                           {prLink.number != null
-                            ? `PR #${prLink.number}`
+                            ? translate(
+                                'auto.components.right.sidebar.OrchestratorMissionControl.pr_number',
+                                'PR #{{value0}}',
+                                { value0: prLink.number }
+                              )
                             : translate(
                                 'auto.components.right.sidebar.OrchestratorMissionControl.view_pr',
                                 'View PR'
@@ -402,14 +381,9 @@ export default function OrchestratorMissionControl({
                           <ExternalLink className="size-3" aria-hidden />
                         </button>
                       ) : null}
-                    </div>
-                    {item.description ? (
-                      <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-                        {item.description}
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
+                    </>
+                  }
+                />
               )
             })}
           </div>
