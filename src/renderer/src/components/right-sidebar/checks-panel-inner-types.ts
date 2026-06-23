@@ -43,4 +43,12 @@ export type ChecksPanelInnerProps = {
   linkedBitbucketPR: number | null
   linkedAzureDevOpsPR: number | null
   linkedGiteaPR: number | null
+  /**
+   * Overrides the panel's "is the user looking at this?" gate that throttles
+   * checks/comments fetching. The Checks tab leaves it undefined (gate on the
+   * active sidebar tab). An embedded host that mounts this only when on-screen
+   * (PR2: an expanded Mission Control card under the Source Control tab) passes
+   * `true` so fetching runs even though the active tab isn't `checks`.
+   */
+  isPanelActiveOverride?: boolean
 }
