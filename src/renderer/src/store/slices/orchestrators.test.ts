@@ -159,14 +159,17 @@ describe('orchestrators slice', () => {
     expect(store.getState().orchestrators).toHaveLength(0)
   })
 
-  it('closeOrchestrator still drops the entry when worktree removal fails', async () => {
+  it('closeOrchestrator restores the entry when worktree removal fails', async () => {
     const store = createTestStore()
-    const removeWorktree = vi.fn().mockRejectedValue(new Error('already gone'))
+    const removeWorktree = vi.fn().mockRejectedValue(new Error('teardown failed'))
     store.setState({ removeWorktree })
     store.getState().registerOrchestrator(entry({ id: 'w1', worktreeId: 'wt1' }))
 
     await store.getState().closeOrchestrator('w1')
 
-    expect(store.getState().orchestrators).toHaveLength(0)
+    // Why: teardown failed, so the worktree likely still exists — the registry
+    // must keep the director rather than dropping a still-live entry.
+    expect(store.getState().orchestrators).toHaveLength(1)
+    expect(store.getState().orchestrators[0]).toMatchObject({ id: 'w1', worktreeId: 'wt1' })
   })
 })

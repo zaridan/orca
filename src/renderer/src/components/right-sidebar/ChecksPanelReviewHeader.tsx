@@ -11,7 +11,36 @@ import {
 import { getTerminalUrlSystemBrowserHint } from '../terminal-pane/terminal-link-open-hints'
 import { PullRequestIcon, prStateColor } from './checks-panel-content'
 import { type ChecksPanelReview } from './checks-panel-review'
+import type { HostedReviewProvider } from '../../../../shared/hosted-review'
 import { translate } from '@/i18n/i18n'
+
+type ReviewProviderPresentation = {
+  hostLabel: string
+  icon: typeof PullRequestIcon
+  numberPrefix: string
+}
+
+// Why: handle every HostedReviewProvider explicitly so non-GitHub hosts
+// (Bitbucket/Azure DevOps/Gitea) show their own name instead of defaulting to
+// "GitHub". Only GitLab uses the merge-request icon + `!` notation; the other
+// providers are all pull-request style. No default case: the switch is
+// exhaustive, so adding a provider becomes a compile error here.
+function reviewProviderPresentation(provider: HostedReviewProvider): ReviewProviderPresentation {
+  switch (provider) {
+    case 'github':
+      return { hostLabel: 'GitHub', icon: PullRequestIcon, numberPrefix: '#' }
+    case 'gitlab':
+      return { hostLabel: 'GitLab', icon: GitMerge, numberPrefix: '!' }
+    case 'bitbucket':
+      return { hostLabel: 'Bitbucket', icon: PullRequestIcon, numberPrefix: '#' }
+    case 'azure-devops':
+      return { hostLabel: 'Azure DevOps', icon: PullRequestIcon, numberPrefix: '#' }
+    case 'gitea':
+      return { hostLabel: 'Gitea', icon: PullRequestIcon, numberPrefix: '#' }
+    case 'unsupported':
+      return { hostLabel: 'Review', icon: PullRequestIcon, numberPrefix: '#' }
+  }
+}
 
 type ChecksPanelReviewHeaderProps = {
   review: ChecksPanelReview
@@ -34,9 +63,12 @@ export function ChecksPanelReviewHeader({
   onUnlinkPullRequest,
   onLinkAnotherPullRequest
 }: ChecksPanelReviewHeaderProps): React.JSX.Element {
-  const reviewNumberLabel = review.provider === 'gitlab' ? `!${review.number}` : `#${review.number}`
-  const ReviewIcon = review.provider === 'gitlab' ? GitMerge : PullRequestIcon
-  const reviewHostLabel = review.provider === 'gitlab' ? 'GitLab' : 'GitHub'
+  const {
+    hostLabel: reviewHostLabel,
+    icon: ReviewIcon,
+    numberPrefix
+  } = reviewProviderPresentation(review.provider)
+  const reviewNumberLabel = `${numberPrefix}${review.number}`
   const showPullRequestMenu = review.provider === 'github'
   const openTitle = translate(
     'auto.components.right.sidebar.ChecksPanel.5c88c6db07',

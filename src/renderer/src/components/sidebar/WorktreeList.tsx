@@ -5039,10 +5039,14 @@ const WorktreeList = React.memo(function WorktreeList({
       // filters; closing the popover naturally restores the filtered view.
       ids.push(agentSendTargetWorktreeId)
     }
-    const orchestratorWorktreeIds = new Set((orchestrators ?? []).map((entry) => entry.worktreeId))
+    // Why: only exclude director worktrees while the experimental feature is on,
+    // so turning it off (with entries still present) doesn't hide real worktrees.
+    const orchestratorWorktreeIds = settings?.experimentalOrchestrators
+      ? new Set((orchestrators ?? []).map((entry) => entry.worktreeId))
+      : null
     return ids
       .map((id) => worktreeMap.get(id))
-      .filter((w): w is Worktree => w != null && !orchestratorWorktreeIds.has(w.id))
+      .filter((w): w is Worktree => w != null && !orchestratorWorktreeIds?.has(w.id))
   }, [
     agentSendTargetWorktreeId,
     filterRepoIds,

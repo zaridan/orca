@@ -125,6 +125,21 @@ describe('Jira issue operations', () => {
     expect(clearTokenMock).toHaveBeenCalledWith('site-1')
   })
 
+  it('surfaces the first connected site error deterministically regardless of completion order', async () => {
+    getClientsMock.mockReturnValue([makeEntry('site-1'), makeEntry('site-2')])
+    // Reject out of entries order: site-2 (entries[1]) rejects immediately while
+    // site-1 (entries[0]) rejects later. The surfaced error must still be
+    // site-1's, proving it's indexed by entries order, not completion order.
+    jiraRequestMock.mockImplementation((entry: JiraClientForSite) =>
+      entry.site.id === 'site-2'
+        ? Promise.reject(new Error('Service Unavailable'))
+        : new Promise((_, reject) => setTimeout(() => reject(new Error('Forbidden')), 10))
+    )
+    const { searchIssues } = await import('./issues')
+
+    await expect(searchIssues('project = ALP', 20, 'all')).rejects.toThrow('Forbidden')
+  })
+
   it('paginates Jira project search results before sorting them', async () => {
     jiraRequestMock
       .mockResolvedValueOnce({

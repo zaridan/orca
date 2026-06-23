@@ -121,16 +121,20 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
       ? (projects.find((p) => p.id === selectedOption.projectId) ?? null)
       : null
 
-  const handleLaunch = (): void => {
+  const handleLaunch = async (): Promise<void> => {
     if (!project) {
       return
     }
-    void launchOrchestratorForProject(project, {
+    // Why: only dismiss on success — a failed launch (which toasts its own error)
+    // must keep the modal open so the user's name/agent/prompt input isn't lost.
+    const launched = await launchOrchestratorForProject(project, {
       name: name.trim() || undefined,
       agent: agent ?? undefined,
       prompt: prompt.trim() || undefined
     })
-    closeModal()
+    if (launched) {
+      closeModal()
+    }
   }
 
   return (
@@ -167,7 +171,7 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
           className="flex flex-col gap-4"
           onSubmit={(event) => {
             event.preventDefault()
-            handleLaunch()
+            void handleLaunch()
           }}
         >
           <div className="space-y-2">

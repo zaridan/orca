@@ -38,7 +38,12 @@ export function clearRepoSlugCache(): void {
   slugByRepoId.clear()
 }
 
-async function resolveRepoSlug(
+/** Resolve a single repo's normalized `owner/repo` slug through the repo-slug
+ *  contract: it routes to the active runtime target (environment RPC for
+ *  remote/SSH targets, local IPC otherwise), lowercases the slug, and caches the
+ *  result. Returns null when the remote has no resolvable slug. Prefer this over
+ *  calling `window.api.gh.repoSlug` directly so non-local targets route correctly. */
+export async function resolveRepoSlug(
   repo: Repo,
   settings: Pick<GlobalSettings, 'activeRuntimeEnvironmentId'> | null | undefined
 ): Promise<string | null> {

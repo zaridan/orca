@@ -13,6 +13,8 @@ import {
   type ShippedWorkItem
 } from '@/lib/orcastrate-log-shipped-work'
 import { buildGithubPrSearchUrl } from '@/lib/github-pr-search-url'
+import { prStateColor } from './checks-panel-content'
+import { resolveRepoSlug } from '@/lib/repo-slug-index'
 import { matchesShippedBranch } from '@/lib/shipped-branch-pr-match'
 import { getHostedReviewCacheKey } from '@/store/slices/hosted-review'
 import { joinPath } from '@/lib/path'
@@ -45,23 +47,14 @@ function prStateLabel(state: HostedReviewState): string {
   }
 }
 
-// Why: PR state reads as a colored pill in GitHub's convention (merged = purple,
-// open = green, closed = red, draft = gray). The user asked for GitHub styling, so
-// these mirror GitHub's solid state-badge colors rather than Orca's neutral tokens
-// (the same exception the git-decoration palette makes for VS Code parity).
-const PR_STATE_PILL_CLASS: Record<HostedReviewState, string> = {
-  merged: 'bg-[#8250df] text-white',
-  open: 'bg-[#1a7f37] text-white',
-  closed: 'bg-[#cf222e] text-white',
-  draft: 'bg-[#6e7781] text-white'
-}
-
 function PrStatePill({ state }: { state: HostedReviewState }): React.JSX.Element {
   return (
     <span
+      // Why: reuse the checks panel's token-based PR-state palette so state pills
+      // stay consistent app-wide instead of hardcoding host-specific hex colors.
       className={cn(
-        'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium capitalize leading-none',
-        PR_STATE_PILL_CLASS[state]
+        'shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium capitalize leading-none',
+        prStateColor(state)
       )}
     >
       {prStateLabel(state)}
@@ -186,18 +179,18 @@ export default function OrchestratorMissionControl({
   // deleted and the review cache is cold. Null for non-GitHub repos (no link).
   const [repoSlug, setRepoSlug] = useState<string | null>(null)
   useEffect(() => {
-    const repoPath = directorRepo?.path
-    const repoId = directorRepo?.id
-    if (!repoPath || !repoId) {
+    if (!directorRepo) {
       setRepoSlug(null)
       return
     }
     let cancelled = false
-    void window.api.gh
-      .repoSlug({ repoPath, repoId })
-      .then((result) => {
+    // Why: go through the repo-slug contract (env-target routing + normalized
+    // slug) instead of calling window.api.gh.repoSlug directly, so remote/SSH
+    // runtime targets resolve the slug correctly rather than always hitting local IPC.
+    void resolveRepoSlug(directorRepo, settings)
+      .then((slug) => {
         if (!cancelled) {
-          setRepoSlug(result ? `${result.owner}/${result.repo}` : null)
+          setRepoSlug(slug)
         }
       })
       .catch(() => {
@@ -208,7 +201,7 @@ export default function OrchestratorMissionControl({
     return () => {
       cancelled = true
     }
-  }, [directorRepo?.path, directorRepo?.id])
+  }, [directorRepo, settings])
 
   // Why: don't double-list a branch that is still a live worker above; the shipped
   // section is for work whose worktree is gone.
@@ -394,7 +387,11 @@ export default function OrchestratorMissionControl({
                           className="flex shrink-0 items-center gap-1 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground hover:underline"
                         >
                           {prLink.number != null
-                            ? `PR #${prLink.number}`
+                            ? translate(
+                                'auto.components.right.sidebar.OrchestratorMissionControl.pr_number',
+                                'PR #{{value0}}',
+                                { value0: prLink.number }
+                              )
                             : translate(
                                 'auto.components.right.sidebar.OrchestratorMissionControl.view_pr',
                                 'View PR'

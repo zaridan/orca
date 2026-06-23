@@ -201,6 +201,35 @@ describe('Jira client credential storage', () => {
     expect(userAgent).not.toMatch(/Mozilla|Chrome|Safari|AppleWebKit/i)
   })
 
+  it('injects the non-browser User-Agent and auth on the jiraRequest POST path too', async () => {
+    // Why: jiraRequest is the second header-injection point (used by issue
+    // search/create/update/comment POSTs); lock it alongside requestWithCredentials
+    // so an XSRF-tripping browser User-Agent can't regress on either path.
+    const siteId = 'site-alpha'
+    writeJiraFiles(siteId, 'token-alpha')
+    netFetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ issues: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    )
+    const jira = await loadClientModule({ encryptionAvailable: true })
+    const client = jira.getClients(siteId)[0]
+
+    await jira.jiraRequest(client, '/rest/api/3/search/jql', {
+      method: 'POST',
+      body: JSON.stringify({ jql: 'project = ALP' })
+    })
+
+    const headers = netFetchMock.mock.calls[0]?.[1]?.headers as Headers
+    const userAgent = headers.get('User-Agent') ?? ''
+    expect(userAgent).toBe('Orca')
+    expect(userAgent).not.toMatch(/Mozilla|Chrome|Safari|AppleWebKit/i)
+    expect(headers.get('Authorization')).toBe(
+      `Basic ${Buffer.from('ada@example.com:token-alpha').toString('base64')}`
+    )
+  })
+
   it('does not pass encrypted safeStorage bytes to Jira when encryption is unavailable', async () => {
     const siteId = 'site-alpha'
     const tokenPath = tokenPathForSite(siteId)

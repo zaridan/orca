@@ -34,13 +34,13 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
   // worktree so reattachOrchestrators reconstructs the name after a reload.
   const renameOrchestrator = useCallback(
     async (id: string, worktreeId: string, projectName: string): Promise<void> => {
-      // Why: optimistic update for instant UI. If the persist below throws, the
-      // in-memory name diverges only until the next reload, when reattach
-      // reconciles from the durable worktree displayName.
-      updateOrchestrator(id, { projectName })
+      // Why: persist the durable worktree displayName first, then update the
+      // in-memory entry. If the persist throws, the rename never lands in the UI
+      // either, so the sidebar can't diverge from what reattach would reconstruct.
       await updateWorktreeMeta(worktreeId, {
         displayName: `${ORCASTRATOR_DISPLAY_PREFIX}${projectName}`
       })
+      updateOrchestrator(id, { projectName })
     },
     [updateOrchestrator, updateWorktreeMeta]
   )
@@ -129,7 +129,7 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
                   activate(entry.worktreeId, focusTabId)
                 }
               }}
-              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-[13px] tracking-tight text-worktree-sidebar-foreground/80 outline-none"
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-[13px] tracking-tight text-worktree-sidebar-foreground/80 outline-none focus-visible:ring-2 focus-visible:ring-worktree-sidebar-ring"
             >
               <AgentStateDot state={dotState} size="sm" />
               <Network
@@ -154,7 +154,10 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
               onClick={() => {
                 void closeOrchestrator(entry.id)
               }}
-              className="shrink-0 rounded p-0.5 text-worktree-sidebar-foreground/40 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+              // Why: hover-reveal hides this on hover-capable devices, but stays
+              // visible on touch (no hover) and on keyboard focus, with a focus
+              // ring — so the control is discoverable without a pointer.
+              className="shrink-0 rounded p-0.5 text-worktree-sidebar-foreground/40 opacity-100 transition-opacity hover:text-destructive can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-worktree-sidebar-ring"
             >
               <X className="size-3.5" />
             </button>

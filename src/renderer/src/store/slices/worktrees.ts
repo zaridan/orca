@@ -2027,7 +2027,11 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
           // Why: an Orcastrator's worktree is coordination scratch space, not a
           // place AI diffs are generated against base — the "local main is behind"
           // nudge is a false alarm there, so suppress it for director worktrees.
-          const isOrchestratorWorktree = (displayName ?? '').startsWith(ORCASTRATOR_DISPLAY_PREFIX)
+          // Why: classify off the persisted worktree displayName (the durable
+          // contract), not the caller's input which may be absent or diverge.
+          const isOrchestratorWorktree = (result.worktree.displayName ?? '').startsWith(
+            ORCASTRATOR_DISPLAY_PREFIX
+          )
           if (!isOrchestratorWorktree) {
             showLocalBaseRefUpdateSuggestionToast(result.localBaseRefUpdateSuggestion, {
               updateSettings: get().updateSettings,

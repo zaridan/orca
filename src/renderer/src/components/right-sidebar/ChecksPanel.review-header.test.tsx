@@ -33,7 +33,7 @@ function renderHeader({
   showSystemBrowserHint = true
 }: {
   canUnlinkPullRequest?: boolean
-  provider?: 'github' | 'gitlab'
+  provider?: 'github' | 'gitlab' | 'bitbucket' | 'azure-devops' | 'gitea'
   showSystemBrowserHint?: boolean
 } = {}): string {
   const isGitLab = provider === 'gitlab'
@@ -111,5 +111,17 @@ describe('ChecksPanelReviewHeader', () => {
     expect(markup).not.toContain('More PR actions')
     expect(markup).not.toContain('unlink PR')
     expect(markup).not.toContain('Link another PR')
+  })
+
+  it('labels non-GitHub PR providers by their own host instead of defaulting to GitHub', () => {
+    const markup = renderHeader({ provider: 'bitbucket' })
+
+    expect(markup).toContain('Open on Bitbucket')
+    expect(markup).not.toContain('Open on GitHub')
+    // Bitbucket is pull-request style: `#` notation, not GitLab's `!`.
+    expect(markup).toContain('#2964')
+    expect(markup).not.toContain('!2964')
+    // PR link management stays GitHub-only.
+    expect(markup).not.toContain('More PR actions')
   })
 })

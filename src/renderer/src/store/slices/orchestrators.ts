@@ -63,7 +63,12 @@ export const createOrchestratorsSlice: StateCreator<AppState, [], [], Orchestrat
     try {
       await get().removeWorktree(entry.worktreeId, true)
     } catch {
-      // Worktree may already be gone; the registry entry is removed regardless.
+      // Why: teardown failed, so the worktree likely still exists — restore the
+      // registry entry so the sidebar stays consistent with the actual worktree
+      // state instead of dropping a director that's still live.
+      set((s) => ({
+        orchestrators: [...s.orchestrators.filter((e) => e.id !== entry.id), entry]
+      }))
     }
   },
   reattachOrchestrators: () => {

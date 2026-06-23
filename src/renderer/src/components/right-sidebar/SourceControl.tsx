@@ -739,11 +739,6 @@ function SourceControlInner(): React.JSX.Element {
     activeWorktreeId ? s.activeGroupIdByWorktree[activeWorktreeId] : undefined
   )
   const worktreeMap = useWorktreeMap()
-  // Why: an Orcastrator's worktree is coordination scratch space — the director
-  // directs, it never commits to its own branch (workers open their own PRs), so
-  // the publish/PR view doesn't apply; render Mission Control instead. Shared hook
-  // so the Checks panel gates on the same rule.
-  const isOrchestratorWorktree = useIsOrchestratorActiveWorktree()
   const rightSidebarTab = useAppStore((s) => s.rightSidebarTab)
   const activeRepo = useRepoById(activeWorktree?.repoId ?? null)
   const entries = useAppStore((s) =>
@@ -5158,13 +5153,6 @@ function SourceControlInner(): React.JSX.Element {
       </div>
     )
   }
-  // Why: a director has no branch to publish — show its Mission Control console
-  // (the workers it spawned + their state) instead of the misleading "Branch not
-  // published / create a pull request" empty state.
-  if (isOrchestratorWorktree) {
-    return <OrchestratorMissionControl key={activeWorktree.id} worktreeId={activeWorktree.id} />
-  }
-
   const hasFilteredUncommittedEntries =
     filteredGrouped.staged.length > 0 ||
     filteredGrouped.unstaged.length > 0 ||
@@ -6046,7 +6034,21 @@ function SourceControlInner(): React.JSX.Element {
   )
 }
 
-const SourceControl = React.memo(SourceControlInner)
+// Why: gate the director check ABOVE SourceControlInner so a director worktree
+// never mounts its branch/status/review hooks and effects. A director has no
+// branch to publish — workers open their own PRs — so it renders Mission Control
+// (the workers it spawned + their state) instead of the publish/PR view. The
+// gate hook is shared so the Checks panel decides "is this a director?" the same way.
+function SourceControlGate(): React.JSX.Element {
+  const isOrchestratorWorktree = useIsOrchestratorActiveWorktree()
+  const activeWorktree = useActiveWorktree()
+  if (isOrchestratorWorktree && activeWorktree) {
+    return <OrchestratorMissionControl key={activeWorktree.id} worktreeId={activeWorktree.id} />
+  }
+  return <SourceControlInner />
+}
+
+const SourceControl = React.memo(SourceControlGate)
 export default SourceControl
 
 type CommitFailureFixSplitButtonProps = {
