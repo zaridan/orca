@@ -23,6 +23,10 @@ export type OrchestratorEntry = {
 export type OrchestratorsSlice = {
   orchestrators: OrchestratorEntry[]
   registerOrchestrator: (entry: OrchestratorEntry) => void
+  /** Optimistic in-memory rename of a director's display name. The durable
+   *  source of truth is the worktree displayName (prefixed) — callers must also
+   *  persist via updateWorktreeMeta so reattachOrchestrators reconstructs it. */
+  updateOrchestrator: (id: string, updates: Partial<Pick<OrchestratorEntry, 'projectName'>>) => void
   removeOrchestrator: (id: string) => void
   /** Close a director: tear down its dedicated worktree (git + checkout) and
    *  drop it from the registry. */
@@ -41,6 +45,10 @@ export const createOrchestratorsSlice: StateCreator<AppState, [], [], Orchestrat
   registerOrchestrator: (entry) =>
     set((s) => ({
       orchestrators: [...s.orchestrators.filter((e) => e.id !== entry.id), entry]
+    })),
+  updateOrchestrator: (id, updates) =>
+    set((s) => ({
+      orchestrators: s.orchestrators.map((e) => (e.id === id ? { ...e, ...updates } : e))
     })),
   removeOrchestrator: (id) =>
     set((s) => ({ orchestrators: s.orchestrators.filter((e) => e.id !== id) })),
@@ -71,11 +79,15 @@ export const createOrchestratorsSlice: StateCreator<AppState, [], [], Orchestrat
           continue
         }
         const project = state.projects.find((p) => p.sourceRepoIds.includes(repoId))
+        // Why: the prefixed worktree displayName is the durable source of truth,
+        // so a user's rename survives reattach. At launch it's `prefix +
+        // project.displayName`, so un-renamed directors reconstruct the same
+        // name; fall back to the project/repo only if no name survived the prefix.
+        const persistedName = worktree.displayName.slice(ORCASTRATOR_DISPLAY_PREFIX.length).trim()
         additions.push({
           id: worktree.id,
           projectId: project?.id ?? repoId,
-          projectName:
-            project?.displayName ?? worktree.displayName.slice(ORCASTRATOR_DISPLAY_PREFIX.length),
+          projectName: persistedName || project?.displayName || repoId,
           worktreeId: worktree.id,
           tabId: state.tabsByWorktree[worktree.id]?.[0]?.id ?? '',
           launchedAt: Date.now()

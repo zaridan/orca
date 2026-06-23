@@ -53,6 +53,18 @@ describe('orchestrators slice', () => {
     expect(store.getState().orchestrators).toHaveLength(0)
   })
 
+  it('updateOrchestrator renames the matching entry in place and leaves others untouched', () => {
+    const store = createTestStore()
+    store.getState().registerOrchestrator(entry({ id: 'w1', projectName: 'P1' }))
+    store.getState().registerOrchestrator(entry({ id: 'w2', worktreeId: 'w2', projectName: 'P2' }))
+
+    store.getState().updateOrchestrator('w1', { projectName: 'Renamed' })
+
+    const byId = Object.fromEntries(store.getState().orchestrators.map((e) => [e.id, e]))
+    expect(byId.w1.projectName).toBe('Renamed')
+    expect(byId.w2.projectName).toBe('P2')
+  })
+
   it('reattaches directors from existing worktrees by displayName prefix', () => {
     const store = createTestStore()
     store.setState({
@@ -75,6 +87,25 @@ describe('orchestrators slice', () => {
       projectId: 'proj1',
       projectName: 'My Project',
       tabId: 'tabA'
+    })
+  })
+
+  it('reattach prefers the persisted (renamed) worktree name over the project displayName', () => {
+    const store = createTestStore()
+    // A matching project exists with a DIFFERENT name; the worktree displayName
+    // carries the user's rename. Reattach must honor the rename, not the project.
+    store.setState({
+      worktreesByRepo: { repo1: [directorWorktree('repo1::orc', 'repo1', 'New Name')] },
+      projects: [project('proj1', 'repo1', 'Original Project Name')],
+      tabsByWorktree: {}
+    })
+
+    store.getState().reattachOrchestrators()
+
+    expect(store.getState().orchestrators[0]).toMatchObject({
+      worktreeId: 'repo1::orc',
+      projectId: 'proj1',
+      projectName: 'New Name'
     })
   })
 
