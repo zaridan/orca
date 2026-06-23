@@ -42,4 +42,29 @@ describe('selectSpawnedWorktreeIds', () => {
     const map = byId([lineage({ worktreeId: 'w1', parentWorktreeId: 'another-director' })])
     expect(selectSpawnedWorktreeIds('director', map, () => true)).toEqual([])
   })
+
+  // Why (F2 #13): the consumer half of the bridge. The coordinator's
+  // createWorktree records lineage with origin 'orchestration', capture source
+  // 'orchestration-context', and parentWorktreeId = the director worktree.
+  // This asserts Mission Control's selector discovers such a worker with no MC
+  // change — the producing half (coordinator emits this edge) is asserted in
+  // src/main/runtime/orchestration/coordinator.test.ts.
+  it('discovers a coordinator-created worktree-backed worker (F2 bridge)', () => {
+    const directorWorktreeId = 'director-wt'
+    const map = byId([
+      {
+        worktreeId: 'wt_child_0',
+        worktreeInstanceId: 'wt_child_0-inst',
+        parentWorktreeId: directorWorktreeId,
+        parentWorktreeInstanceId: `${directorWorktreeId}-inst`,
+        origin: 'orchestration',
+        capture: { source: 'orchestration-context', confidence: 'explicit' },
+        orchestrationRunId: 'run_abc',
+        taskId: 'task_abc',
+        coordinatorHandle: 'coordinator-deadbeef',
+        createdAt: 0
+      }
+    ])
+    expect(selectSpawnedWorktreeIds(directorWorktreeId, map, () => true)).toEqual(['wt_child_0'])
+  })
 })

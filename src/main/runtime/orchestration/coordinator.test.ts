@@ -5,8 +5,16 @@ import {
   Coordinator,
   DISPATCH_STALE_THRESHOLD,
   parseAllowStaleBaseFromSpec,
+  worktreeNameForTask,
   type CoordinatorRuntime
 } from './coordinator'
+import type { WorktreeLineage } from '../../../shared/types'
+
+// Why (F2 #13): the coordinator (main) produces the lineage edge here; Mission
+// Control's `selectSpawnedWorktreeIds` (renderer) consumes it. Asserting that
+// selector against the coordinator's exact lineage shape lives in the renderer
+// test (orchestrator-mission-control-data.test.ts) to respect the main↔renderer
+// project boundary — this test proves the producing half: parent === director.
 
 type DriftResult = {
   base: string
@@ -14,10 +22,19 @@ type DriftResult = {
   recentSubjects: string[]
 } | null
 
+type CreatedWorktree = {
+  worktreeId: string
+  parentWorktreeId: string
+  branch: string
+  taskId?: string
+  startupAgent?: string
+}
+
 function createMockRuntime(): CoordinatorRuntime & {
   sentMessages: { handle: string; text: string }[]
   terminals: { handle: string; worktreeId: string; connected: boolean; writable: boolean }[]
   createdTerminals: string[]
+  createdWorktrees: CreatedWorktree[]
   probeDriftCalls: string[]
   probeDriftResult: DriftResult
   setProbeDrift(result: DriftResult): void
@@ -32,6 +49,7 @@ function createMockRuntime(): CoordinatorRuntime & {
       writable: boolean
     }[],
     createdTerminals: [] as string[],
+    createdWorktrees: [] as CreatedWorktree[],
     probeDriftCalls: [] as string[],
     probeDriftResult: null as DriftResult,
     throwProbeDrift: null as Error | null,
@@ -45,11 +63,15 @@ function createMockRuntime(): CoordinatorRuntime & {
     async listTerminals() {
       return { terminals: mock.terminals }
     },
-    async createTerminal(_worktree?: string, opts?: { title?: string }) {
+    async createTerminal(worktree?: string, opts?: { title?: string }) {
       const handle = `term_worker_${mock.createdTerminals.length}`
       mock.createdTerminals.push(handle)
-      mock.terminals.push({ handle, worktreeId: 'wt1', connected: true, writable: true })
-      return { handle, worktreeId: 'wt1', title: opts?.title ?? '' }
+      // Why: in worktree-backed tests createTerminal is called with an
+      // `id:<worktreeId>` selector; reflect that worktree so the terminal lands
+      // in the right checkout. Falls back to 'wt1' for the legacy path.
+      const worktreeId = worktree?.replace(/^id:/, '') ?? 'wt1'
+      mock.terminals.push({ handle, worktreeId, connected: true, writable: true })
+      return { handle, worktreeId, title: opts?.title ?? '' }
     },
     async waitForTerminal(handle: string) {
       return { handle, condition: 'exit' }
@@ -60,9 +82,52 @@ function createMockRuntime(): CoordinatorRuntime & {
         throw mock.throwProbeDrift
       }
       return mock.probeDriftResult
+    },
+    // Why (F2 #13): records the lineage parent the coordinator requested and
+    // hands back a terminal in the new child worktree, mirroring the real
+    // OrcaRuntimeService.createWorktree adapter contract.
+    async createWorktree(opts: {
+      parentWorktree: string
+      name: string
+      taskId?: string
+      startup?: { agent: string }
+    }): Promise<{ worktreeId: string; branch: string; terminalHandle?: string }> {
+      const idx = mock.createdWorktrees.length
+      const worktreeId = `wt_child_${idx}`
+      const parentWorktreeId = opts.parentWorktree.replace(/^id:/, '')
+      const handle = `term_wt_${idx}`
+      mock.createdWorktrees.push({
+        worktreeId,
+        parentWorktreeId,
+        branch: opts.name,
+        taskId: opts.taskId,
+        ...(opts.startup ? { startupAgent: opts.startup.agent } : {})
+      })
+      mock.terminals.push({ handle, worktreeId, connected: true, writable: true })
+      return { worktreeId, branch: opts.name, terminalHandle: handle }
     }
   }
   return mock
+}
+
+// Why (F2 #13): build the renderer's `worktreeLineageById` map from what the
+// mock recorded, so the test exercises the SAME selectSpawnedWorktreeIds path
+// Mission Control uses to discover a director's workers.
+function lineageMapFromCreated(created: CreatedWorktree[]): Record<string, WorktreeLineage> {
+  return Object.fromEntries(
+    created.map((wt, i) => [
+      wt.worktreeId,
+      {
+        worktreeId: wt.worktreeId,
+        worktreeInstanceId: `${wt.worktreeId}-inst`,
+        parentWorktreeId: wt.parentWorktreeId,
+        parentWorktreeInstanceId: `${wt.parentWorktreeId}-inst`,
+        origin: 'orchestration',
+        capture: { source: 'orchestration-context', confidence: 'explicit' },
+        createdAt: i
+      } satisfies WorktreeLineage
+    ])
+  )
 }
 
 function insertWorkerDone(
@@ -560,6 +625,122 @@ describe('Coordinator', () => {
     expect(result.status).toBe('failed')
   })
 
+  describe('worktree-backed dispatch (F2 #13)', () => {
+    it('creates a lineage-visible child worktree (parent = director) that Mission Control finds', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+      const directorWorktreeId = 'director-wt'
+
+      const task = db.createTask({ spec: 'implement the bridge' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'build it',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 50,
+        worktree: directorWorktreeId,
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+
+      const runPromise = coordinator.run()
+
+      // Wait for the worktree to be created + dispatch to happen.
+      await new Promise((r) => {
+        setTimeout(r, 100)
+      })
+
+      // A worktree was created with lineage parent = the director.
+      expect(runtime.createdWorktrees).toHaveLength(1)
+      const child = runtime.createdWorktrees[0]
+      expect(child.parentWorktreeId).toBe(directorWorktreeId)
+      expect(child.taskId).toBe(task.id)
+      expect(child.startupAgent).toBe('claude')
+
+      // The preamble was dispatched into the child worktree's terminal (no bare
+      // terminal in the director was created on this path).
+      expect(runtime.createdTerminals).toHaveLength(0)
+      expect(runtime.sentMessages.some((m) => m.handle === `term_wt_0`)).toBe(true)
+
+      // The drift pre-flight targeted the NEW track worktree, not the director.
+      expect(runtime.probeDriftCalls).toContain(`id:${child.worktreeId}`)
+      expect(runtime.probeDriftCalls).not.toContain(directorWorktreeId)
+
+      // The produced lineage edge is exactly what Mission Control keys on
+      // (parentWorktreeId === directorWorktreeId). The selectSpawnedWorktreeIds
+      // consumer side is asserted in the renderer test against this same shape.
+      const lineageById = lineageMapFromCreated(runtime.createdWorktrees)
+      expect(lineageById[child.worktreeId].parentWorktreeId).toBe(directorWorktreeId)
+
+      insertWorkerDone(db, { taskId: task.id })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+      expect(result.completedTasks).toContain(task.id)
+    })
+
+    it('default-off path is unchanged: dispatches to a bare terminal, never creates a worktree', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+      // A pre-existing idle terminal in the director worktree (legacy flow).
+      runtime.terminals = [
+        { handle: 'term_a', worktreeId: 'director-wt', connected: true, writable: true }
+      ]
+
+      const task = db.createTask({ spec: 'legacy work' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'build it',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 50,
+        worktree: 'director-wt'
+        // worktreeBacked omitted → default false
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 100)
+      })
+
+      // Legacy path: no worktree was created; the existing terminal got the work.
+      expect(runtime.createdWorktrees).toHaveLength(0)
+      expect(runtime.sentMessages.some((m) => m.handle === 'term_a')).toBe(true)
+
+      insertWorkerDone(db, { taskId: task.id, from: 'term_a' })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+      expect(result.completedTasks).toContain(task.id)
+    })
+
+    it('skips worktree-backed dispatch (no orphan worktrees) when no director worktree is set', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+      const logs: string[] = []
+
+      db.createTask({ spec: 'needs a parent' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'build it',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktreeBacked: true,
+        // worktree (director) deliberately omitted → no lineage parent
+        onLog: (m) => logs.push(m)
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+      coordinator.stop()
+      await runPromise
+
+      // No parentless worktrees were created; the guard logged and skipped.
+      expect(runtime.createdWorktrees).toHaveLength(0)
+      expect(logs.some((m) => m.includes('worktree-backed dispatch requires a --worktree'))).toBe(
+        true
+      )
+    })
+  })
+
   describe('stale-base dispatch guard', () => {
     it('threads drift into the preamble when behind > 0 and under threshold', async () => {
       db = new OrchestrationDb(':memory:')
@@ -761,6 +942,32 @@ allow-stale-base: true`
       const sent = runtime.sentMessages.find((m) => m.handle === 'term_a')
       expect(sent!.text).not.toContain('--- BASE DRIFT ---')
     })
+  })
+})
+
+describe('worktreeNameForTask', () => {
+  it('builds a branch-safe slug from the title with a unique task-id suffix', () => {
+    const name = worktreeNameForTask({
+      id: 'task_abc123',
+      spec: 'ignored',
+      task_title: 'Implement the Bridge!'
+    })
+    expect(name).toBe('orch-implement-the-bridge-abc123')
+    expect(name).toMatch(/^[a-z0-9-]+$/)
+  })
+
+  it('falls back to the spec first line when there is no title', () => {
+    const name = worktreeNameForTask({
+      id: 'task_def456',
+      spec: 'Fix flaky test\nmore detail here',
+      task_title: null
+    })
+    expect(name).toBe('orch-fix-flaky-test-def456')
+  })
+
+  it('uses only the task id when the source has no usable characters', () => {
+    const name = worktreeNameForTask({ id: 'task_xyz789', spec: '!!! ???', task_title: null })
+    expect(name).toBe('orch-xyz789')
   })
 })
 
