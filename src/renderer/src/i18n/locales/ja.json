@@ -1596,7 +1596,8 @@
         "ff90d0abc7": "{{value0}} からワークスペースを開始",
         "fe28c9821f": "view",
         "8d1e17a3ef": "{{value0}} を GitHub で開く",
-        "4ac8ff2275": "{{value0}} を Jira で開く"
+        "4ac8ff2275": "{{value0}} を Jira で開く",
+        "40eaf2c27c": "Details"
       },
       "Terminal": {
         "73768427cf": "閉じる",

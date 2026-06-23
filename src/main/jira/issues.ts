@@ -68,10 +68,38 @@ function clampLimit(limit: number | undefined, fallback = 30): number {
   return Math.min(Math.max(1, Number.isFinite(limit) ? Number(limit) : fallback), 100)
 }
 
-function shouldSurfaceSiteFailure(selection: JiraSiteSelection | null | undefined): boolean {
-  // A specific-site selection propagates failures so the UI can show a real
-  // error; an 'all' fan-out stays resilient so one bad site can't blank the rest.
-  return selection !== 'all'
+type JiraIssueSearchFailure = {
+  error: unknown
+  auth: boolean
+}
+
+function getErrorStatus(error: unknown): number | null {
+  if (!error || typeof error !== 'object' || !('status' in error)) {
+    return null
+  }
+  const status = (error as { status?: unknown }).status
+  return typeof status === 'number' && Number.isFinite(status) ? status : null
+}
+
+function toIssueSearchFailureError(error: unknown): unknown {
+  const status = getErrorStatus(error)
+  if (
+    status === null ||
+    !(error instanceof Error) ||
+    error.message.startsWith(`Error ${status}:`)
+  ) {
+    return error
+  }
+  return new Error(`Error ${status}: ${error.message}`)
+}
+
+function shouldSurfaceSiteFailure(
+  selection: JiraSiteSelection | null | undefined,
+  entryCount: number
+): boolean {
+  // getClients can resolve an omitted selection to the persisted 'all' choice;
+  // multi-entry reads need the same resilient fan-out policy as explicit 'all'.
+  return selection !== 'all' && entryCount <= 1
 }
 
 function asRecord(value: unknown): JiraRecord {
@@ -347,21 +375,23 @@ export async function searchIssues(
     return []
   }
   const safeLimit = clampLimit(limit)
-  const failures: unknown[] = []
+  const failures: (JiraIssueSearchFailure | undefined)[] = Array.from({ length: entries.length })
+  const surfaceSiteFailure = shouldSurfaceSiteFailure(siteId, entries.length)
   const results = await Promise.all(
-    entries.map(async (entry) => {
+    entries.map(async (entry, index) => {
       await acquire()
       try {
         return await searchIssuesForClient(entry, jql.trim(), safeLimit)
       } catch (error) {
-        if (isAuthError(error)) {
+        const authFailure = isAuthError(error)
+        if (authFailure) {
           clearToken(entry.site.id)
         }
-        if (shouldSurfaceSiteFailure(siteId)) {
-          throw error
+        if (surfaceSiteFailure) {
+          throw toIssueSearchFailureError(error)
         }
         console.warn('[jira] searchIssues failed:', error)
-        failures.push(error)
+        failures[index] = { error: toIssueSearchFailureError(error), auth: authFailure }
         return [] as JiraIssue[]
       } finally {
         release()
@@ -370,8 +400,11 @@ export async function searchIssues(
   )
   // 'all' fan-out: only surface an error when every connected site failed, so a
   // partial success (or a genuinely empty result) is not reported as an error.
-  if (failures.length === entries.length) {
-    throw failures[0]
+  const recordedFailures = failures.filter(
+    (failure): failure is JiraIssueSearchFailure => failure !== undefined
+  )
+  if (recordedFailures.length === entries.length) {
+    throw (recordedFailures.find((failure) => !failure.auth) ?? recordedFailures[0]).error
   }
   return entries.length === 1
     ? results.flat().slice(0, safeLimit)
@@ -396,7 +429,7 @@ export async function getIssue(
     } catch (error) {
       if (isAuthError(error)) {
         clearToken(entry.site.id)
-        if (shouldSurfaceSiteFailure(siteId)) {
+        if (shouldSurfaceSiteFailure(siteId, entries.length)) {
           throw error
         }
       } else {
@@ -598,7 +631,7 @@ export async function listProjects(siteId?: JiraSiteSelection | null): Promise<J
       } catch (error) {
         if (isAuthError(error)) {
           clearToken(entry.site.id)
-          if (shouldSurfaceSiteFailure(siteId)) {
+          if (shouldSurfaceSiteFailure(siteId, entries.length)) {
             throw error
           }
         } else {

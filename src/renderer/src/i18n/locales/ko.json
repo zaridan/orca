@@ -1596,7 +1596,8 @@
         "ff90d0abc7": "{{value0}}에서 워크스페이스 시작",
         "fe28c9821f": "보기",
         "8d1e17a3ef": "GitHub에서 {{value0}} 열기",
-        "4ac8ff2275": "Jira에서 {{value0}} 열기"
+        "4ac8ff2275": "Jira에서 {{value0}} 열기",
+        "40eaf2c27c": "Details"
       },
       "Terminal": {
         "73768427cf": "닫기",
