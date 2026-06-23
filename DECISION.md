@@ -64,9 +64,7 @@ across runs.
 - **Atomic, per-target run-start** (schema v6 → v7): concurrent Orcastrators in
   different repos/worktrees are a supported product feature, so the guard must
   block only a *duplicate run on the same target*, not all concurrency.
-  `coordinator_runs.target_key` identifies the run's repo/worktree (the worktree
-  selector resolved to a stable worktree id; the raw selector if it can't resolve;
-  NULL when no worktree was given — those runs share one slot).
+  `coordinator_runs.target_key` identifies the run's repo/worktree.
   `startCoordinatorRun` wraps the check+insert in **`BEGIN IMMEDIATE`** and rejects
   only when a `status='running'` row exists **for the same `target_key`**, throwing
   `CoordinatorRunConflictError` (mapped to a friendly RPC error). `BEGIN IMMEDIATE`
@@ -74,8 +72,35 @@ across runs.
   the check+insert is serialized across connections/processes, while leaving the
   table free to hold multiple concurrent `running` rows on *different* targets — a
   global `WHERE status='running'` unique index could not.
+- **Per-target task ownership** (schema v7 → v8): the target boundary must reach
+  task ownership, or concurrent runs poach each other's tasks. `tasks.target_key`
+  is stamped at `taskCreate` (resolved from the creating terminal's worktree);
+  `adoptUnownedTasks(runId, targetKey)` claims only same-target unowned tasks; and
+  `taskCreate`'s mid-run stamping uses `getActiveCoordinatorRunForTarget` (not the
+  global latest run). So run A (target X) and run B (target Y) adopt disjoint sets.
+- **Stable target identity / fail-closed resolution**: `target_key` must be the
+  *same* string for a target everywhere, or the guard can't see a duplicate.
+  `resolveOrchestrationTargetKey` resolves a worktree selector to `worktree:<id>`
+  and **fails closed** (throws → the run is refused) if it can't, rather than
+  guessing a divergent key that would let two coordinators share a target. Runs
+  with no `--worktree` resolve to `null` and share one slot. Tasks resolve their
+  key from the creating terminal's worktree id (the same stable id), falling back
+  to `null` only when the handle can't resolve (the task then shares the null slot).
 - Cross-run supervisor queries (push-on-idle, exit attribution, activity dots)
   stay handle-based / fan over `listCoordinatorRuns` — the minimal cross-run surface.
 
 Isolation guarantee is identical to A for the leaking tables (tasks, dispatches,
 gates) and the message inbox, with far less plumbing and no new shared routing layer.
+
+### Known limitations (acknowledged, out of F1 scope)
+
+- Runs started with **no `--worktree`** share a single null-target slot, so two
+  no-selector Orcastrators in different repos can't run concurrently (the second
+  is blocked). Safe-by-default; pass `--worktree` to run them in parallel.
+- `failActiveDispatchOnExit` routes the exit escalation to the dispatch's own run;
+  for a **legacy dispatch with NULL `coordinator_run_id`** (pre-v6) it falls back
+  to the global latest running run, which under concurrency may misroute. Narrow
+  (only un-stamped rows — new dispatches always carry their run).
+- `orchestration.runStop` stops the most-recently-started run (single module-scope
+  `activeCoordinator`); per-run stop selection is **F4**'s job.
+- Orphaned `status='running'` rows after a crash are **F3**'s reconcile job.

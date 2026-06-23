@@ -125,7 +125,7 @@ describe('orchestration per-run isolation (issue #12)', () => {
       expect(preTask.coordinator_run_id).toBeNull()
 
       const runA = d.createCoordinatorRun({ spec: 'A', coordinatorHandle: 'coordinator-a' })
-      d.adoptUnownedTasks(runA.id)
+      d.adoptUnownedTasks(runA.id, null)
 
       expect(d.getTask(preTask.id)?.coordinator_run_id).toBe(runA.id)
     })
@@ -135,7 +135,7 @@ describe('orchestration per-run isolation (issue #12)', () => {
       const { runA, runB } = twoConcurrentRuns(d)
       const ownedByA = d.createTask({ spec: 'A-1', coordinatorRunId: runA })
 
-      d.adoptUnownedTasks(runB)
+      d.adoptUnownedTasks(runB, null)
 
       // Run A is still running, so its task is untouched (no poaching).
       expect(d.getTask(ownedByA.id)?.coordinator_run_id).toBe(runA)
@@ -148,9 +148,55 @@ describe('orchestration per-run isolation (issue #12)', () => {
       d.updateCoordinatorRun(runA.id, 'failed')
 
       const runB = d.createCoordinatorRun({ spec: 'B', coordinatorHandle: 'coordinator-b' })
-      d.adoptUnownedTasks(runB.id)
+      d.adoptUnownedTasks(runB.id, null)
 
       expect(d.getTask(leftover.id)?.coordinator_run_id).toBe(runB.id)
+    })
+
+    // Round-3 blocker repro: per-target run-start (round 2) without per-target
+    // task ownership lets the first concurrent run swallow the other target's
+    // unowned tasks. Each run must adopt ONLY its own target's tasks.
+    it('adopts only its own target tasks under concurrency (no cross-target poaching)', () => {
+      const d = createDb()
+      // Unowned tasks for two distinct targets, created before any run.
+      const xTask = d.createTask({ spec: 'X-1', targetKey: 'worktree:x' })
+      const yTask = d.createTask({ spec: 'Y-1', targetKey: 'worktree:y' })
+      expect(xTask.target_key).toBe('worktree:x')
+
+      // Two genuinely concurrent runs on different targets (both running).
+      const runA = d.startCoordinatorRun({
+        spec: 'A',
+        coordinatorHandle: 'coordinator-a',
+        targetKey: 'worktree:x'
+      })
+      const runB = d.startCoordinatorRun({
+        spec: 'B',
+        coordinatorHandle: 'coordinator-b',
+        targetKey: 'worktree:y'
+      })
+
+      d.adoptUnownedTasks(runA.id, 'worktree:x')
+      d.adoptUnownedTasks(runB.id, 'worktree:y')
+
+      // Disjoint: neither run poached the other's task.
+      expect(d.getTask(xTask.id)?.coordinator_run_id).toBe(runA.id)
+      expect(d.getTask(yTask.id)?.coordinator_run_id).toBe(runB.id)
+      expect(d.listTasks({ coordinatorRunId: runA.id }).map((t) => t.spec)).toEqual(['X-1'])
+      expect(d.listTasks({ coordinatorRunId: runB.id }).map((t) => t.spec)).toEqual(['Y-1'])
+    })
+
+    it('does not adopt a different target unowned task (target mismatch stays NULL)', () => {
+      const d = createDb()
+      const xTask = d.createTask({ spec: 'X-1', targetKey: 'worktree:x' })
+
+      const runB = d.createCoordinatorRun({
+        spec: 'B',
+        coordinatorHandle: 'coordinator-b',
+        targetKey: 'worktree:y'
+      })
+      d.adoptUnownedTasks(runB.id, 'worktree:y')
+
+      expect(d.getTask(xTask.id)?.coordinator_run_id).toBeNull()
     })
   })
 

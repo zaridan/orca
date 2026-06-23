@@ -1352,27 +1352,72 @@ describe('orchestration RPC methods', () => {
 
       expect(startSpy.mock.calls[0][0].targetKey).toBe('worktree:abc')
     })
+
+    it('refuses to start when the worktree cannot be resolved (fails closed)', async () => {
+      setup()
+      // resolveOrchestrationTargetKey fails closed; the handler must refuse
+      // rather than start a run with a guess-key that could clash on the target.
+      vi.spyOn(runtime, 'resolveOrchestrationTargetKey').mockRejectedValue(
+        new Error('selector_not_found')
+      )
+      const startSpy = vi.spyOn(db, 'startCoordinatorRun')
+
+      await expect(call('orchestration.run', { spec: 'x', worktree: 'id:gone' })).rejects.toThrow(
+        /did not resolve to a known worktree/
+      )
+      expect(startSpy).not.toHaveBeenCalled()
+    })
   })
 
   describe('orchestration.taskCreate run stamping (#12)', () => {
-    it('stamps the active run on tasks created mid-run', async () => {
+    it('stamps the active same-target run on tasks created mid-run', async () => {
       setup()
-      const run = db.createCoordinatorRun({ spec: 'go', coordinatorHandle: 'coordinator-bbb' })
+      vi.spyOn(runtime, 'resolveOrchestrationTargetKeyForTerminal').mockResolvedValue('worktree:w1')
+      const run = db.createCoordinatorRun({
+        spec: 'go',
+        coordinatorHandle: 'coordinator-bbb',
+        targetKey: 'worktree:w1'
+      })
 
       const result = (await call('orchestration.taskCreate', {
-        spec: 'subtask created during the run'
+        spec: 'subtask created during the run',
+        callerTerminalHandle: 'term_w1'
       })) as { task: { id: string } }
 
       expect(db.getTask(result.task.id)?.coordinator_run_id).toBe(run.id)
+      expect(db.getTask(result.task.id)?.target_key).toBe('worktree:w1')
     })
 
-    it('leaves tasks unowned when no run is active (adopted at run-start)', async () => {
+    it('does NOT stamp a run on a different target (no cross-target poaching)', async () => {
+      setup()
+      // An active run exists, but on a different target than the task's.
+      db.createCoordinatorRun({
+        spec: 'other',
+        coordinatorHandle: 'coordinator-other',
+        targetKey: 'worktree:other'
+      })
+      vi.spyOn(runtime, 'resolveOrchestrationTargetKeyForTerminal').mockResolvedValue(
+        'worktree:mine'
+      )
+
+      const result = (await call('orchestration.taskCreate', {
+        spec: 'my task',
+        callerTerminalHandle: 'term_mine'
+      })) as { task: { id: string } }
+
+      // Stamped with its own target, left unowned for its own run to adopt.
+      expect(db.getTask(result.task.id)?.target_key).toBe('worktree:mine')
+      expect(db.getTask(result.task.id)?.coordinator_run_id).toBeNull()
+    })
+
+    it('leaves tasks unowned/untargeted when no caller terminal resolves', async () => {
       setup()
       const result = (await call('orchestration.taskCreate', {
         spec: 'pre-run task'
       })) as { task: { id: string } }
 
       expect(db.getTask(result.task.id)?.coordinator_run_id).toBeNull()
+      expect(db.getTask(result.task.id)?.target_key).toBeNull()
     })
   })
 
