@@ -655,6 +655,11 @@ export class OrchestrationDb {
   }): (TaskRow & {
     assignee_handle: string | null
     dispatch_id: string | null
+    // Why (#6 O1): the active dispatch's lifecycle + liveness, surfaced so the
+    // Control Panel sync can render per-worker state (stale heartbeat, etc.).
+    // Aliased to avoid colliding with the task's own `status` from `t.*`.
+    dispatch_status: DispatchStatus | null
+    dispatch_last_heartbeat_at: string | null
   })[] {
     const whereClauses: string[] = []
     const params: Database.BindValue[] = []
@@ -672,8 +677,10 @@ export class OrchestrationDb {
     const sql = `
       SELECT
         t.*,
-        d.assignee_handle AS assignee_handle,
-        d.id              AS dispatch_id
+        d.assignee_handle    AS assignee_handle,
+        d.id                 AS dispatch_id,
+        d.status             AS dispatch_status,
+        d.last_heartbeat_at  AS dispatch_last_heartbeat_at
       FROM tasks t
       LEFT JOIN (
         SELECT dc.*
@@ -691,6 +698,8 @@ export class OrchestrationDb {
     return this.db.prepare(sql).all(...params) as (TaskRow & {
       assignee_handle: string | null
       dispatch_id: string | null
+      dispatch_status: DispatchStatus | null
+      dispatch_last_heartbeat_at: string | null
     })[]
   }
 

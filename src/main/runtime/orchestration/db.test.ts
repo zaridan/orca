@@ -284,6 +284,28 @@ describe('OrchestrationDb', () => {
       expect(dispatchedRow?.dispatch_id).toBe(ctx.id)
     })
 
+    it('listTasksWithDispatch surfaces the active dispatch status + heartbeat (#6)', () => {
+      const d = createDb()
+      const task = d.createTask({ spec: 'active task' })
+      const ctx = d.createDispatchContext(task.id, 'term_worker')
+      d.recordHeartbeat(ctx.id, '2026-06-01T00:00:00.000Z')
+
+      const row = d.listTasksWithDispatch().find((r) => r.id === task.id)
+      expect(row?.dispatch_status).toBe('dispatched')
+      expect(row?.dispatch_last_heartbeat_at).toBe('2026-06-01T00:00:00.000Z')
+    })
+
+    it('listTasksWithDispatch scopes to a coordinator run (#6/#12 — runs do not bleed)', () => {
+      const d = createDb()
+      const runA = d.createCoordinatorRun({ spec: 'A', coordinatorHandle: 'term_coord_a' })
+      const runB = d.createCoordinatorRun({ spec: 'B', coordinatorHandle: 'term_coord_b' })
+      const taskA = d.createTask({ spec: 'a task', coordinatorRunId: runA.id })
+      d.createTask({ spec: 'b task', coordinatorRunId: runB.id })
+
+      const rowsA = d.listTasksWithDispatch({ coordinatorRunId: runA.id })
+      expect(rowsA.map((r) => r.id)).toEqual([taskA.id])
+    })
+
     it('listTasksWithDispatch does not surface completed dispatches', () => {
       const d = createDb()
       const task = d.createTask({ spec: 'work' })

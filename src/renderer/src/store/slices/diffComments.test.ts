@@ -132,6 +132,7 @@ import { createRateLimitSlice } from './rate-limits'
 import { createSshSlice } from './ssh'
 import { createAgentStatusSlice } from './agent-status'
 import { createOrchestrationActivitySlice } from './orchestration-activity'
+import { createOrchestrationRunDagSlice } from './orchestration-run-dag'
 import { createDiffCommentsSlice } from './diffComments'
 import { createDetectedAgentsSlice } from './detected-agents'
 import { createWorktreeNavHistorySlice } from './worktree-nav-history'
@@ -170,6 +171,7 @@ function createTestStore() {
     ...createSshSlice(...a),
     ...createAgentStatusSlice(...a),
     ...createOrchestrationActivitySlice(...a),
+    ...createOrchestrationRunDagSlice(...a),
     ...createDiffCommentsSlice(...a),
     ...createDetectedAgentsSlice(...a),
     ...createWorktreeNavHistorySlice(...a),

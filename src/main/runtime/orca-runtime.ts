@@ -40,6 +40,11 @@ import { homedir } from 'os'
 import { isAbsolute, join, resolve } from 'path'
 import { mkdir, readFile, readdir, rm, stat } from 'fs/promises'
 import { OrchestrationDb } from './orchestration/db'
+import {
+  buildRunDagSnapshot,
+  indexLatestWorkerSignals,
+  RUN_DAG_SIGNAL_SCAN_LIMIT
+} from './orchestration/run-dag-snapshot'
 import { formatMessagesForInjection } from './orchestration/formatter'
 import type {
   Automation,
@@ -273,6 +278,7 @@ import type {
   RuntimeSyncWindowGraph,
   RuntimeWorktreeListResult,
   OrchestrationActivity,
+  OrchestrationRunDag,
   BrowserTabInfo,
   BrowserScreencastResult
 } from '../../shared/runtime-types'
@@ -2737,10 +2743,12 @@ export class OrcaRuntimeService {
 
     const agentOrchestrationByPaneKey = this.buildAgentOrchestrationByPaneKey()
     const orchestrationActivityByPaneKey = this.buildOrchestrationActivityByPaneKey()
+    const orchestrationRunDagByPaneKey = this.buildOrchestrationRunDagByPaneKey()
     return {
       ...this.getStatus(),
       ...(agentOrchestrationByPaneKey ? { agentOrchestrationByPaneKey } : {}),
-      ...(orchestrationActivityByPaneKey ? { orchestrationActivityByPaneKey } : {})
+      ...(orchestrationActivityByPaneKey ? { orchestrationActivityByPaneKey } : {}),
+      ...(orchestrationRunDagByPaneKey ? { orchestrationRunDagByPaneKey } : {})
     }
   }
 
@@ -17639,6 +17647,60 @@ export class OrcaRuntimeService {
       }
     }
     return Object.keys(activityByPaneKey).length > 0 ? activityByPaneKey : undefined
+  }
+
+  // Why (#6 O1): sync each running coordinator's live task DAG (tasks + active
+  // dispatch detail + latest worker signal) keyed by coordinator paneKey, so
+  // Mission Control can render the DAG instead of only the aggregate counts.
+  // Run-scoped per #12 so two concurrent runs sharing the DB never bleed.
+  private buildOrchestrationRunDagByPaneKey(): Record<string, OrchestrationRunDag> | undefined {
+    const db = this.getOrchestrationDbIfAvailable()
+    // Why: same defensive guards as the activity builder — these methods exist on
+    // the real DB but may be absent on partial fakes in tests.
+    if (!db?.listCoordinatorRuns || !db.listTasksWithDispatch || !db.getAllMessagesForHandle) {
+      return undefined
+    }
+    const runningRuns = db.listCoordinatorRuns({ status: 'running' })
+    if (runningRuns.length === 0) {
+      return undefined
+    }
+    // Why: same hung threshold as the activity builder so the DAG's per-task
+    // "stalled" read agrees with the aggregate stalled count.
+    const staleThresholdIso = new Date(Date.now() - ORCHESTRATION_HUNG_THRESHOLD_MS).toISOString()
+
+    const dagByPaneKey: Record<string, OrchestrationRunDag> = {}
+    for (const run of runningRuns) {
+      const paneKey = this.getPaneKeyForTerminalHandle(run.coordinator_handle)
+      // Why: skip runs whose coordinator pane is not in this window — no row here.
+      if (!paneKey) {
+        continue
+      }
+      const tasks = db.listTasksWithDispatch({ coordinatorRunId: run.id })
+      // Why: worker_done/heartbeat are addressed to the run's coordinator handle,
+      // so this scopes signals to the run without a run column on messages.
+      const signalsByDispatchId = indexLatestWorkerSignals(
+        db.getAllMessagesForHandle(run.coordinator_handle, RUN_DAG_SIGNAL_SCAN_LIMIT, [
+          'heartbeat',
+          'worker_done'
+        ])
+      )
+      const dag = buildRunDagSnapshot({
+        runId: run.id,
+        // Recipe directors (#9) will populate this; LLM directors have no recipe.
+        recipe: null,
+        tasks,
+        staleThresholdIso,
+        signalsByDispatchId,
+        resolveAgent: (handle) => this.getLivePtyForHandle(handle)?.pty.launchAgent ?? null
+      })
+      if (dag.truncatedTaskCount > 0) {
+        console.warn(
+          `[orchestration] run ${run.id} DAG truncated: ${dag.truncatedTaskCount} task(s) dropped from sync payload`
+        )
+      }
+      dagByPaneKey[paneKey] = dag
+    }
+    return Object.keys(dagByPaneKey).length > 0 ? dagByPaneKey : undefined
   }
 
   private getAgentStatusOrchestrationContextForHandle(
