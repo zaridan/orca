@@ -1450,6 +1450,109 @@ describe('orchestration RPC methods', () => {
       expect(db.getTask(result.task.id)?.coordinator_run_id).toBeNull()
       expect(db.getTask(result.task.id)?.target_key).toBeNull()
     })
+
+    it('stamps target_key from --target-worktree (#9 recipe director path)', async () => {
+      setup()
+      // The renderer recipe director has the director worktree id, not a terminal
+      // handle, so it passes a worktree selector. It resolves through the SAME
+      // resolveOrchestrationTargetKey the run uses, so the keys match for adoption.
+      const targetSpy = vi
+        .spyOn(runtime, 'resolveOrchestrationTargetKey')
+        .mockResolvedValue('worktree:director1')
+      const terminalSpy = vi.spyOn(runtime, 'resolveOrchestrationTargetKeyForTerminal')
+
+      const result = (await call('orchestration.taskCreate', {
+        spec: 'implement',
+        targetWorktree: 'id:director1'
+      })) as { task: { id: string } }
+
+      expect(targetSpy).toHaveBeenCalledWith('id:director1')
+      // --target-worktree wins: the terminal resolver is not consulted.
+      expect(terminalSpy).not.toHaveBeenCalled()
+      expect(db.getTask(result.task.id)?.target_key).toBe('worktree:director1')
+    })
+
+    it('refuses a task whose --target-worktree does not resolve (fail closed)', async () => {
+      setup()
+      vi.spyOn(runtime, 'resolveOrchestrationTargetKey').mockRejectedValue(
+        new Error('selector_not_found')
+      )
+
+      await expect(
+        call('orchestration.taskCreate', { spec: 'x', targetWorktree: 'id:gone' })
+      ).rejects.toThrow(/selector_not_found/)
+    })
+  })
+
+  describe('orchestration.taskCreate ↔ run target_key adoption (#9 end-to-end)', () => {
+    // Why (#9, F1 clash seam): the task path (taskCreate --target-worktree) and the
+    // run path (orchestration.run --worktree) must resolve the SAME target_key, or
+    // run-start adoption silently fails to claim the task and the recipe never
+    // dispatches. These tests prove the binding through the REAL resolver and the
+    // REAL db.adoptUnownedTasks — not a mocked resolver returning a matched literal.
+    // Only the lowest-level filesystem worktree lookup is stubbed (id:X → worktree
+    // X); resolveOrchestrationTargetKey and adoptUnownedTasks run their real code.
+    function stubWorktreeLookup(): void {
+      ;(
+        runtime as unknown as {
+          resolveWorktreeSelector: (selector: string) => Promise<{ id: string }>
+        }
+      ).resolveWorktreeSelector = async (selector) => ({ id: selector.replace(/^id:/, '') })
+    }
+
+    it('adopts a task stamped via --target-worktree into a run on the same worktree', async () => {
+      setup()
+      stubWorktreeLookup()
+
+      // Task path: the renderer recipe director stamps the task by worktree id.
+      const { task } = (await call('orchestration.taskCreate', {
+        spec: 'implement',
+        targetWorktree: 'id:W'
+      })) as { task: { id: string; target_key: string | null } }
+
+      // Run path: resolve target_key the EXACT way orchestration.run does, start
+      // the run, then adopt the EXACT way the coordinator's executeLoop does.
+      const runTargetKey = await runtime.resolveOrchestrationTargetKey('id:W')
+      const run = db.startCoordinatorRun({
+        spec: 'recipe:implement_then_review',
+        coordinatorHandle: 'coordinator-e2e',
+        targetKey: runTargetKey,
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+      const bound = db.adoptUnownedTasks(run.id, db.getCoordinatorRun(run.id)?.target_key ?? null)
+
+      // Both paths resolved worktree:W → adoption binds the task to the run.
+      expect(task.target_key).toBe('worktree:W')
+      expect(bound).toBe(1)
+      expect(db.getTask(task.id)?.coordinator_run_id).toBe(run.id)
+    })
+
+    it('does NOT adopt a task stamped to a different worktree (fails if keys ever diverge)', async () => {
+      setup()
+      stubWorktreeLookup()
+
+      // Stamped to a DIFFERENT worktree than the run targets. This is the negative
+      // control: it makes the positive test meaningful — if taskCreate and run ever
+      // resolved the same key for different worktree inputs (the divergence we
+      // guard against), this task would wrongly bind and this assertion would fail.
+      const { task } = (await call('orchestration.taskCreate', {
+        spec: 'implement',
+        targetWorktree: 'id:OTHER'
+      })) as { task: { id: string } }
+
+      const runTargetKey = await runtime.resolveOrchestrationTargetKey('id:W')
+      const run = db.startCoordinatorRun({
+        spec: 'recipe',
+        coordinatorHandle: 'coordinator-e2e-2',
+        targetKey: runTargetKey,
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+      db.adoptUnownedTasks(run.id, db.getCoordinatorRun(run.id)?.target_key ?? null)
+
+      expect(db.getTask(task.id)?.coordinator_run_id).toBeNull()
+    })
   })
 
   describe('orchestration.reset', () => {

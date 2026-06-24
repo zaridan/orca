@@ -128,7 +128,12 @@ const TaskCreateParams = z.object({
   displayName: OptionalString,
   deps: OptionalString,
   parent: OptionalString,
-  callerTerminalHandle: OptionalString
+  callerTerminalHandle: OptionalString,
+  // Why (#9): the recipe director runs in the renderer and holds the director
+  // worktree id, not a live terminal handle. A worktree selector lets it stamp
+  // the task's target directly — symmetric with orchestration.run's `worktree`,
+  // and using the SAME resolver so the keys match and run-start adoption binds.
+  targetWorktree: OptionalString
 })
 
 const TaskListParams = z.object({
@@ -387,9 +392,13 @@ export const ORCHESTRATION_METHODS: RpcMethod[] = [
       // Why (#12): stamp the task with its OWN target (the creating terminal's
       // worktree) so adoption only binds it to a same-target run — never poached
       // by a concurrent run on another target.
-      const targetKey = await runtime.resolveOrchestrationTargetKeyForTerminal(
-        params.callerTerminalHandle
-      )
+      // Why (#9): an explicit --target-worktree wins (the renderer recipe director
+      // has a worktree id, not a terminal handle) and resolves through the same
+      // resolveOrchestrationTargetKey that orchestration.run uses, so the task's
+      // key matches the run's and run-start adoptUnownedTasks claims it.
+      const targetKey = params.targetWorktree
+        ? await runtime.resolveOrchestrationTargetKey(params.targetWorktree)
+        : await runtime.resolveOrchestrationTargetKeyForTerminal(params.callerTerminalHandle)
       // Why (#12): a task created while a run is active belongs to that run so
       // the coordinator's run-scoped listTasks sees it — but only the run on the
       // SAME target (getActiveCoordinatorRunForTarget, not the global latest).

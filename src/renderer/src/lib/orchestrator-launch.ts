@@ -9,7 +9,7 @@ import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { CLIENT_PLATFORM } from '@/lib/new-workspace'
 import { buildDirectWorkItemStartupOpts } from '@/lib/launch-work-item-direct-agent'
 import { pasteDraftWhenAgentReady } from '@/lib/agent-paste-draft'
-import { ORCASTRATOR_DISPLAY_PREFIX } from '@/store/slices/orchestrators'
+import { createDirectorWorktreeShell } from '@/lib/director-worktree-shell'
 import { translate } from '@/i18n/i18n'
 import type { Project, TuiAgent } from '../../../shared/types'
 
@@ -49,52 +49,20 @@ export async function launchOrchestratorForProject(
   project: Project,
   options?: LaunchOrchestratorOptions
 ): Promise<boolean> {
-  const repoId = project.sourceRepoIds[0]
-  if (!repoId) {
-    toast.error(
-      translate(
-        'auto.lib.orchestrator.launch.no_repo',
-        'This project has no repo to launch an Orcastrator in.'
-      )
-    )
-    return false
-  }
-
   const store = useAppStore.getState()
-  const repo = store.repos.find((entry) => entry.id === repoId)
   const settings = store.settings
   const agent = options?.agent ?? resolveCoordinatorAgent(settings?.defaultTuiAgent)
   const label = options?.name?.trim() || project.displayName
   const task = options?.prompt?.trim()
   const promptContent = task ? `${ORCASTRATE_PROMPT} ${task}` : ORCASTRATE_PROMPT
 
-  let worktreeId: string
-  let setup: Awaited<ReturnType<typeof store.createWorktree>>['setup']
-  try {
-    // Why: 'skip' setup — a director coordinates, it doesn't build, so it does
-    // not need the repo's setup scripts run in its checkout.
-    const result = await store.createWorktree(
-      repoId,
-      `orcastrator-${label}`,
-      repo?.worktreeBaseRef,
-      'skip',
-      undefined,
-      undefined,
-      `${ORCASTRATOR_DISPLAY_PREFIX}${label}`
-    )
-    worktreeId = result.worktree.id
-    setup = result.setup
-  } catch (error) {
-    toast.error(
-      error instanceof Error
-        ? error.message
-        : translate(
-            'auto.lib.orchestrator.launch.create_failed',
-            'Failed to create the Orcastrator.'
-          )
-    )
+  // Why: the worktree shell is identical for both director kinds; the Orcastrator
+  // is just this shell PLUS the coordinator agent + /orcastrate seeded below.
+  const shell = await createDirectorWorktreeShell(project, { label })
+  if (!shell) {
     return false
   }
+  const { worktreeId, setup } = shell
 
   const startupPlan = buildAgentStartupPlan({
     agent,
