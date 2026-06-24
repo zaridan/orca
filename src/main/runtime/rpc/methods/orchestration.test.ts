@@ -1450,6 +1450,38 @@ describe('orchestration RPC methods', () => {
       expect(db.getTask(result.task.id)?.coordinator_run_id).toBeNull()
       expect(db.getTask(result.task.id)?.target_key).toBeNull()
     })
+
+    it('stamps target_key from --target-worktree (#9 recipe director path)', async () => {
+      setup()
+      // The renderer recipe director has the director worktree id, not a terminal
+      // handle, so it passes a worktree selector. It resolves through the SAME
+      // resolveOrchestrationTargetKey the run uses, so the keys match for adoption.
+      const targetSpy = vi
+        .spyOn(runtime, 'resolveOrchestrationTargetKey')
+        .mockResolvedValue('worktree:director1')
+      const terminalSpy = vi.spyOn(runtime, 'resolveOrchestrationTargetKeyForTerminal')
+
+      const result = (await call('orchestration.taskCreate', {
+        spec: 'implement',
+        targetWorktree: 'id:director1'
+      })) as { task: { id: string } }
+
+      expect(targetSpy).toHaveBeenCalledWith('id:director1')
+      // --target-worktree wins: the terminal resolver is not consulted.
+      expect(terminalSpy).not.toHaveBeenCalled()
+      expect(db.getTask(result.task.id)?.target_key).toBe('worktree:director1')
+    })
+
+    it('refuses a task whose --target-worktree does not resolve (fail closed)', async () => {
+      setup()
+      vi.spyOn(runtime, 'resolveOrchestrationTargetKey').mockRejectedValue(
+        new Error('selector_not_found')
+      )
+
+      await expect(
+        call('orchestration.taskCreate', { spec: 'x', targetWorktree: 'id:gone' })
+      ).rejects.toThrow(/selector_not_found/)
+    })
   })
 
   describe('orchestration.reset', () => {

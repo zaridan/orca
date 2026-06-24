@@ -77,6 +77,12 @@ export type OrchestrationTaskCreateParams = {
   deps?: string
   parent?: string
   callerTerminalHandle?: string
+  // Why (#9): a worktree selector (e.g. `id:<worktreeId>`) that stamps the task's
+  // target_key via the same resolver orchestration.run uses for `worktree`. Lets
+  // the renderer recipe director — which has the director worktree id, not a live
+  // terminal handle — create tasks the run will adopt. Takes precedence over
+  // `callerTerminalHandle` in the handler.
+  targetWorktree?: string
 }
 
 /** Result of orchestration.taskCreate. */
