@@ -1991,6 +1991,11 @@ const PR_BRANCH_LIST_JSON_FIELDS =
 
 export type GitHubPRBranchLookupOptions = HostedReviewExecutionOptions & {
   acceptMergedFallbackPR?: boolean
+  /** True for the primary (default-branch) worktree, which must never carry a
+   *  PR — not an implicit branch match, not a stale persisted linked/fallback
+   *  number. Provider-agnostic guard; see the early return in
+   *  getPRForBranchOutcome. */
+  isPrimaryWorktree?: boolean
 }
 
 function mapRestPRMergeable(pr: RestPullRequest): PRMergeableState {
@@ -2512,6 +2517,12 @@ export async function getPRForBranchOutcome(
   fallbackPRNumber?: number | null,
   options: GitHubPRBranchLookupOptions = {}
 ): Promise<PRRefreshOutcome> {
+  // Why: the primary (default-branch) worktree idles on the default branch and
+  // must never attach a PR. Short-circuit before any lookup so neither an
+  // implicit branch match nor a stale persisted linked/fallback number surfaces.
+  if (options.isPrimaryWorktree) {
+    return { kind: 'no-pr', fetchedAt: Date.now() }
+  }
   // Strip refs/heads/ prefix if present
   const branchName = branch.replace(/^refs\/heads\//, '')
   // Why: detached HEAD cannot use branch lookup, but an exact linked/fallback

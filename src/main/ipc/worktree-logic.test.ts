@@ -438,6 +438,29 @@ describe('mergeWorktree', () => {
     expect(result.displayName).toBe('feature-x')
   })
 
+  it('drops a stale linked PR on the primary worktree', () => {
+    // Why: the primary (default-branch) worktree must never surface a PR badge,
+    // even if persisted metadata still carries a stale linkedPR.
+    const mainGit = {
+      path: '/repo',
+      head: 'abc123',
+      branch: 'refs/heads/main',
+      isBare: false,
+      isMainWorktree: true
+    }
+    const result = mergeWorktree('repo1', mainGit, {
+      linkedPR: 363
+    } as Parameters<typeof mergeWorktree>[2])
+    expect(result.linkedPR).toBeNull()
+  })
+
+  it('keeps the linked PR on a non-primary worktree', () => {
+    const result = mergeWorktree('repo1', baseGit, {
+      linkedPR: 77
+    } as Parameters<typeof mergeWorktree>[2])
+    expect(result.linkedPR).toBe(77)
+  })
+
   it('falls back to basename when bare worktree has no branch', () => {
     const bareGit = {
       path: '/workspaces/bare-repo',

@@ -31,7 +31,9 @@ export function mergeWorktree(
     displayName: meta?.displayName || branchShort || defaultDisplayName || basename(git.path),
     comment: meta?.comment || '',
     linkedIssue: meta?.linkedIssue ?? null,
-    linkedPR: meta?.linkedPR ?? null,
+    // Why: the primary (default-branch) worktree idles on main and must never
+    // show a PR badge, even if a stale linked PR lingers in persisted metadata.
+    linkedPR: git.isMainWorktree ? null : (meta?.linkedPR ?? null),
     linkedLinearIssue: meta?.linkedLinearIssue ?? null,
     linkedLinearIssueWorkspaceId: meta?.linkedLinearIssueWorkspaceId ?? null,
     linkedLinearIssueOrganizationUrlKey: meta?.linkedLinearIssueOrganizationUrlKey ?? null,

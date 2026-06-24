@@ -733,6 +733,91 @@ describe('getPRForBranch', () => {
     })
   })
 
+  it('never attaches an open branch-matched PR to the primary worktree', async () => {
+    // Why: the primary (default-branch) worktree is categorically PR-free; an
+    // open PR whose head ref matches the default branch must not surface.
+    getOwnerRepoMock.mockResolvedValue({ owner: 'acme', repo: 'widgets' })
+    ghExecFileAsyncMock.mockResolvedValue({
+      stdout: JSON.stringify([
+        {
+          number: 363,
+          title: 'RIQAPP-363: Phase 2',
+          state: 'open',
+          html_url: 'https://github.com/acme/widgets/pull/363',
+          updated_at: '2026-06-24T00:00:00Z',
+          draft: false,
+          mergeable: true,
+          head: { ref: 'main', sha: 'main-head-oid' },
+          base: { ref: 'main', sha: 'base-oid' }
+        }
+      ])
+    })
+
+    const pr = await getPRForBranch('/repo-root', 'main', null, null, null, {
+      isPrimaryWorktree: true
+    })
+
+    expect(pr).toBeNull()
+    // Guard short-circuits before any gh lookup runs.
+    expect(ghExecFileAsyncMock).not.toHaveBeenCalled()
+  })
+
+  it('ignores a stale persisted linked PR number on the primary worktree', async () => {
+    // Why: a primary worktree can carry a leftover linkedPR from an earlier
+    // build; the guard must drop it rather than hydrate the PR by number.
+    getOwnerRepoMock.mockResolvedValue({ owner: 'acme', repo: 'widgets' })
+    ghExecFileAsyncMock.mockResolvedValue({
+      stdout: JSON.stringify({
+        number: 363,
+        title: 'RIQAPP-363: Phase 2',
+        state: 'OPEN',
+        url: 'https://github.com/acme/widgets/pull/363',
+        statusCheckRollup: [],
+        updatedAt: '2026-06-24T00:00:00Z',
+        isDraft: false,
+        mergeable: 'MERGEABLE',
+        baseRefName: 'main',
+        headRefName: 'feature/phase-2',
+        baseRefOid: 'base-oid',
+        headRefOid: 'head-oid'
+      })
+    })
+
+    const pr = await getPRForBranch('/repo-root', 'main', 363, null, null, {
+      isPrimaryWorktree: true
+    })
+
+    expect(pr).toBeNull()
+    expect(ghExecFileAsyncMock).not.toHaveBeenCalled()
+  })
+
+  it('still attaches a matching open PR to a non-primary worktree', async () => {
+    // Regression guard: the primary short-circuit must not affect ordinary
+    // feature worktrees whose branch matches an open PR.
+    getOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
+    ghExecFileAsyncMock.mockResolvedValueOnce({
+      stdout: JSON.stringify([
+        {
+          number: 77,
+          title: 'Feature PR',
+          state: 'open',
+          html_url: 'https://github.com/acme/widgets/pull/77',
+          updated_at: '2026-06-24T00:00:00Z',
+          draft: false,
+          mergeable: true,
+          head: { ref: 'feature/test', sha: 'feature-head-oid' },
+          base: { ref: 'main', sha: 'base-oid' }
+        }
+      ])
+    })
+
+    const pr = await getPRForBranch('/repo-root', 'feature/test', null, null, null, {
+      isPrimaryWorktree: false
+    })
+
+    expect(pr).toMatchObject({ number: 77, state: 'open' })
+  })
+
   it('prefers branch lookup over a fallback PR number', async () => {
     getOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
     ghExecFileAsyncMock

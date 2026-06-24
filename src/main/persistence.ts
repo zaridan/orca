@@ -2248,6 +2248,7 @@ export class Store {
     const normalized = normalizePersistedPaneIdentityState(loaded)
     this.state = normalized.state
     const adaptedProjectGroups = this.adaptFlatFolderScanProjectGroups()
+    const clearedPrimaryLinkedPRs = this.clearLinkedPRForPrimaryWorktrees()
     for (const entry of normalized.migrationUnsupportedEntries) {
       setMigrationUnsupportedPty(entry)
     }
@@ -2268,13 +2269,35 @@ export class Store {
       this.state.legacyPaneKeyAliasEntries = entries
       this.scheduleSave()
     })
-    if (normalized.changed || this.loadNeedsSave || adaptedProjectGroups) {
+    if (
+      normalized.changed ||
+      this.loadNeedsSave ||
+      adaptedProjectGroups ||
+      clearedPrimaryLinkedPRs
+    ) {
       // Why: upgraded sessions may contain legacy pane:1 leaves. Rewrite them at
       // the main persistence boundary so older renderer writes cannot revive them.
       // Other one-shot load migrations also set loadNeedsSave to persist their
       // guard flags before the next restart.
       this.scheduleSave()
     }
+  }
+
+  private clearLinkedPRForPrimaryWorktrees(): boolean {
+    // Why: the primary (default-branch) worktree must never carry a PR. Earlier
+    // builds could persist a stale linkedPR on it; scrub those on load so the
+    // bad primary->PR association is dropped, not just hidden at render time.
+    // The primary worktree id is `${repo.id}::${repo.path}` (see mergeWorktree).
+    let changed = false
+    for (const repo of this.state.repos) {
+      const primaryWorktreeId = `${repo.id}::${repo.path}`
+      const meta = this.state.worktreeMeta[primaryWorktreeId]
+      if (meta && meta.linkedPR != null) {
+        this.state.worktreeMeta[primaryWorktreeId] = { ...meta, linkedPR: null }
+        changed = true
+      }
+    }
+    return changed
   }
 
   private adaptFlatFolderScanProjectGroups(): boolean {

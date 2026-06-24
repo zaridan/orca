@@ -1153,6 +1153,9 @@ export type GitHubPRRefreshCandidate = GitHubPRRefreshAlias & {
   cachedMergeable?: PRMergeableState | null
   cachedMergeStateStatus?: string | null
   localGitOptions?: { wslDistro?: string }
+  /** True for the primary (default-branch) worktree, which must never attach a
+   *  PR. Drives the provider-agnostic primary guard in the refresh lookup. */
+  isMainWorktree?: boolean
 }
 
 export type GitHubPRRefreshSkippedReason =

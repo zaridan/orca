@@ -976,6 +976,9 @@ function buildPRRefreshCandidate(
     branch,
     cacheKey,
     worktreeId: worktree.id,
+    // Why: the primary worktree is categorically PR-free; the lookup uses this
+    // to ignore any stale persisted linked/fallback number and skip matching.
+    isMainWorktree: worktree.isMainWorktree,
     // Why: persisted linked PR metadata is exact, while PR cache numbers are
     // only fallback hints after branch lookup misses.
     linkedPRNumber: worktree.linkedPR ?? null,
