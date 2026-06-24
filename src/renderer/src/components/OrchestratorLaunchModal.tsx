@@ -17,13 +17,7 @@ import { buildNewWorkspaceCreateTargetOptions } from '@/lib/new-workspace-projec
 import { getComposerEligibleRepos } from '@/lib/new-workspace-composer-repo'
 import { getAgentCatalog } from '@/lib/agent-catalog'
 import { filterEnabledTuiAgents } from '../../../shared/tui-agent-selection'
-import { DirectorTypePicker } from '@/components/director/DirectorTypePicker'
-import {
-  LlmDirectorBackend,
-  RecipeDirectorBackend,
-  type DirectorKind
-} from '@/lib/director-backend'
-import { getRecipes } from '@/lib/recipe-director-recipes'
+import { launchOrchestratorForProject } from '@/lib/orchestrator-launch'
 import { translate } from '@/i18n/i18n'
 import type { TuiAgent } from '../../../shared/types'
 
@@ -55,11 +49,6 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
   const detectedAgentIds = useAppStore((s) => s.detectedAgentIds)
   const disabledTuiAgents = useAppStore((s) => s.settings?.disabledTuiAgents)
   const defaultTuiAgent = useAppStore((s) => s.settings?.defaultTuiAgent ?? null)
-  // Why: #11 owns the gate — the Recipe director option only appears under the
-  // experimental flag; with it off the modal behaves exactly as it did before.
-  const experimentalOrchestrators = useAppStore(
-    (s) => s.settings?.experimentalOrchestrators ?? false
-  )
 
   const nameId = useId()
   const promptId = useId()
@@ -101,13 +90,10 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
         : null,
     [projectOptions, prefillProjectId]
   )
-  const recipes = useMemo(() => getRecipes(), [])
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [agent, setAgent] = useState<TuiAgent | null>(null)
   const [prompt, setPrompt] = useState('')
-  const [directorKind, setDirectorKind] = useState<DirectorKind>('llm')
-  const [recipeName, setRecipeName] = useState<string | null>(null)
 
   useEffect(() => {
     if (visible) {
@@ -115,8 +101,6 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
       setAgent(defaultTuiAgent && defaultTuiAgent !== 'blank' ? defaultTuiAgent : null)
       setName(prefillName)
       setPrompt(prefillPrompt)
-      setDirectorKind('llm')
-      setRecipeName(recipes[0]?.name ?? null)
     }
   }, [
     visible,
@@ -124,8 +108,7 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
     prefilledProjectOptionId,
     defaultTuiAgent,
     prefillName,
-    prefillPrompt,
-    recipes
+    prefillPrompt
   ])
 
   if (!visible) {
@@ -138,28 +121,15 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
       ? (projects.find((p) => p.id === selectedOption.projectId) ?? null)
       : null
 
-  // The Recipe director is gated; if the flag is off, only the Smart path is live.
-  const isRecipe = directorKind === 'recipe' && experimentalOrchestrators
-
   const handleLaunch = (): void => {
     if (!project) {
       return
     }
-    // Dispatch through the DirectorBackend abstraction (#8) instead of branching
-    // on the kind at the call site.
-    if (isRecipe) {
-      const recipe = recipes.find((entry) => entry.name === recipeName)
-      if (!recipe) {
-        return
-      }
-      void new RecipeDirectorBackend(recipe).launch(project, { name: name.trim() || undefined })
-    } else {
-      void new LlmDirectorBackend().launch(project, {
-        name: name.trim() || undefined,
-        agent: agent ?? undefined,
-        prompt: prompt.trim() || undefined
-      })
-    }
+    void launchOrchestratorForProject(project, {
+      name: name.trim() || undefined,
+      agent: agent ?? undefined,
+      prompt: prompt.trim() || undefined
+    })
     closeModal()
   }
 
@@ -214,16 +184,6 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
               )}
             />
           </div>
-          {experimentalOrchestrators && (
-            <DirectorTypePicker
-              kind={directorKind}
-              onKindChange={setDirectorKind}
-              showRecipeOption={experimentalOrchestrators}
-              recipes={recipes}
-              selectedRecipeName={recipeName}
-              onRecipeChange={setRecipeName}
-            />
-          )}
           <div className="space-y-2">
             <Label htmlFor={nameId} className="text-xs">
               {translate('auto.components.OrchestratorLaunchModal.name', 'Name')}
@@ -239,43 +199,36 @@ export default function OrchestratorLaunchModal(): React.JSX.Element | null {
               }
             />
           </div>
-          {/* Why: agent + task are the Smart director's coordinator-LLM inputs. The
-              Recipe director runs a fixed, token-free workflow with no director LLM
-              to seed, so these are hidden in recipe mode. */}
-          {!isRecipe && (
-            <>
-              <div className="space-y-2">
-                <Label className="text-xs">
-                  {translate('auto.components.OrchestratorLaunchModal.agent', 'Agent')}
-                </Label>
-                <AgentCombobox agents={agents} value={agent} onValueChange={setAgent} />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor={promptId} className="text-xs">
-                  {translate(
-                    'auto.components.OrchestratorLaunchModal.task',
-                    'What should it orchestrate?'
-                  )}
-                </Label>
-                <textarea
-                  id={promptId}
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  rows={4}
-                  placeholder={translate(
-                    'auto.components.OrchestratorLaunchModal.task_placeholder',
-                    'Describe the work — the director plans how to split it into worktrees/PRs. Optional.'
-                  )}
-                  className="flex w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                />
-              </div>
-            </>
-          )}
+          <div className="space-y-2">
+            <Label className="text-xs">
+              {translate('auto.components.OrchestratorLaunchModal.agent', 'Agent')}
+            </Label>
+            <AgentCombobox agents={agents} value={agent} onValueChange={setAgent} />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor={promptId} className="text-xs">
+              {translate(
+                'auto.components.OrchestratorLaunchModal.task',
+                'What should it orchestrate?'
+              )}
+            </Label>
+            <textarea
+              id={promptId}
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              rows={4}
+              placeholder={translate(
+                'auto.components.OrchestratorLaunchModal.task_placeholder',
+                'Describe the work — the director plans how to split it into worktrees/PRs. Optional.'
+              )}
+              className="flex w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            />
+          </div>
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={closeModal}>
               {translate('auto.components.OrchestratorLaunchModal.cancel', 'Cancel')}
             </Button>
-            <Button type="submit" disabled={!project || (isRecipe && !recipeName)}>
+            <Button type="submit" disabled={!project}>
               {translate('auto.components.OrchestratorLaunchModal.launch', 'Launch Orcastrator')}
             </Button>
           </DialogFooter>
