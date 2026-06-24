@@ -3,7 +3,14 @@ import { ExternalLink, GitMerge, Network } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { AgentStateDot } from '@/components/AgentStateDot'
 import { deriveWorktreeAgentDotState } from '@/lib/worktree-agent-dot-state'
-import { selectSpawnedWorktreeIds } from '@/lib/orchestrator-mission-control-data'
+import { deriveOrcastratorDotState } from '@/lib/orcastrator-dot-state'
+import {
+  selectOrchestrationActivityForTabs,
+  selectRunDagForTabs,
+  selectSpawnedWorktreeIds
+} from '@/lib/orchestrator-mission-control-data'
+import { MissionControlTasksSection } from './MissionControlTasksSection'
+import { MissionControlSupervisionSummary } from './MissionControlSupervisionSummary'
 import { deriveWorkerPrBadge } from '@/lib/orchestrator-worker-pr-badge'
 import {
   parseOrchestrateLogOutcomes,
@@ -40,6 +47,8 @@ export default function OrchestratorMissionControl({
   const worktreesByRepo = useAppStore((s) => s.worktreesByRepo)
   const tabsByWorktree = useAppStore((s) => s.tabsByWorktree)
   const agentStatusByPaneKey = useAppStore((s) => s.agentStatusByPaneKey)
+  const orchestrationActivityByPaneKey = useAppStore((s) => s.orchestrationActivityByPaneKey)
+  const orchestrationRunDagByPaneKey = useAppStore((s) => s.orchestrationRunDagByPaneKey)
   const repos = useAppStore((s) => s.repos)
   const settings = useAppStore((s) => s.settings)
   const hostedReviewCache = useAppStore((s) => s.hostedReviewCache)
@@ -232,10 +241,28 @@ export default function OrchestratorMissionControl({
   }
 
   const directorTabIds = (tabsByWorktree[worktreeId] ?? []).map((tab) => tab.id)
-  const directorDot = deriveWorktreeAgentDotState(directorTabIds, agentStatusByPaneKey)
+  // Why: prefer the orchestration-aware dot so a director that handed control
+  // back still reads as supervising/stalled while its run is live.
+  const directorDot = deriveOrcastratorDotState(
+    directorTabIds,
+    agentStatusByPaneKey,
+    orchestrationActivityByPaneKey
+  )
   const directorName =
     entry?.projectName ??
     translate('auto.components.right.sidebar.OrchestratorMissionControl.fallback', 'Orcastrator')
+
+  // Why (#7 O2): when this director has a live coordinator run, render its task
+  // DAG; otherwise fall back to the lineage/shipped view so a pure-LLM director
+  // (no `orchestration.run`) never regresses. Both paths keep the Shipped log.
+  const runDag = useMemo(
+    () => selectRunDagForTabs(directorTabIds, orchestrationRunDagByPaneKey ?? {}),
+    [directorTabIds, orchestrationRunDagByPaneKey]
+  )
+  const activity = useMemo(
+    () => selectOrchestrationActivityForTabs(directorTabIds, orchestrationActivityByPaneKey ?? {}),
+    [directorTabIds, orchestrationActivityByPaneKey]
+  )
 
   return (
     <div className="flex h-full flex-col overflow-y-auto scrollbar-sleek">
@@ -247,86 +274,98 @@ export default function OrchestratorMissionControl({
             {directorName}
           </span>
         </div>
-        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-          {translate(
-            'auto.components.right.sidebar.OrchestratorMissionControl.summary',
-            'Directs worker agents in their own worktrees — it has no branch to publish. Each worker opens its own pull request.'
-          )}
-        </p>
-      </div>
-
-      <div className="px-2 py-2">
-        <div className="flex items-center justify-between px-1 pb-1">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {runDag && activity ? (
+          <MissionControlSupervisionSummary
+            stalled={directorDot === 'stalled'}
+            activity={activity}
+            recipe={runDag.recipe}
+          />
+        ) : (
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             {translate(
-              'auto.components.right.sidebar.OrchestratorMissionControl.spawned',
-              'Spawned work'
-            )}
-          </span>
-          {workerIds.length > 0 ? (
-            <span className="text-[11px] tabular-nums text-muted-foreground">
-              {workerIds.length}
-            </span>
-          ) : null}
-        </div>
-
-        {workerIds.length === 0 ? (
-          <p className="px-1 py-2 text-xs leading-relaxed text-muted-foreground">
-            {translate(
-              'auto.components.right.sidebar.OrchestratorMissionControl.empty',
-              'No worktrees yet — the director creates them as it plans the work.'
+              'auto.components.right.sidebar.OrchestratorMissionControl.summary',
+              'Directs worker agents in their own worktrees — it has no branch to publish. Each worker opens its own pull request.'
             )}
           </p>
-        ) : (
-          <div className="flex flex-col gap-1.5">
-            {workerIds.map((id) => {
-              const worker = worktreesById.get(id)
-              if (!worker) {
-                return null
-              }
-              const tabIds = (tabsByWorktree[id] ?? []).map((tab) => tab.id)
-              const dot = deriveWorktreeAgentDotState(tabIds, agentStatusByPaneKey)
-              const prBadge = prBadgeForWorker(worker)
-              const prUrl = prBadge?.url
-              return (
-                <MissionControlPrReviewCard
-                  key={id}
-                  target={buildWorkerCardTarget(worker, reposById.get(worker.repoId) ?? null)}
-                  headerLeft={
-                    <>
-                      <AgentStateDot state={dot} size="sm" />
-                      <span className="min-w-0 flex-1 truncate">{worker.displayName ?? id}</span>
-                    </>
-                  }
-                  headerRight={
-                    prBadge ? (
-                      <>
-                        {prBadge.state ? <PrStatePill state={prBadge.state} /> : null}
-                        {/* Sibling of the expand trigger (not nested) so opening the
-                            PR externally stays distinct from expanding the card. */}
-                        {prUrl ? (
-                          <button
-                            type="button"
-                            onClick={() => void window.api.shell.openUrl(prUrl)}
-                            className="flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground hover:underline"
-                          >
-                            {prBadge.label} #{prBadge.number}
-                            <ExternalLink className="size-3" aria-hidden />
-                          </button>
-                        ) : (
-                          <span className="flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground">
-                            {prBadge.label} #{prBadge.number}
-                          </span>
-                        )}
-                      </>
-                    ) : undefined
-                  }
-                />
-              )
-            })}
-          </div>
         )}
       </div>
+
+      {runDag ? (
+        <MissionControlTasksSection dag={runDag} />
+      ) : (
+        <div className="px-2 py-2">
+          <div className="flex items-center justify-between px-1 pb-1">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {translate(
+                'auto.components.right.sidebar.OrchestratorMissionControl.spawned',
+                'Spawned work'
+              )}
+            </span>
+            {workerIds.length > 0 ? (
+              <span className="text-[11px] tabular-nums text-muted-foreground">
+                {workerIds.length}
+              </span>
+            ) : null}
+          </div>
+
+          {workerIds.length === 0 ? (
+            <p className="px-1 py-2 text-xs leading-relaxed text-muted-foreground">
+              {translate(
+                'auto.components.right.sidebar.OrchestratorMissionControl.empty',
+                'No worktrees yet — the director creates them as it plans the work.'
+              )}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {workerIds.map((id) => {
+                const worker = worktreesById.get(id)
+                if (!worker) {
+                  return null
+                }
+                const tabIds = (tabsByWorktree[id] ?? []).map((tab) => tab.id)
+                const dot = deriveWorktreeAgentDotState(tabIds, agentStatusByPaneKey)
+                const prBadge = prBadgeForWorker(worker)
+                const prUrl = prBadge?.url
+                return (
+                  <MissionControlPrReviewCard
+                    key={id}
+                    target={buildWorkerCardTarget(worker, reposById.get(worker.repoId) ?? null)}
+                    headerLeft={
+                      <>
+                        <AgentStateDot state={dot} size="sm" />
+                        <span className="min-w-0 flex-1 truncate">{worker.displayName ?? id}</span>
+                      </>
+                    }
+                    headerRight={
+                      prBadge ? (
+                        <>
+                          {prBadge.state ? <PrStatePill state={prBadge.state} /> : null}
+                          {/* Sibling of the expand trigger (not nested) so opening the
+                            PR externally stays distinct from expanding the card. */}
+                          {prUrl ? (
+                            <button
+                              type="button"
+                              onClick={() => void window.api.shell.openUrl(prUrl)}
+                              className="flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground hover:underline"
+                            >
+                              {prBadge.label} #{prBadge.number}
+                              <ExternalLink className="size-3" aria-hidden />
+                            </button>
+                          ) : (
+                            <span className="flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground">
+                              {prBadge.label} #{prBadge.number}
+                            </span>
+                          )}
+                        </>
+                      ) : undefined
+                    }
+                  />
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {shippedWork.length > 0 ? (
         <div className="border-t border-border px-2 py-2">

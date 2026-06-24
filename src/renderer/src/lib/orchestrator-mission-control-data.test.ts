@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { selectSpawnedWorktreeIds } from './orchestrator-mission-control-data'
+import {
+  selectOrchestrationActivityForTabs,
+  selectRunDagForTabs,
+  selectSpawnedWorktreeIds
+} from './orchestrator-mission-control-data'
 import type { WorktreeLineage } from '../../../shared/types'
+import type { OrchestrationRunDag } from '../../../shared/runtime-types'
 
 function lineage(
   over: Partial<WorktreeLineage> & Pick<WorktreeLineage, 'worktreeId'>
@@ -66,5 +71,39 @@ describe('selectSpawnedWorktreeIds', () => {
       }
     ])
     expect(selectSpawnedWorktreeIds(directorWorktreeId, map, () => true)).toEqual(['wt_child_0'])
+  })
+})
+
+function dag(runId: string): OrchestrationRunDag {
+  return { runId, recipe: null, tasks: [], truncatedTaskCount: 0 }
+}
+
+describe('selectRunDagForTabs (#7 — per-run scoping)', () => {
+  // paneKey is `${tabId}:${leafId}`; a director only sees the DAG whose
+  // coordinator pane lives in one of its own tabs.
+  const byPaneKey = {
+    'tab_a:leaf_1': dag('run_a'),
+    'tab_b:leaf_1': dag('run_b')
+  }
+
+  it('returns the DAG for a director tab and nothing for an unrelated director', () => {
+    expect(selectRunDagForTabs(['tab_a'], byPaneKey)?.runId).toBe('run_a')
+    expect(selectRunDagForTabs(['tab_b'], byPaneKey)?.runId).toBe('run_b')
+    expect(selectRunDagForTabs(['tab_c'], byPaneKey)).toBeNull()
+  })
+
+  it('two concurrent runs do not bleed across directors', () => {
+    // Director A's tabs must never resolve director B's run.
+    expect(selectRunDagForTabs(['tab_a'], byPaneKey)?.runId).not.toBe('run_b')
+  })
+})
+
+describe('selectOrchestrationActivityForTabs', () => {
+  it('matches activity by the coordinator paneKey tab id', () => {
+    const activity = {
+      'tab_a:leaf_1': { runId: 'run_a', pendingTasks: 3, activeDispatches: 2, staleDispatches: 1 }
+    }
+    expect(selectOrchestrationActivityForTabs(['tab_a'], activity)?.pendingTasks).toBe(3)
+    expect(selectOrchestrationActivityForTabs(['tab_z'], activity)).toBeNull()
   })
 })
