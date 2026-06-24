@@ -114,7 +114,7 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
   const live = (orchestrators ?? []).filter((entry) => liveWorktreeIds.has(entry.worktreeId))
   return (
     <div className="flex flex-col gap-0.5 px-2 pb-1">
-      <div className="flex items-center justify-between px-2 pt-2 pb-0.5">
+      <div className="flex items-center justify-between pl-2 pr-0 pt-2 pb-0.5">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-worktree-sidebar-foreground/40">
           {translate('auto.components.sidebar.OrchestratorsSidebarSection.title', 'Orcastrators')}
         </span>
