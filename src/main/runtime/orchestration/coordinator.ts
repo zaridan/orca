@@ -14,7 +14,13 @@ export type CoordinatorRuntime = {
   }>
   createTerminal(
     worktreeSelector?: string,
-    opts?: { command?: string; title?: string }
+    // Why (round 2, must-fix #1): `launchAgent` lets the coordinator relaunch a
+    // worker AGENT inside an EXISTING track worktree when the cached agent terminal
+    // is gone — instead of silently opening a bare shell and firing the agent
+    // preamble into it (which never produces worker_done → the dispatch hangs
+    // forever). Optional + additive: OrcaRuntimeService.createTerminal already
+    // supports it; the legacy/no-agent path omits it and gets a plain shell.
+    opts?: { command?: string; title?: string; launchAgent?: TuiAgent }
   ): Promise<{ handle: string; worktreeId: string }>
   waitForTerminal(
     handle: string,
@@ -88,18 +94,43 @@ export function parseAllowStaleBaseFromSpec(spec: string): {
 // worker's `--- TASK ---` block (workers would otherwise read it as an instruction).
 // Returns null when unset; the caller defaults to the task's own id (→ per-task,
 // the collision-free slice-1 behavior).
-const TRACK_RE = /^[ \t]*track:[ \t]*(\S+)[ \t]*\r?$/im
-const TRACK_STRIP_RE = /^[ \t]*track:[ \t]*\S+[ \t]*\r?\n?/im
+//
+// Why (round 2, should-fix #3): `track:` is prose-likely, so — unlike F1's
+// stale-base flag — we scan line-by-line and SKIP fenced code blocks (``` / ~~~).
+// A `track:` line inside a worker-instruction example must not be parsed as the
+// real key (which would mis-route the track AND corrupt the preamble by stripping
+// an example line). Only the first non-fenced `track:` line on its own line wins.
+const TRACK_LINE_RE = /^[ \t]*track:[ \t]*(\S+)[ \t]*\r?$/i
+const CODE_FENCE_RE = /^[ \t]*(?:```|~~~)/
 
 export function parseTrackFromSpec(spec: string): {
   trackKey: string | null
   strippedSpec: string
 } {
-  const match = spec.match(TRACK_RE)
-  if (!match) {
-    return { trackKey: null, strippedSpec: spec }
+  const lines = spec.split('\n')
+  let inFence = false
+  for (let i = 0; i < lines.length; i++) {
+    if (CODE_FENCE_RE.test(lines[i])) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) {
+      continue
+    }
+    const match = lines[i].match(TRACK_LINE_RE)
+    if (!match) {
+      continue
+    }
+    // Strip the matched line, folding one newline exactly as a regex
+    // `^track:...\r?\n?` strip would: drop the line plus its FOLLOWING newline; if
+    // it is the last line, the PRECEDING newline stays (keeps prior strip semantics).
+    const strippedSpec =
+      i < lines.length - 1
+        ? [...lines.slice(0, i), ...lines.slice(i + 1)].join('\n')
+        : lines.slice(0, i).join('\n') + (i > 0 ? '\n' : '')
+    return { trackKey: match[1], strippedSpec }
   }
-  return { trackKey: match[1], strippedSpec: spec.replace(TRACK_STRIP_RE, '') }
+  return { trackKey: null, strippedSpec: spec }
 }
 
 // Why (F2 #13): a deterministic, branch-safe worktree name (Orca: worktree name
@@ -877,12 +908,21 @@ export class Coordinator {
     return true
   }
 
-  // Why (slice 2, design §5.3 / Q4): pick the terminal for a same-track
-  // re-dispatch. Prefer the cached worker-agent terminal when it is still
-  // connected/writable — per-track serialization guarantees it is idle now, and
-  // reusing it keeps the worker's context for the handoff. If it is gone, open a
-  // fresh plain terminal in the same worktree (so the dispatch still lands in the
-  // right checkout). Returns null only when neither is possible.
+  // Why (slice 2, design §5.3 / Q4; round 2 must-fix #1): pick the terminal for a
+  // same-track re-dispatch. Prefer the cached worker-agent terminal when it is
+  // still connected/writable — per-track serialization guarantees it is idle now,
+  // and reusing it keeps the worker's context for the handoff.
+  //
+  // If the cached terminal is GONE, we must NOT silently downgrade an agent run to
+  // a bare shell: sending the agent preamble into a plain shell never produces
+  // worker_done, so the track stays busy on a dead dispatch forever (this is the
+  // implement→review path — implement's agent exits after its grace window, then
+  // review reuses the track). So when this run launches workers as agents, we
+  // RELAUNCH the worker agent in the SAME worktree (createTerminal launchAgent —
+  // an agent terminal in the existing checkout, NOT a new worktree, so the
+  // predecessor's commits are preserved). A no-agent run opens a plain shell, the
+  // same kind it started with. A failure to open either returns null → the caller
+  // breaker-accounts it (and leaves the shared worktree intact).
   private async resolveTrackTerminal(track: {
     worktreeId: string
     terminalHandle: string
@@ -897,15 +937,21 @@ export class Coordinator {
         return { handle: track.terminalHandle, isAgent: track.isAgent }
       }
     } catch {
-      // Fall through to opening a fresh terminal.
+      // Fall through to (re)launching a terminal.
     }
+    // Decide agent-vs-shell from the RUN config, not the cached flag, so a prior
+    // fallback can never permanently downgrade an agent track to a shell.
+    const wantsAgent = this.opts.workerAgent !== undefined
     try {
       const created = await this.runtime.createTerminal(`id:${track.worktreeId}`, {
-        title: `Worker (track reuse)`
+        title: `Worker (track reuse)`,
+        ...(wantsAgent ? { launchAgent: this.opts.workerAgent } : {})
       })
-      return { handle: created.handle, isAgent: false }
+      return { handle: created.handle, isAgent: wantsAgent }
     } catch (err) {
-      this.opts.onLog(`Failed to open a terminal in reused worktree ${track.worktreeId}: ${err}`)
+      this.opts.onLog(
+        `Failed to ${wantsAgent ? 'relaunch the worker agent' : 'open a terminal'} in reused worktree ${track.worktreeId}: ${err}`
+      )
       return null
     }
   }
