@@ -11819,17 +11819,6 @@
         "task_placeholder": "Describe the work — the director plans how to split it into worktrees/PRs. Optional.",
         "cancel": "Cancel",
         "launch": "Launch Orcastrator"
-      },
-      "director": {
-        "DirectorTypePicker": {
-          "smart_title": "Smart director",
-          "smart_caption": "Uses your default LLM and /orcastrate to plan and run the work.",
-          "recipe_title": "Recipe director",
-          "recipe_caption": "No director LLM; runs a fixed workflow.",
-          "group_label": "Director type",
-          "recipe_label": "Recipe",
-          "recipe_placeholder": "Select a recipe"
-        }
       }
     },
     "i18n": {
