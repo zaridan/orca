@@ -24,6 +24,7 @@ export type TaskWithDispatchRow = TaskRow & {
   dispatch_id: string | null
   dispatch_status: DispatchStatus | null
   dispatch_last_heartbeat_at: string | null
+  dispatch_dispatched_at: string | null
 }
 
 function parseDeps(depsJson: string): string[] {
@@ -35,15 +36,18 @@ function parseDeps(depsJson: string): string[] {
   }
 }
 
-function parseDispatchId(payload: string | null): string | null {
+// Why (#3): key the worker signal by taskId, not dispatchId. listTasksWithDispatch
+// joins only pending/dispatched dispatches, so a COMPLETED task's row has
+// dispatch_id = null — a dispatch-keyed signal would never reach the very rows
+// that carry the worker_done summary. taskId is on both heartbeat and worker_done
+// payloads (the preamble's --task-id) and is stable across a task's retries.
+function parseTaskId(payload: string | null): string | null {
   if (!payload) {
     return null
   }
   try {
-    const parsed = JSON.parse(payload) as { dispatchId?: unknown }
-    return typeof parsed.dispatchId === 'string' && parsed.dispatchId.length > 0
-      ? parsed.dispatchId
-      : null
+    const parsed = JSON.parse(payload) as { taskId?: unknown }
+    return typeof parsed.taskId === 'string' && parsed.taskId.length > 0 ? parsed.taskId : null
   } catch {
     return null
   }
@@ -75,41 +79,43 @@ function summaryFromWorkerDone(msg: MessageRow): string | null {
   return firstBodyLine && firstBodyLine.length > 0 ? firstBodyLine : null
 }
 
-/** Map dispatchId → its most recent worker signal. `messages` MUST be ordered
- *  newest-first (sequence DESC); the first signal seen per dispatch wins. */
+/** Map taskId → its most recent worker signal. `messages` MUST be ordered
+ *  newest-first (sequence DESC); the first signal seen per task wins. */
 export function indexLatestWorkerSignals(
   messages: MessageRow[]
 ): Map<string, OrchestrationTaskSignal> {
-  const byDispatch = new Map<string, OrchestrationTaskSignal>()
+  const byTask = new Map<string, OrchestrationTaskSignal>()
   for (const msg of messages) {
     if (msg.type !== 'heartbeat' && msg.type !== 'worker_done') {
       continue
     }
-    const dispatchId = parseDispatchId(msg.payload)
-    if (!dispatchId || byDispatch.has(dispatchId)) {
+    const taskId = parseTaskId(msg.payload)
+    if (!taskId || byTask.has(taskId)) {
       continue
     }
-    byDispatch.set(
-      dispatchId,
+    byTask.set(
+      taskId,
       msg.type === 'heartbeat'
         ? { phase: parsePhase(msg.payload), summary: null }
         : { phase: null, summary: summaryFromWorkerDone(msg) }
     )
   }
-  return byDispatch
+  return byTask
 }
 
 function toTaskNode(
   row: TaskWithDispatchRow,
   staleThresholdIso: string,
-  signalsByDispatchId: Map<string, OrchestrationTaskSignal>,
+  signalsByTaskId: Map<string, OrchestrationTaskSignal>,
   resolveAgent: (handle: string) => TuiAgent | null
 ): OrchestrationTaskNode {
-  const title = buildOrchestrationTaskDisplayMetadata({
-    spec: row.spec,
-    taskTitle: row.task_title,
-    displayName: row.display_name
-  }).displayName
+  // Why (nit): fall back to the task id so a blank spec can't render an empty row.
+  const title =
+    buildOrchestrationTaskDisplayMetadata({
+      spec: row.spec,
+      taskTitle: row.task_title,
+      displayName: row.display_name
+    }).displayName || row.id
 
   // The LEFT JOIN only surfaces a pending/dispatched dispatch, so an assignee
   // means there is a live dispatch backing this task.
@@ -120,16 +126,22 @@ function toTaskNode(
           assigneeAgent: row.assignee_handle ? resolveAgent(row.assignee_handle) : null,
           status: row.dispatch_status ?? 'pending',
           lastHeartbeatAt: row.dispatch_last_heartbeat_at,
-          // Why: a dispatched worker whose heartbeat predates the hung threshold
-          // is stalled — mirror the coordinator's escalation read.
+          // Why (#4): match getStaleDispatches exactly — a dispatched worker is
+          // stalled only once it is PAST the dispatched-at grace AND its heartbeat
+          // (or null heartbeat) predates the threshold. Without the dispatched_at
+          // grace a freshly-dispatched worker would flash amber before its first
+          // heartbeat is due, disagreeing with the aggregate stalled count.
           stale:
             row.dispatch_status === 'dispatched' &&
+            row.dispatch_dispatched_at !== null &&
+            row.dispatch_dispatched_at < staleThresholdIso &&
             (row.dispatch_last_heartbeat_at === null ||
               row.dispatch_last_heartbeat_at < staleThresholdIso)
         }
       : null
 
-  const signal = row.dispatch_id ? (signalsByDispatchId.get(row.dispatch_id) ?? null) : null
+  // Why (#3): key by task id so a completed task's worker_done summary lands.
+  const signal = signalsByTaskId.get(row.id) ?? null
 
   return {
     id: row.id,
@@ -149,7 +161,7 @@ export function buildRunDagSnapshot(input: {
   recipe: string | null
   tasks: TaskWithDispatchRow[]
   staleThresholdIso: string
-  signalsByDispatchId: Map<string, OrchestrationTaskSignal>
+  signalsByTaskId: Map<string, OrchestrationTaskSignal>
   resolveAgent: (handle: string) => TuiAgent | null
   taskCap?: number
 }): OrchestrationRunDag {
@@ -160,7 +172,7 @@ export function buildRunDagSnapshot(input: {
     runId: input.runId,
     recipe: input.recipe,
     tasks: capped.map((row) =>
-      toTaskNode(row, input.staleThresholdIso, input.signalsByDispatchId, input.resolveAgent)
+      toTaskNode(row, input.staleThresholdIso, input.signalsByTaskId, input.resolveAgent)
     ),
     truncatedTaskCount
   }

@@ -426,14 +426,14 @@ export const ORCHESTRATION_METHODS: RpcMethod[] = [
         ready: params.ready
       })
       const tasks = joined.map((row) => {
-        // Why: dispatch_status / dispatch_last_heartbeat_at exist for the
-        // Control Panel sync (#6); strip them here so this debug RPC's shape is
-        // unchanged.
+        // Why: the dispatch_* fields exist for the Control Panel sync (#6);
+        // strip them here so this debug RPC's shape is unchanged.
         const {
           assignee_handle,
           dispatch_id,
           dispatch_status: _dispatchStatus,
           dispatch_last_heartbeat_at: _dispatchLastHeartbeatAt,
+          dispatch_dispatched_at: _dispatchDispatchedAt,
           ...base
         } = row
         if (base.status === 'dispatched') {
