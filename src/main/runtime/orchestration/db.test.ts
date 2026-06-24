@@ -545,6 +545,41 @@ describe('OrchestrationDb', () => {
       expect(d.listCoordinatorRuns()).toHaveLength(3)
     })
 
+    // Why (F3 #14): resume-on-boot reconstructs a crashed run's coordinator from
+    // the row, so the v9 options must round-trip. A persisted worktreeBacked=false
+    // must read back as 0 (an explicit legacy run), distinct from NULL (unknown).
+    it('persists and round-trips the v9 resume options (worktree-backed run)', () => {
+      const d = createDb()
+      const run = d.startCoordinatorRun({
+        spec: 'build',
+        coordinatorHandle: 'coord',
+        targetKey: 'worktree:wt-1',
+        maxConcurrent: 7,
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+      const read = d.getCoordinatorRun(run.id)!
+      expect(read.max_concurrent).toBe(7)
+      expect(read.worktree_backed).toBe(1)
+      expect(read.worker_agent).toBe('claude')
+    })
+
+    it('records worktreeBacked=false as 0 (explicit legacy), unset options as NULL', () => {
+      const d = createDb()
+      const legacy = d.startCoordinatorRun({
+        spec: 'legacy',
+        coordinatorHandle: 'coord',
+        worktreeBacked: false
+      })
+      expect(d.getCoordinatorRun(legacy.id)?.worktree_backed).toBe(0)
+
+      const bare = d.createCoordinatorRun({ spec: 'bare', coordinatorHandle: 'coord2' })
+      const read = d.getCoordinatorRun(bare.id)!
+      expect(read.worktree_backed).toBeNull()
+      expect(read.max_concurrent).toBeNull()
+      expect(read.worker_agent).toBeNull()
+    })
+
     it('counts outstanding tasks and active dispatches', () => {
       const d = createDb()
       expect(d.countOutstandingTasks()).toBe(0)

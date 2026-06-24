@@ -40,6 +40,20 @@ function generateId(prefix: string): string {
 // sharing one DB file) — the prior in-memory `getActiveCoordinatorRun()` check
 // did not span processes, which is how two coordinators clashed. Runs on
 // different targets start in parallel. Callers map this to a friendly RPC error.
+// Why (#14): the options persisted with a run so resume-on-boot can rebuild its
+// coordinator. maxConcurrent/worktreeBacked/workerAgent are the in-memory-only
+// coordinator settings that the run row did not record before — losing them on
+// restart is what made a faithful resume impossible.
+export type CoordinatorRunInsert = {
+  spec: string
+  coordinatorHandle: string
+  pollIntervalMs?: number
+  targetKey?: string | null
+  maxConcurrent?: number
+  worktreeBacked?: boolean
+  workerAgent?: string
+}
+
 export class CoordinatorRunConflictError extends Error {
   constructor(message = 'A coordinator run is already in progress for this target') {
     super(message)
@@ -64,7 +78,11 @@ export class CoordinatorRunConflictError extends Error {
 // closing the cross-target poaching gap that per-target run-start alone left
 // open. The guard is enforced at write time by startCoordinatorRun
 // (BEGIN IMMEDIATE), not by a schema index.
-const SCHEMA_VERSION = 8
+// v8 → v9 adds `coordinator_runs.{max_concurrent,worktree_backed,worker_agent}`
+// so resume-on-boot (#14) can rebuild a crashed run's coordinator faithfully —
+// the in-memory coordinator (its worktree-backed flag, worker agent, concurrency)
+// is otherwise lost on restart, and a wrong guess re-zombies the run.
+const SCHEMA_VERSION = 9
 
 export class OrchestrationDb {
   private db: Database.Database
@@ -170,6 +188,9 @@ export class OrchestrationDb {
         coordinator_handle  TEXT NOT NULL,
         poll_interval_ms    INTEGER NOT NULL DEFAULT 2000,
         target_key          TEXT,
+        max_concurrent      INTEGER,
+        worktree_backed     INTEGER,
+        worker_agent        TEXT,
         created_at          TEXT NOT NULL DEFAULT (datetime('now')),
         completed_at        TEXT
       );
@@ -309,6 +330,20 @@ export class OrchestrationDb {
       if (current < 8) {
         if (!this.hasColumn('tasks', 'target_key')) {
           this.db.exec(`ALTER TABLE tasks ADD COLUMN target_key TEXT`)
+        }
+      }
+      // v8 → v9: persist the coordinator options resume-on-boot (#14) needs to
+      // rebuild a crashed run's coordinator without guessing. Nullable/additive:
+      // pre-existing rows read NULL and resume falls back to defaults.
+      if (current < 9) {
+        if (!this.hasColumn('coordinator_runs', 'max_concurrent')) {
+          this.db.exec(`ALTER TABLE coordinator_runs ADD COLUMN max_concurrent INTEGER`)
+        }
+        if (!this.hasColumn('coordinator_runs', 'worktree_backed')) {
+          this.db.exec(`ALTER TABLE coordinator_runs ADD COLUMN worktree_backed INTEGER`)
+        }
+        if (!this.hasColumn('coordinator_runs', 'worker_agent')) {
+          this.db.exec(`ALTER TABLE coordinator_runs ADD COLUMN worker_agent TEXT`)
         }
       }
       this.createUndeliveredInboxIndexIfPossible()
@@ -1007,18 +1042,26 @@ export class OrchestrationDb {
 
   // ── Coordinator Runs ──
 
-  createCoordinatorRun(run: {
-    spec: string
-    coordinatorHandle: string
-    pollIntervalMs?: number
-    targetKey?: string | null
-  }): CoordinatorRun {
+  createCoordinatorRun(run: CoordinatorRunInsert): CoordinatorRun {
     const id = generateId('run')
     this.db
       .prepare(
-        "INSERT INTO coordinator_runs (id, spec, status, coordinator_handle, poll_interval_ms, target_key) VALUES (?, ?, 'running', ?, ?, ?)"
+        `INSERT INTO coordinator_runs
+           (id, spec, status, coordinator_handle, poll_interval_ms, target_key, max_concurrent, worktree_backed, worker_agent)
+         VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)`
       )
-      .run(id, run.spec, run.coordinatorHandle, run.pollIntervalMs ?? 2000, run.targetKey ?? null)
+      .run(
+        id,
+        run.spec,
+        run.coordinatorHandle,
+        run.pollIntervalMs ?? 2000,
+        run.targetKey ?? null,
+        run.maxConcurrent ?? null,
+        // Why (#14): store the boolean as 0/1 so a NULL strictly means "pre-v9 /
+        // unknown" and resume can tell an explicit legacy run from a missing flag.
+        run.worktreeBacked === undefined ? null : run.worktreeBacked ? 1 : 0,
+        run.workerAgent ?? null
+      )
     return this.db.prepare('SELECT * FROM coordinator_runs WHERE id = ?').get(id) as CoordinatorRun
   }
 
@@ -1033,12 +1076,7 @@ export class OrchestrationDb {
   // parallel. A null target_key (no worktree given at run-start) shares one
   // slot — unidentified targets fall back to single-run. Used by the RPC path;
   // tests/coordinator.run() use the plain createCoordinatorRun insert.
-  startCoordinatorRun(run: {
-    spec: string
-    coordinatorHandle: string
-    pollIntervalMs?: number
-    targetKey?: string | null
-  }): CoordinatorRun {
+  startCoordinatorRun(run: CoordinatorRunInsert): CoordinatorRun {
     const targetKey = run.targetKey ?? null
     this.db.exec('BEGIN IMMEDIATE')
     let committed = false
@@ -1057,9 +1095,20 @@ export class OrchestrationDb {
       const id = generateId('run')
       this.db
         .prepare(
-          "INSERT INTO coordinator_runs (id, spec, status, coordinator_handle, poll_interval_ms, target_key) VALUES (?, ?, 'running', ?, ?, ?)"
+          `INSERT INTO coordinator_runs
+             (id, spec, status, coordinator_handle, poll_interval_ms, target_key, max_concurrent, worktree_backed, worker_agent)
+           VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)`
         )
-        .run(id, run.spec, run.coordinatorHandle, run.pollIntervalMs ?? 2000, targetKey)
+        .run(
+          id,
+          run.spec,
+          run.coordinatorHandle,
+          run.pollIntervalMs ?? 2000,
+          targetKey,
+          run.maxConcurrent ?? null,
+          run.worktreeBacked === undefined ? null : run.worktreeBacked ? 1 : 0,
+          run.workerAgent ?? null
+        )
       this.db.exec('COMMIT')
       committed = true
       return this.db
@@ -1091,6 +1140,27 @@ export class OrchestrationDb {
       )
       .run(status, completedAt, id)
     return this.getCoordinatorRun(id)
+  }
+
+  // Why (#14): on resume-on-boot, a task left 'dispatched' by the crashed
+  // coordinator has a worker that is no longer being monitored (the in-memory
+  // coordinator that would receive its worker_done is gone). Leaving it
+  // 'dispatched' would never converge — the resumed loop neither re-dispatches it
+  // (only 'ready' tasks dispatch) nor times it out (the stale detector only
+  // warns). So reclaim each in-flight dispatch through the SAME breaker a live
+  // failure uses (failActiveDispatchForTask): the task returns to 'ready' to be
+  // re-dispatched into its re-adopted worktree, and the failure strike bounds an
+  // infinite restart→resume loop on a poison run (after 3 it converges to
+  // 'failed'). Run-scoped so a concurrent run on another target is untouched.
+  reclaimInFlightDispatchesForResume(coordinatorRunId: string, reason: string): number {
+    const dispatched = this.listTasks({ status: 'dispatched', coordinatorRunId })
+    let reclaimed = 0
+    for (const task of dispatched) {
+      if (this.failActiveDispatchForTask(task.id, reason)) {
+        reclaimed++
+      }
+    }
+    return reclaimed
   }
 
   getActiveCoordinatorRun(): CoordinatorRun | undefined {

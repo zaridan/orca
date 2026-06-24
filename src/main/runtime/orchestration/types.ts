@@ -98,6 +98,15 @@ export type CoordinatorRun = {
   // only a duplicate run on the same target, not all concurrency. NULL when no
   // worktree was given at run-start (those runs share a single-run slot).
   target_key: string | null
+  // Why (F3 #14): the coordinator is an in-memory instance with no boot hook, so
+  // after an app restart these persisted options let resume-on-boot reconstruct
+  // the SAME run (worktree-backed vs legacy, which agent, concurrency) instead of
+  // guessing — a legacy bare-terminal resume of a worktree-backed run would
+  // dispatch into a shell that never reports done (a fresh zombie). NULL on
+  // pre-v9 rows / non-worktree runs; resume falls back to coordinator defaults.
+  max_concurrent: number | null
+  worktree_backed: number | null
+  worker_agent: string | null
   created_at: string
   completed_at: string | null
 }

@@ -237,9 +237,9 @@ export class Coordinator {
   // First dispatch of a track lazily creates a worktree (the miss path) and caches
   // it here; later same-track tasks reuse it (the hit path) so review continues
   // implement's branch (one PR). Keyed by trackKey (spec hint → default = task id).
-  // TODO(F3 #14): on resume, seed this map by re-discovering existing children of
-  // the director worktree (parentWorktreeId === directorWorktreeId) instead of
-  // recreating them — out of scope here, see design §8.
+  // On resume-on-boot (#14) this map is pre-seeded via seedAdoptedTrackWorktrees so
+  // a restarted run re-adopts its existing track worktrees (design §8) instead of
+  // recreating them.
   private trackWorktrees = new Map<
     string,
     { worktreeId: string; terminalHandle: string; isAgent: boolean }
@@ -298,6 +298,23 @@ export class Coordinator {
     escalations: MessageRow[]
   }> {
     return this.executeLoop(runId)
+  }
+
+  // Why (F3 #14, design §8): resume-on-boot re-adopts a crashed run's existing
+  // track worktrees instead of recreating them. The boot reconciler discovers the
+  // director's lineage children (parentWorktreeId === directorWorktreeId, same
+  // run) — the SAME data Mission Control uses — and seeds them here BEFORE the
+  // loop starts. A re-adopted track is then a hit (dispatchIntoExistingTrack):
+  // its cached terminal handle is a post-restart sentinel that won't match a live
+  // terminal, so resolveTrackTerminal relaunches the worker agent IN the existing
+  // checkout (preserving the predecessor's commits) rather than forking a new
+  // worktree/branch. Must be called before run/runFromExistingRun.
+  seedAdoptedTrackWorktrees(
+    entries: Iterable<[string, { worktreeId: string; terminalHandle: string; isAgent: boolean }]>
+  ): void {
+    for (const [trackKey, track] of entries) {
+      this.trackWorktrees.set(trackKey, track)
+    }
   }
 
   private async executeLoop(runId: string): Promise<{
