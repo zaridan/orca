@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { Network, Plus, X } from 'lucide-react'
 import { useAppStore } from '@/store'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { AgentStateDot, agentStateLabel } from '@/components/AgentStateDot'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
@@ -117,17 +118,19 @@ export function OrchestratorsSidebarSection(): React.JSX.Element | null {
         <span className="text-[11px] font-semibold uppercase tracking-wide text-worktree-sidebar-foreground/40">
           {translate('auto.components.sidebar.OrchestratorsSidebarSection.title', 'Orcastrators')}
         </span>
-        <button
-          type="button"
+        {/* Why: match the Projects "+" exactly — same shadcn Button so it renders
+            at full strength, not the faint /40-opacity raw button it replaced. */}
+        <Button
+          variant="ghost"
+          size="icon-xs"
           onClick={() => openModal('orchestrator-launch')}
           aria-label={translate(
             'auto.components.sidebar.OrchestratorsSidebarSection.new',
             'New Orcastrator'
           )}
-          className="rounded p-0.5 text-worktree-sidebar-foreground/40 transition-colors hover:bg-worktree-sidebar-foreground/8 hover:text-worktree-sidebar-foreground/70"
         >
-          <Plus className="size-3.5" strokeWidth={2} />
-        </button>
+          <Plus className="size-3.5" strokeWidth={2.25} />
+        </Button>
       </div>
       {live.map((entry) => {
         const worktreeTabIds = (tabsByWorktree[entry.worktreeId] ?? []).map((tab) => tab.id)
