@@ -101,6 +101,7 @@ import {
 import { GLOBAL_FLAGS } from './args'
 import { RuntimeRpcFailureError } from './runtime-client'
 import { buildWorktree, okFixture, queueFixtures, worktreeListFixture } from './test-fixtures'
+import { ORCASTRATOR_DISPLAY_PREFIX } from '../shared/orchestrator-identity'
 
 describe('COMMAND_SPECS collision check', () => {
   it('has no duplicate command paths', () => {
@@ -2229,6 +2230,146 @@ describe('orca cli worktree awareness', () => {
       callerTerminalHandle: undefined,
       startupAgent: 'codex',
       startupPrompt: 'hi'
+    })
+  })
+
+  it('suppresses agent activation when worktree.create originates from a director worktree', async () => {
+    queueFixtures(
+      callMock,
+      worktreeListFixture([
+        buildWorktree('/tmp/director', 'main', 'abc', 'repo-1', `${ORCASTRATOR_DISPLAY_PREFIX}Demo`)
+      ]),
+      okFixture('req_create', {
+        worktree: buildWorktree('/tmp/director/worker', 'worker', 'abc', 'repo-1'),
+        lineage: null,
+        warnings: []
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(
+      [
+        'worktree',
+        'create',
+        '--repo',
+        'id:repo-1',
+        '--name',
+        'worker',
+        '--agent',
+        'codex',
+        '--prompt',
+        'go',
+        '--json'
+      ],
+      '/tmp/director/src'
+    )
+
+    // Director-spawned workers are still created + revealed, just not activated.
+    expect(callMock).toHaveBeenNthCalledWith(2, 'worktree.create', {
+      repo: 'id:repo-1',
+      name: 'worker',
+      baseBranch: undefined,
+      linkedIssue: undefined,
+      comment: undefined,
+      runHooks: false,
+      activate: false,
+      parentWorktree: undefined,
+      cwdParentWorktree: 'id:repo-1::/tmp/director',
+      noParent: false,
+      callerTerminalHandle: undefined,
+      startupAgent: 'codex',
+      startupPrompt: 'go'
+    })
+  })
+
+  it('still activates agent creates that originate from a normal worktree', async () => {
+    queueFixtures(
+      callMock,
+      worktreeListFixture([buildWorktree('/tmp/repo', 'main', 'abc', 'repo-1')]),
+      okFixture('req_create', {
+        worktree: buildWorktree('/tmp/repo/worker', 'worker', 'abc', 'repo-1'),
+        lineage: null,
+        warnings: []
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(
+      [
+        'worktree',
+        'create',
+        '--repo',
+        'id:repo-1',
+        '--name',
+        'worker',
+        '--agent',
+        'codex',
+        '--json'
+      ],
+      '/tmp/repo/src'
+    )
+
+    expect(callMock).toHaveBeenNthCalledWith(2, 'worktree.create', {
+      repo: 'id:repo-1',
+      name: 'worker',
+      baseBranch: undefined,
+      linkedIssue: undefined,
+      comment: undefined,
+      runHooks: false,
+      activate: true,
+      parentWorktree: undefined,
+      cwdParentWorktree: 'id:repo-1::/tmp/repo',
+      noParent: false,
+      callerTerminalHandle: undefined,
+      startupAgent: 'codex',
+      startupPrompt: ''
+    })
+  })
+
+  it('lets an explicit --activate override director focus-steal suppression', async () => {
+    queueFixtures(
+      callMock,
+      worktreeListFixture([
+        buildWorktree('/tmp/director', 'main', 'abc', 'repo-1', `${ORCASTRATOR_DISPLAY_PREFIX}Demo`)
+      ]),
+      okFixture('req_create', {
+        worktree: buildWorktree('/tmp/director/worker', 'worker', 'abc', 'repo-1'),
+        lineage: null,
+        warnings: []
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(
+      [
+        'worktree',
+        'create',
+        '--repo',
+        'id:repo-1',
+        '--name',
+        'worker',
+        '--agent',
+        'codex',
+        '--activate',
+        '--json'
+      ],
+      '/tmp/director/src'
+    )
+
+    expect(callMock).toHaveBeenNthCalledWith(2, 'worktree.create', {
+      repo: 'id:repo-1',
+      name: 'worker',
+      baseBranch: undefined,
+      linkedIssue: undefined,
+      comment: undefined,
+      runHooks: false,
+      activate: true,
+      parentWorktree: undefined,
+      cwdParentWorktree: 'id:repo-1::/tmp/director',
+      noParent: false,
+      callerTerminalHandle: undefined,
+      startupAgent: 'codex',
+      startupPrompt: ''
     })
   })
 

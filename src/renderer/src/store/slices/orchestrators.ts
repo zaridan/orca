@@ -1,11 +1,13 @@
 import type { StateCreator } from 'zustand'
+// Why: the director displayName prefix is the durable, restart-surviving marker
+// used to reattach directors after a reload — the in-memory registry does not
+// persist, but the worktree (and its name) does. It lives in shared/ so the
+// CLI/main create path can identify directors with the same constant. Re-exported
+// here so existing renderer importers keep their import path.
+import { ORCASTRATOR_DISPLAY_PREFIX } from '../../../../shared/orchestrator-identity'
 import type { AppState } from '../types'
 
-// Why: a director worktree is created with this displayName prefix (see
-// orchestrator-launch.ts). It is the durable, restart-surviving marker used to
-// reattach directors after a reload — the in-memory registry does not persist,
-// but the worktree (and its name) does.
-export const ORCASTRATOR_DISPLAY_PREFIX = 'Orcastrator · '
+export { ORCASTRATOR_DISPLAY_PREFIX }
 
 // Why: an Orcastrator is a persistent "director" session. We track the launched
 // ones in their own registry so the ORCASTRATORS sidebar section can render
