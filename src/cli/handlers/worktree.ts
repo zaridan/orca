@@ -214,8 +214,11 @@ export const WORKTREE_HANDLERS: Record<string, CommandHandler> = {
       !noParent && !explicitParentWorkspace && !explicitParentWorktree
         ? getEnvParentWorkspace()
         : undefined
+    const explicitActivate = flags.get('activate') === true
+    const derivedActivate = flags.get('run-hooks') === true || Boolean(startupAgent)
     let cwdParentWorktree: string | undefined
     let originIsOrchestrator = false
+    let resolvedCwdContext = false
     const needsCwdRepoInference = !flags.has('repo') && !hasWorkspaceProjectTarget(flags)
     if (
       (!explicitParentWorktree && !explicitParentWorkspace && !noParent) ||
@@ -231,15 +234,22 @@ export const WORKTREE_HANDLERS: Record<string, CommandHandler> = {
       } catch {
         cwdParentWorktree = undefined
       }
+      resolvedCwdContext = true
+    }
+    // Why: a director spawns workers via `orca worktree create --agent`, commonly
+    // with `--no-parent --repo` — which skips the cwd block above. The agent/
+    // run-hooks-derived activation would steal the user's active tab to each new
+    // worker, so resolve the originating (cwd) worktree even when that gate
+    // skipped it, and suppress the activation when the origin is a director shell.
+    // An explicit --activate still wins; the worktree is still created + revealed.
+    if (derivedActivate && !explicitActivate && !resolvedCwdContext) {
+      try {
+        originIsOrchestrator = (await resolveCurrentWorktreeContext(cwd, client)).isOrchestrator
+      } catch {
+        originIsOrchestrator = false
+      }
     }
     const linearIssueLink = getOptionalLinearIssueLinkFlag(flags, 'linear-issue')
-    // Why: a director spawns workers via `orca worktree create --agent` from its
-    // own terminal. The agent/run-hooks-derived activation would steal the user's
-    // active tab to each new worker. Suppress that activation when the create
-    // originates from a director worktree; an explicit --activate still wins and
-    // the worktree is still created + revealed in the sidebar / Mission Control.
-    const explicitActivate = flags.get('activate') === true
-    const derivedActivate = flags.get('run-hooks') === true || Boolean(startupAgent)
     const suppressActivation = !explicitActivate && derivedActivate && originIsOrchestrator
     const result = await client.call<RuntimeWorktreeCreateResult>('worktree.create', {
       repo: await getCreateRepoSelector(flags, cwdParentWorktree, client),

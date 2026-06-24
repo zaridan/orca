@@ -2373,6 +2373,99 @@ describe('orca cli worktree awareness', () => {
     })
   })
 
+  it('suppresses activation for a director-spawned worker created with --no-parent --repo', async () => {
+    // Why: the real /orcastrate pattern spawns workers parent-less (parent=None)
+    // with an explicit --repo, which skips the cwd parent/repo-inference block —
+    // suppression must still apply from the director cwd.
+    queueFixtures(
+      callMock,
+      worktreeListFixture([
+        buildWorktree('/tmp/director', 'main', 'abc', 'repo-1', `${ORCASTRATOR_DISPLAY_PREFIX}Demo`)
+      ]),
+      okFixture('req_create', {
+        worktree: buildWorktree('/tmp/director/worker', 'worker', 'abc', 'repo-1'),
+        lineage: null,
+        warnings: []
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(
+      [
+        'worktree',
+        'create',
+        '--repo',
+        'id:repo-1',
+        '--name',
+        'worker',
+        '--no-parent',
+        '--agent',
+        'codex',
+        '--json'
+      ],
+      '/tmp/director/src'
+    )
+
+    expect(callMock).toHaveBeenNthCalledWith(2, 'worktree.create', {
+      repo: 'id:repo-1',
+      name: 'worker',
+      baseBranch: undefined,
+      linkedIssue: undefined,
+      comment: undefined,
+      runHooks: false,
+      activate: false,
+      parentWorktree: undefined,
+      noParent: true,
+      callerTerminalHandle: undefined,
+      startupAgent: 'codex',
+      startupPrompt: ''
+    })
+  })
+
+  it('still activates a --no-parent --repo agent create from a normal worktree', async () => {
+    queueFixtures(
+      callMock,
+      worktreeListFixture([buildWorktree('/tmp/repo', 'main', 'abc', 'repo-1')]),
+      okFixture('req_create', {
+        worktree: buildWorktree('/tmp/repo/worker', 'worker', 'abc', 'repo-1'),
+        lineage: null,
+        warnings: []
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(
+      [
+        'worktree',
+        'create',
+        '--repo',
+        'id:repo-1',
+        '--name',
+        'worker',
+        '--no-parent',
+        '--agent',
+        'codex',
+        '--json'
+      ],
+      '/tmp/repo/src'
+    )
+
+    expect(callMock).toHaveBeenNthCalledWith(2, 'worktree.create', {
+      repo: 'id:repo-1',
+      name: 'worker',
+      baseBranch: undefined,
+      linkedIssue: undefined,
+      comment: undefined,
+      runHooks: false,
+      activate: true,
+      parentWorktree: undefined,
+      noParent: true,
+      callerTerminalHandle: undefined,
+      startupAgent: 'codex',
+      startupPrompt: ''
+    })
+  })
+
   it('infers the repo from the current worktree on worktree.create', async () => {
     queueFixtures(
       callMock,
