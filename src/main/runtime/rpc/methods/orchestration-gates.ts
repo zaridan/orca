@@ -75,6 +75,18 @@ export const ORCHESTRATION_GATE_METHODS: RpcMethod[] = [
         )
       }
 
+      // Why (F2 #13, round 3, should-fix #4): --worktree-backed without an agent is
+      // a worktree-backed BARE-SHELL mode — workers run in a plain shell that can
+      // never emit worker_done, so every track hangs. Require --worker-agent so the
+      // worker is a real agent (the only configuration that completes).
+      if (params.worktreeBacked && !params.workerAgent) {
+        throw new Error(
+          '--worktree-backed requires --worker-agent <id>: a worktree-backed worker must be ' +
+            'an agent that can report worker_done (a bare shell never completes). ' +
+            'Pass e.g. --worker-agent claude.'
+        )
+      }
+
       const coordinatorHandle = params.from ?? deriveCoordinatorHandle()
 
       // Why (#12): resolve the coordinator's worktree to a stable target key so
