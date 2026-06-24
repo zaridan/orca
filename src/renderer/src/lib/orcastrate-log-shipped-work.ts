@@ -30,11 +30,32 @@ function asRecord(value: unknown): UnknownRecord | null {
 }
 
 /**
+ * True when an outcome's `ts` parses to a time at/after `sinceMs`. A missing or
+ * unparseable `ts` returns false so the outcome is excluded — it can't be
+ * attributed to the current director's lifetime.
+ */
+function isOutcomeWithinLifetime(ts: unknown, sinceMs: number): boolean {
+  if (typeof ts !== 'string') {
+    return false
+  }
+  const parsed = Date.parse(ts)
+  return !Number.isNaN(parsed) && parsed >= sinceMs
+}
+
+/**
  * Parse a director's `.orcastrate/log.jsonl` into its per-worktree outcomes,
  * joining each outcome to its plan description by name. Latest outcome per name
  * wins; unparseable lines are skipped. Order follows first appearance.
+ *
+ * When `sinceMs` is set, only outcome records whose `ts` parses to a time
+ * at/after `sinceMs` contribute. Why: the log is committed to the repo, so a
+ * new director worktree (branched from `main`) inherits every prior session's
+ * outcomes. Scoping to the director's own lifetime keeps foreign work out of
+ * its Shipped view. An outcome with a missing/unparseable `ts` can't be
+ * attributed to this director, so it's excluded too (err toward not showing
+ * foreign work). Plan records are unscoped — they only supply descriptions.
  */
-export function parseOrchestrateLogOutcomes(logText: string): ShippedWorkItem[] {
+export function parseOrchestrateLogOutcomes(logText: string, sinceMs?: number): ShippedWorkItem[] {
   const descriptionByName = new Map<string, string>()
   const tagByName = new Map<string, string>()
   const order: string[] = []
@@ -65,6 +86,9 @@ export function parseOrchestrateLogOutcomes(logText: string): ShippedWorkItem[] 
         }
       }
     } else if (record.type === 'outcome' && Array.isArray(record.results)) {
+      if (sinceMs !== undefined && !isOutcomeWithinLifetime(record.ts, sinceMs)) {
+        continue
+      }
       for (const raw of record.results) {
         const result = asRecord(raw)
         const name = result?.name
