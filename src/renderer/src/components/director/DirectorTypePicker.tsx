@@ -1,12 +1,6 @@
 import type React from 'react'
 import { ListChecks, Sparkles } from 'lucide-react'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
 import { translate } from '@/i18n/i18n'
 import type { DirectorKind } from '@/lib/director-backend'
@@ -145,15 +139,39 @@ export function DirectorTypePicker({
             {translate('auto.components.director.DirectorTypePicker.recipe_label', 'Recipe')}
           </Label>
           <Select value={selectedRecipeName ?? undefined} onValueChange={onRecipeChange}>
-            <SelectTrigger size="sm" className="w-full text-xs">
-              <SelectValue
-                placeholder={translate(
-                  'auto.components.director.DirectorTypePicker.recipe_placeholder',
-                  'Select a recipe'
+            {/* Why: show only the selected recipe NAME in the trigger. The menu's
+                rich two-line name+description is single-line + `whitespace-nowrap`
+                here, so mirroring it via SelectValue blew the field — and the whole
+                dialog grid (min-width:auto) — far past the modal width. The
+                description stays in the menu (mirrors the Project combobox). */}
+            <SelectTrigger
+              size="sm"
+              className="w-full min-w-0 text-xs"
+              aria-label={translate(
+                'auto.components.director.DirectorTypePicker.recipe_label',
+                'Recipe'
+              )}
+            >
+              <span className="truncate">
+                {selectedRecipeName ?? (
+                  <span className="text-muted-foreground">
+                    {translate(
+                      'auto.components.director.DirectorTypePicker.recipe_placeholder',
+                      'Select a recipe'
+                    )}
+                  </span>
                 )}
-              />
+              </span>
             </SelectTrigger>
-            <SelectContent>
+            {/* Why: popper + trigger-width keeps the menu bounded to the field and
+                collision-aware so long recipe descriptions don't spill past the
+                modal edge or cover the Cancel/Launch row (mirrors the Project
+                combobox above). */}
+            <SelectContent
+              position="popper"
+              align="start"
+              className="w-[var(--radix-select-trigger-width)]"
+            >
               {recipes.map((recipe) => (
                 <SelectItem key={recipe.name} value={recipe.name}>
                   <span className="flex flex-col">
