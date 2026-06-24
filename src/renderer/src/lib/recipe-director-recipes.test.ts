@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { compileRecipe, IMPLEMENT_THEN_REVIEW, type Recipe } from './recipe-director-recipes'
+import {
+  compileRecipe,
+  getRecipes,
+  IMPLEMENT_THEN_REVIEW,
+  REPRO_FIX_VERIFY,
+  SINGLE_WORKER_PR,
+  type Recipe
+} from './recipe-director-recipes'
 
 // Mirror the coordinator's track-hint contract (parseTrackFromSpec): a leading
 // `track: <key>` line on its own line. Kept local so this renderer test does not
@@ -94,5 +101,85 @@ describe('compileRecipe', () => {
       ]
     }
     expect(() => compileRecipe(recipe)).toThrow(/duplicate task keys/)
+  })
+
+  it('compiles single_worker_pr to one task with its own per-task track and no deps', () => {
+    const compiled = compileRecipe(SINGLE_WORKER_PR)
+
+    expect(compiled.map((t) => t.key)).toEqual(['deliver'])
+    expect(compiled[0].dependsOn).toEqual([])
+    // No explicit track → track defaults to the task key → its own worktree/PR.
+    expect(trackHintOf(compiled[0].spec)).toBe('deliver')
+  })
+
+  it('compiles repro_fix_verify to three same-track tasks chained repro→fix→verify', () => {
+    const compiled = compileRecipe(REPRO_FIX_VERIFY)
+
+    expect(compiled.map((t) => t.key)).toEqual(['repro', 'fix', 'verify'])
+
+    const [repro, fix, verify] = compiled
+    expect(repro.dependsOn).toEqual([])
+    expect(fix.dependsOn).toEqual(['repro'])
+    expect(verify.dependsOn).toEqual(['fix'])
+
+    // All three share one track → one worktree, one branch, one PR.
+    const tracks = compiled.map((t) => trackHintOf(t.spec))
+    expect(tracks.every((t) => t !== null)).toBe(true)
+    expect(new Set(tracks).size).toBe(1)
+  })
+
+  it('repro_fix_verify deps form a total order on its single track', () => {
+    const compiled = compileRecipe(REPRO_FIX_VERIFY)
+
+    // The coordinator refuses same-track tasks that are not totally ordered by
+    // deps. Verify the chain is a strict total order: each task (after the first)
+    // transitively depends on every earlier same-track task, with no ties.
+    const indexByKey = new Map(compiled.map((t, i) => [t.key, i]))
+    const depsByKey = new Map(compiled.map((t) => [t.key, t.dependsOn]))
+
+    const dependsTransitively = (from: string, on: string): boolean => {
+      const stack = [...(depsByKey.get(from) ?? [])]
+      while (stack.length > 0) {
+        const next = stack.pop()!
+        if (next === on) {
+          return true
+        }
+        stack.push(...(depsByKey.get(next) ?? []))
+      }
+      return false
+    }
+
+    // For every ordered pair (earlier, later), the later one must depend on the
+    // earlier one — that is exactly what "totally ordered by deps" means.
+    for (let i = 0; i < compiled.length; i++) {
+      for (let j = i + 1; j < compiled.length; j++) {
+        const earlier = compiled[i].key
+        const later = compiled[j].key
+        expect(dependsTransitively(later, earlier)).toBe(true)
+      }
+    }
+    // Sanity: compile order matches dependency order.
+    expect(indexByKey.get('repro')).toBeLessThan(indexByKey.get('fix')!)
+    expect(indexByKey.get('fix')).toBeLessThan(indexByKey.get('verify')!)
+  })
+})
+
+describe('getRecipes', () => {
+  it('returns all three built-in recipes by name', () => {
+    const names = getRecipes().map((r) => r.name)
+    expect(names).toEqual(['implement_then_review', 'single_worker_pr', 'repro_fix_verify'])
+  })
+
+  it('exposes a name and a non-empty description per recipe (picker shape)', () => {
+    for (const recipe of getRecipes()) {
+      expect(recipe.name.length).toBeGreaterThan(0)
+      expect(recipe.description.trim().length).toBeGreaterThan(0)
+    }
+  })
+
+  it('returns a fresh array so callers cannot mutate the registry', () => {
+    const first = getRecipes()
+    first.pop()
+    expect(getRecipes()).toHaveLength(3)
   })
 })

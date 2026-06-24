@@ -65,6 +65,79 @@ export const IMPLEMENT_THEN_REVIEW: Recipe = {
   ]
 }
 
+/** The simplest recipe: a single worker does the whole job and opens a PR. No
+ *  track or deps — its track defaults to the task key, so it gets its own
+ *  worktree/branch and produces exactly one PR. */
+export const SINGLE_WORKER_PR: Recipe = {
+  name: 'single_worker_pr',
+  description: 'One worker does the whole job end to end on its own branch and opens a single PR.',
+  tasks: [
+    {
+      key: 'deliver',
+      spec:
+        'Carry out the requested change from start to finish. Make focused commits, ' +
+        'keep the build and tests green, and open a PR for your branch. When done, ' +
+        'report what you changed and anything a reviewer should scrutinize.'
+    }
+  ]
+}
+
+// Why: repro → fix → verify all share ONE track so they run in the same worktree
+// (one branch → one PR), and each builds on the previous one's committed artifact.
+// The dependsOn chain (fix waits on repro, verify waits on fix) is a TOTAL order on
+// the track — which the coordinator's same-track guard requires (it refuses
+// same-track tasks not totally ordered by deps, since they would race one checkout).
+const REPRO_FIX_VERIFY_TRACK = 'repro-fix-verify'
+
+/** Bug-fix workflow as a single-track dependency chain: reproduce with a failing
+ *  test, fix until it passes, then independently verify. Each step commits its
+ *  artifact so the next step (same worktree) sees it. */
+export const REPRO_FIX_VERIFY: Recipe = {
+  name: 'repro_fix_verify',
+  description:
+    'Reproduce the bug with a failing test, fix it, then verify — one worktree, one PR, ' +
+    'each step chained after the last so they share the same branch in order.',
+  tasks: [
+    {
+      key: 'repro',
+      track: REPRO_FIX_VERIFY_TRACK,
+      spec:
+        'Reproduce the reported bug by writing a failing test (or a minimal repro) that ' +
+        'captures it. Commit the failing test so the next step sees it on this branch. ' +
+        'Report exactly how the bug manifests and what the test asserts.'
+    },
+    {
+      key: 'fix',
+      track: REPRO_FIX_VERIFY_TRACK,
+      dependsOn: ['repro'],
+      spec:
+        'Make the failing test from the previous step pass with the smallest correct ' +
+        'change. Keep the rest of the build and tests green. Commit the fix so the verify ' +
+        'step sees it on this branch, and report what you changed and why.'
+    },
+    {
+      key: 'verify',
+      track: REPRO_FIX_VERIFY_TRACK,
+      dependsOn: ['fix'],
+      spec:
+        'Independently verify the fix on this branch: run the full test suite, confirm the ' +
+        'previously failing test now passes, and check for regressions or missed edge ' +
+        'cases. Commit any follow-up test or fixup, then confirm the PR is ready (or say ' +
+        'why not).'
+    }
+  ]
+}
+
+/** Every built-in recipe, keyed by name. The picker (#11) lists these; the launch
+ *  path compiles the selected one. Order is the intended display order. */
+const BUILT_IN_RECIPES: Recipe[] = [IMPLEMENT_THEN_REVIEW, SINGLE_WORKER_PR, REPRO_FIX_VERIFY]
+
+/** All built-in recipes, in display order. Returns a fresh array so callers can
+ *  sort/filter without mutating the registry. */
+export function getRecipes(): Recipe[] {
+  return [...BUILT_IN_RECIPES]
+}
+
 /** A recipe task lowered to the inputs `orchestration.taskCreate` needs, minus the
  *  resolved dependency ids (those exist only after each create returns, so the
  *  launch path resolves `dependsOn` keys → ids as it goes). */
