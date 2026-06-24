@@ -14,7 +14,8 @@ import { Coordinator, type CoordinatorRuntime } from '../../orchestration/coordi
 import {
   buildAdoptedTrackWorktrees,
   reconcileCoordinatorRunsOnBoot,
-  type ReconcileRunOnBootResult
+  type ReconcileRunOnBootResult,
+  type ResumeOutcome
 } from '../../orchestration/boot-resume'
 
 // Why: the most-recently-started coordinator is stored at module scope so
@@ -247,37 +248,65 @@ type OrchestrationBootRuntime = CoordinatorRuntime & {
   getOrchestrationDb(): OrchestrationDb
   resolveOrchestrationTargetKey(selector?: string): Promise<string | null>
   listWorktreeLineage(): Promise<Record<string, WorktreeLineage>>
+  // Why (F3 #14, should-fix #4): the runtime boot time fences the atomic resume
+  // claim so two runtimes sharing a DB can't both drive one run, while a later
+  // boot reclaims a crashed resumer's stale claim.
+  getStartedAt(): number
 }
 
 const WORKTREE_TARGET_PREFIX = 'worktree:'
 
-// Why (F3 #14): rebuild and restart a crashed run's coordinator. Returns false
-// (→ the reconciler marks the run failed, killing the zombie) when the run cannot
-// be safely resumed: no worktree target to anchor lineage/drift on, or the
-// director worktree no longer resolves (nothing to branch children from). On the
-// happy path it reclaims dead in-flight dispatches (so the loop converges),
-// re-adopts existing track worktrees, registers the coordinator as active (so
-// orchestration.runStop can halt it), and fires the loop. Any throw propagates to
-// the reconciler, which also falls back to failed — never leaves the run running
-// without a loop.
+// Why (F3 #14): rebuild and restart a crashed run's coordinator. Returns:
+//  - 'contended' — another runtime won the atomic claim; leave the run running
+//    (it has a live owner), do not touch it.
+//  - 'declined' — WE own the claim but the run is not safely resumable (no
+//    worktree target, pre-v9 unknown mode, or the director worktree is gone), so
+//    the reconciler marks it failed (kills the zombie, unblocks the guard).
+//  - 'resumed' — WE own the claim and started a converging loop.
+// The claim is taken FIRST so a loser never declines→fails a run another runtime
+// is driving. On the happy path it reclaims dead in-flight dispatches (so the loop
+// converges), re-adopts existing track worktrees, registers the coordinator as
+// active (so orchestration.runStop can halt it), and fires the loop — whose .catch
+// force-fails the run if the loop ever rejects un-finalized (hard-rule belt).
 async function resumeCoordinatorRunOnBoot(
   runtime: OrchestrationBootRuntime,
   db: OrchestrationDb,
   run: CoordinatorRun,
   onLog: (msg: string) => void
-): Promise<boolean> {
+): Promise<ResumeOutcome> {
+  // Atomic, boot-time-fenced claim FIRST: only the winner decides drive-vs-fail,
+  // so a second runtime sharing the DB neither double-drives nor fails a run the
+  // owner is driving.
+  const fenceIso = new Date(runtime.getStartedAt()).toISOString()
+  if (!db.tryClaimRunForResume(run.id, fenceIso)) {
+    onLog(`Resume: run ${run.id} is claimed by another runtime; skipping`)
+    return 'contended'
+  }
+
   if (!run.target_key || !run.target_key.startsWith(WORKTREE_TARGET_PREFIX)) {
     onLog(`Resume: run ${run.id} has no worktree target; cannot resume`)
-    return false
+    return 'declined'
+  }
+  // Why (should-fix #3): a NULL worktree_backed predates v9 — we cannot tell if it
+  // was worktree-backed. Guessing legacy would dispatch into a bare shell that never
+  // reports done → never converges → re-resumes every restart. Fail it instead.
+  // Only a genuine, explicitly-recorded legacy run (worktree_backed = 0) resumes in
+  // legacy mode.
+  if (run.worktree_backed === null) {
+    onLog(`Resume: run ${run.id} predates v9 (worktree_backed unknown); cannot safely resume`)
+    return 'declined'
   }
   const directorWorktreeId = run.target_key.slice(WORKTREE_TARGET_PREFIX.length)
   const directorSelector = `id:${directorWorktreeId}`
   try {
-    // Throws when the director worktree was deleted while Orca was closed.
+    // Throws when the director worktree was deleted while Orca was closed. We fail
+    // closed (favor the hard rule): a run we cannot anchor converges to failed
+    // rather than risk a zombie. (Distinguishing a transient resolve error from a
+    // genuine not-found is a follow-up; fail-closed is the safe default here.)
     await runtime.resolveOrchestrationTargetKey(directorSelector)
   } catch {
     onLog(`Resume: run ${run.id} director worktree ${directorWorktreeId} is gone; cannot resume`)
-    return false
+    return 'declined'
   }
 
   const worktreeBacked = run.worktree_backed === 1
@@ -321,12 +350,26 @@ async function resumeCoordinatorRunOnBoot(
   }
 
   activeCoordinator = coordinator
-  coordinator.runFromExistingRun(run.id).finally(() => {
-    if (activeCoordinator === coordinator) {
-      activeCoordinator = null
-    }
-  })
-  return true
+  coordinator
+    .runFromExistingRun(run.id)
+    .catch((err) => {
+      // Hard-rule belt (must-fix #1): if the loop ever rejects WITHOUT finalizing
+      // (e.g. a future pre-try line in executeLoop throws), force the run to failed
+      // so it can never be left 'running' with no live loop. Best-effort: a DB
+      // closed/locked at shutdown must not crash the process.
+      onLog(`Resume: run ${run.id} loop rejected; marking failed (${String(err)})`)
+      try {
+        db.updateCoordinatorRun(run.id, 'failed')
+      } catch {
+        // ignore — nothing more we can safely do here
+      }
+    })
+    .finally(() => {
+      if (activeCoordinator === coordinator) {
+        activeCoordinator = null
+      }
+    })
+  return 'resumed'
 }
 
 // Why (F3 #14): the boot entry point. Scans running coordinator runs and

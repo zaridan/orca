@@ -82,7 +82,10 @@ export class CoordinatorRunConflictError extends Error {
 // so resume-on-boot (#14) can rebuild a crashed run's coordinator faithfully —
 // the in-memory coordinator (its worktree-backed flag, worker agent, concurrency)
 // is otherwise lost on restart, and a wrong guess re-zombies the run.
-const SCHEMA_VERSION = 9
+// v9 → v10 adds `coordinator_runs.resumed_at`, a boot-time-fenced resume claim so
+// two runtimes sharing one DB (desktop + `orca serve`) can't both drive a resumed
+// run, while a strictly-greater later fence reclaims a crashed resumer's stale claim.
+const SCHEMA_VERSION = 10
 
 export class OrchestrationDb {
   private db: Database.Database
@@ -191,6 +194,7 @@ export class OrchestrationDb {
         max_concurrent      INTEGER,
         worktree_backed     INTEGER,
         worker_agent        TEXT,
+        resumed_at          TEXT,
         created_at          TEXT NOT NULL DEFAULT (datetime('now')),
         completed_at        TEXT
       );
@@ -344,6 +348,12 @@ export class OrchestrationDb {
         }
         if (!this.hasColumn('coordinator_runs', 'worker_agent')) {
           this.db.exec(`ALTER TABLE coordinator_runs ADD COLUMN worker_agent TEXT`)
+        }
+      }
+      // v9 → v10: the boot-time-fenced resume claim (#14). Nullable/additive.
+      if (current < 10) {
+        if (!this.hasColumn('coordinator_runs', 'resumed_at')) {
+          this.db.exec(`ALTER TABLE coordinator_runs ADD COLUMN resumed_at TEXT`)
         }
       }
       this.createUndeliveredInboxIndexIfPossible()
@@ -1161,6 +1171,41 @@ export class OrchestrationDb {
       }
     }
     return reclaimed
+  }
+
+  // Why (F3 #14): an atomic, boot-time-fenced claim so only ONE runtime drives a
+  // resumed run when two share a DB file (desktop + `orca serve`). `fenceIso` is the
+  // claiming runtime's boot time. The claim wins iff the run is still 'running' and
+  // is unclaimed OR holds a STRICTLY-OLDER fence (a prior, now-dead resumer). Two
+  // runtimes booting together share a fence, so the strict `<` lets exactly one win
+  // (the other sees the just-written equal fence and loses) — no double-drive. A
+  // later boot's larger fence reclaims a crashed resumer's stale claim, so a crash
+  // mid-resume can't strand the run. BEGIN IMMEDIATE serializes the check+set across
+  // processes. Store ISO (not datetime('now')) so it lexically compares with fenceIso.
+  tryClaimRunForResume(runId: string, fenceIso: string): boolean {
+    this.db.exec('BEGIN IMMEDIATE')
+    let committed = false
+    try {
+      const info = this.db
+        .prepare(
+          `UPDATE coordinator_runs SET resumed_at = ?
+             WHERE id = ?
+               AND status = 'running'
+               AND (resumed_at IS NULL OR resumed_at < ?)`
+        )
+        .run(fenceIso, runId, fenceIso)
+      this.db.exec('COMMIT')
+      committed = true
+      return Number((info as { changes?: number | bigint }).changes ?? 0) === 1
+    } finally {
+      if (!committed) {
+        try {
+          this.db.exec('ROLLBACK')
+        } catch {
+          // No active transaction to roll back — ignore.
+        }
+      }
+    }
   }
 
   getActiveCoordinatorRun(): CoordinatorRun | undefined {

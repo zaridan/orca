@@ -1532,7 +1532,9 @@ app.whenReady().then(async () => {
   // Gated on the experimental flag (the only surface that starts runs) to stay
   // additive, fire-and-forget so a reconcile error can never block startup, and
   // run here — before any window is shown — so it lands before a user-triggered
-  // run could hit the guard.
+  // run could hit the guard. This runs in serve mode too; the resume path's atomic
+  // boot-time-fenced claim (tryClaimRunForResume) makes that safe — a desktop and a
+  // serve runtime sharing one DB can't both drive the same resumed run.
   if (store.getSettings().experimentalOrchestrators) {
     void runOrchestrationBootReconcile(runtimeService, (msg) =>
       console.log('[orchestration-resume]', msg)

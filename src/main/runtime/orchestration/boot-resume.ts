@@ -13,7 +13,22 @@ import type { CoordinatorRun, TaskRow } from './types'
 import { parseTrackFromSpec } from './coordinator'
 import type { WorktreeLineage } from '../../../shared/types'
 
-export type BootRunDisposition = 'finalized-completed' | 'finalized-failed' | 'resumed' | 'failed'
+export type BootRunDisposition =
+  | 'finalized-completed'
+  | 'finalized-failed'
+  | 'resumed'
+  | 'failed'
+  | 'reconcile-error'
+  // Why (F3 #14): another runtime won the atomic resume claim and is driving this
+  // run, so we leave it 'running' (NOT a zombie — a live loop owns it) and do not
+  // touch it. Distinct from 'resumed' (we drive it) and 'failed' (no driver).
+  | 'skipped'
+
+// Why (F3 #14): the resume callback's three outcomes the reconciler must tell
+// apart. 'resumed' → a converging loop now drives it (stays running). 'declined'
+// → unresumable, the reconciler marks it failed (kills the zombie). 'contended'
+// → another runtime claimed it; leave it running (it has a live owner).
+export type ResumeOutcome = 'resumed' | 'declined' | 'contended'
 
 export type ReconcileRunOnBootResult = {
   runId: string
@@ -23,12 +38,11 @@ export type ReconcileRunOnBootResult = {
 
 export type ReconcileCoordinatorRunsOnBootDeps = {
   db: OrchestrationDb
-  // Attempt to resume a run that still has outstanding work. Returns true when a
-  // converging coordinator loop was started (the run legitimately stays
-  // 'running' under a live loop). Returns false — or throws — when resume is
-  // declined or fails, and the reconciler marks the run failed instead. Omitted
+  // Attempt to resume a run that still has outstanding work. 'resumed' keeps the
+  // run 'running' under a live loop; 'declined' (or a throw) → the reconciler marks
+  // it failed; 'contended' → another runtime owns it, leave it running. Omitted
   // entirely → MUST-only mode: every outstanding run is reconciled to failed.
-  resume?: (run: CoordinatorRun) => Promise<boolean>
+  resume?: (run: CoordinatorRun) => Promise<ResumeOutcome>
   onLog?: (msg: string) => void
 }
 
@@ -60,46 +74,69 @@ export async function reconcileCoordinatorRunsOnBoot(
 ): Promise<ReconcileRunOnBootResult[]> {
   const { db, resume } = deps
   const onLog = deps.onLog ?? (() => {})
-  // Snapshot the running rows up front. Idempotent by construction: a second pass
-  // finds finalized/failed rows gone from this list, and the only rows still
-  // 'running' belong to a live resumed loop (the production caller runs once).
+  // Snapshot the running rows up front. A resumed run stays 'running' but is now
+  // claimed (resumed_at fenced), so a second pass's resume claim loses → 'contended'
+  // → left alone: the pass is safe to repeat.
   const runs = db.listCoordinatorRuns({ status: 'running' })
   const results: ReconcileRunOnBootResult[] = []
 
   for (const run of runs) {
-    const { finalizeStatus } = classifyOutstandingWork(db, run)
-    if (finalizeStatus) {
-      db.updateCoordinatorRun(run.id, finalizeStatus)
-      onLog(`Boot reconcile: run ${run.id} had no outstanding work; finalized as ${finalizeStatus}`)
-      results.push({
-        runId: run.id,
-        disposition: finalizeStatus === 'failed' ? 'finalized-failed' : 'finalized-completed'
-      })
-      continue
+    // Why (F3 #14, should-fix #5): isolate each run. A transient DB error (e.g.
+    // SQLITE_BUSY) on one row must not abort the loop and strand every LATER
+    // running row as a zombie. Log and continue; the stranded row is retried next
+    // boot (it is still 'running').
+    try {
+      results.push(await reconcileOneRunOnBoot(db, run, resume, onLog))
+    } catch (err) {
+      onLog(`Boot reconcile: run ${run.id} errored; left for next boot (${String(err)})`)
+      results.push({ runId: run.id, disposition: 'reconcile-error', reason: String(err) })
     }
-
-    if (resume) {
-      let resumed = false
-      try {
-        resumed = await resume(run)
-      } catch (err) {
-        onLog(`Boot reconcile: resume of run ${run.id} threw; marking failed (${String(err)})`)
-      }
-      if (resumed) {
-        onLog(`Boot reconcile: resumed run ${run.id}`)
-        results.push({ runId: run.id, disposition: 'resumed' })
-        continue
-      }
-    }
-
-    // Floor: cannot/should not resume → converge to failed so the guard unblocks.
-    const reason = 'coordinator restarted with no resumable loop'
-    db.updateCoordinatorRun(run.id, 'failed')
-    onLog(`Boot reconcile: run ${run.id} not resumed; marked failed (${reason})`)
-    results.push({ runId: run.id, disposition: 'failed', reason })
   }
 
   return results
+}
+
+async function reconcileOneRunOnBoot(
+  db: OrchestrationDb,
+  run: CoordinatorRun,
+  resume: ((run: CoordinatorRun) => Promise<ResumeOutcome>) | undefined,
+  onLog: (msg: string) => void
+): Promise<ReconcileRunOnBootResult> {
+  const { finalizeStatus } = classifyOutstandingWork(db, run)
+  if (finalizeStatus) {
+    db.updateCoordinatorRun(run.id, finalizeStatus)
+    onLog(`Boot reconcile: run ${run.id} had no outstanding work; finalized as ${finalizeStatus}`)
+    return {
+      runId: run.id,
+      disposition: finalizeStatus === 'failed' ? 'finalized-failed' : 'finalized-completed'
+    }
+  }
+
+  if (resume) {
+    let outcome: ResumeOutcome = 'declined'
+    try {
+      outcome = await resume(run)
+    } catch (err) {
+      // A throw is treated as declined → marked failed below (never left running).
+      onLog(`Boot reconcile: resume of run ${run.id} threw; marking failed (${String(err)})`)
+      outcome = 'declined'
+    }
+    if (outcome === 'resumed') {
+      onLog(`Boot reconcile: resumed run ${run.id}`)
+      return { runId: run.id, disposition: 'resumed' }
+    }
+    if (outcome === 'contended') {
+      // Another runtime owns it (a live loop drives it) — leave it running.
+      onLog(`Boot reconcile: run ${run.id} is owned by another runtime; left running`)
+      return { runId: run.id, disposition: 'skipped' }
+    }
+  }
+
+  // Floor: cannot/should not resume → converge to failed so the guard unblocks.
+  const reason = 'coordinator restarted with no resumable loop'
+  db.updateCoordinatorRun(run.id, 'failed')
+  onLog(`Boot reconcile: run ${run.id} not resumed; marked failed (${reason})`)
+  return { runId: run.id, disposition: 'failed', reason }
 }
 
 // Why (F3 #14, design §8): rebuild the coordinator's in-memory track→worktree map

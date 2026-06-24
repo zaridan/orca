@@ -580,6 +580,35 @@ describe('OrchestrationDb', () => {
       expect(read.worker_agent).toBeNull()
     })
 
+    // Why (F3 #14): the boot-time-fenced resume claim. One winner per fence; a
+    // strictly-greater later fence reclaims a stale (crashed-resumer) claim; a
+    // non-running run can't be claimed.
+    it('tryClaimRunForResume: one winner per fence, later fence reclaims, terminal not claimable', () => {
+      const d = createDb()
+      const run = d.startCoordinatorRun({
+        spec: 'go',
+        coordinatorHandle: 'c',
+        targetKey: 'worktree:wt'
+      })
+      const fence1 = '2026-06-23T10:00:00.000Z'
+      // Two runtimes at the SAME fence: exactly one wins.
+      expect(d.tryClaimRunForResume(run.id, fence1)).toBe(true)
+      expect(d.tryClaimRunForResume(run.id, fence1)).toBe(false)
+      expect(d.getCoordinatorRun(run.id)?.resumed_at).toBe(fence1)
+
+      // A later boot (strictly-greater fence) reclaims a stale claim.
+      const fence2 = '2026-06-23T11:00:00.000Z'
+      expect(d.tryClaimRunForResume(run.id, fence2)).toBe(true)
+      expect(d.getCoordinatorRun(run.id)?.resumed_at).toBe(fence2)
+
+      // An earlier fence cannot steal a newer claim.
+      expect(d.tryClaimRunForResume(run.id, fence1)).toBe(false)
+
+      // Once terminal, the run is never claimable.
+      d.updateCoordinatorRun(run.id, 'failed')
+      expect(d.tryClaimRunForResume(run.id, '2026-06-23T12:00:00.000Z')).toBe(false)
+    })
+
     it('counts outstanding tasks and active dispatches', () => {
       const d = createDb()
       expect(d.countOutstandingTasks()).toBe(0)

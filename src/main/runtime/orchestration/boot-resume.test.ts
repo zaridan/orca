@@ -115,7 +115,7 @@ describe('reconcileCoordinatorRunsOnBoot (F3 #14)', () => {
       db: d,
       resume: async (r: CoordinatorRun) => {
         resumed.push(r.id)
-        return true
+        return 'resumed'
       }
     }
     const results = await reconcileCoordinatorRunsOnBoot(deps)
@@ -125,14 +125,60 @@ describe('reconcileCoordinatorRunsOnBoot (F3 #14)', () => {
     expect(d.getCoordinatorRun(run.id)?.status).toBe('running')
   })
 
+  it('leaves a run running (skipped) when the resume callback reports contention', async () => {
+    const d = createDb()
+    const run = d.startCoordinatorRun({ spec: 'go', coordinatorHandle: 'c' })
+    d.createTask({ spec: 'A', coordinatorRunId: run.id })
+
+    // 'contended' = another runtime owns it; the reconciler must NOT fail it.
+    const results = await reconcileCoordinatorRunsOnBoot({ db: d, resume: async () => 'contended' })
+    expect(results[0].disposition).toBe('skipped')
+    expect(d.getCoordinatorRun(run.id)?.status).toBe('running')
+  })
+
   it('falls back to failed when the resume callback declines', async () => {
     const d = createDb()
     const run = d.startCoordinatorRun({ spec: 'go', coordinatorHandle: 'c' })
     d.createTask({ spec: 'A', coordinatorRunId: run.id })
 
-    const results = await reconcileCoordinatorRunsOnBoot({ db: d, resume: async () => false })
+    const results = await reconcileCoordinatorRunsOnBoot({ db: d, resume: async () => 'declined' })
     expect(results[0].disposition).toBe('failed')
     expect(d.getCoordinatorRun(run.id)?.status).toBe('failed')
+  })
+
+  it('isolates a per-run reconcile error so later running rows are not stranded', async () => {
+    const d = createDb()
+    const bad = d.startCoordinatorRun({
+      spec: 'bad',
+      coordinatorHandle: 'cb',
+      targetKey: 'worktree:wtA'
+    })
+    d.createTask({ spec: 'A', coordinatorRunId: bad.id, targetKey: 'worktree:wtA' })
+    const good = d.startCoordinatorRun({
+      spec: 'good',
+      coordinatorHandle: 'cg',
+      targetKey: 'worktree:wtB'
+    })
+    d.createTask({ spec: 'B', coordinatorRunId: good.id, targetKey: 'worktree:wtB' })
+
+    // The first run's resume throws inside a way the per-run try/catch must contain;
+    // the second run must still be reconciled (here: declined → failed).
+    const results = await reconcileCoordinatorRunsOnBoot({
+      db: d,
+      resume: async (r) => {
+        if (r.id === bad.id) {
+          throw new Error('transient boom')
+        }
+        return 'declined'
+      }
+    })
+    const byId = Object.fromEntries(results.map((r) => [r.runId, r.disposition]))
+    // bad: a throw is treated as declined → failed (never left running).
+    expect(byId[bad.id]).toBe('failed')
+    expect(d.getCoordinatorRun(bad.id)?.status).toBe('failed')
+    // good: still processed despite bad's failure.
+    expect(byId[good.id]).toBe('failed')
+    expect(d.getCoordinatorRun(good.id)?.status).toBe('failed')
   })
 
   it('falls back to failed when the resume callback throws (never left running with no loop)', async () => {

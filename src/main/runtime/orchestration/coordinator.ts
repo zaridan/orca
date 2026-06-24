@@ -327,14 +327,19 @@ export class Coordinator {
     this.state.runId = runId
     this.opts.onLog(`Coordinator run ${runId} started`)
 
-    // Why (#12): tasks are created via orchestration.taskCreate before the run
-    // exists, so they start unowned. Claim them for this run before decompose
-    // reads the (now run-scoped) DAG — but only tasks on THIS run's target, so
-    // a concurrent run on another target can't have its tasks poached.
-    const targetKey = this.db.getCoordinatorRun(runId)?.target_key ?? null
-    this.db.adoptUnownedTasks(runId, targetKey)
-
     try {
+      // Why (#12): tasks are created via orchestration.taskCreate before the run
+      // exists, so they start unowned. Claim them for this run before decompose
+      // reads the (now run-scoped) DAG — but only tasks on THIS run's target, so
+      // a concurrent run on another target can't have its tasks poached.
+      // Why (F3 #14): this MUST stay inside the try. On a resumed run a throw here
+      // (e.g. a transient DB error) would otherwise reject the loop promise WITHOUT
+      // finalizing the run — leaving it status='running' with no live loop, the
+      // exact zombie F3 exists to prevent. Routing it through the catch marks the
+      // run failed so the guard unblocks.
+      const targetKey = this.db.getCoordinatorRun(runId)?.target_key ?? null
+      this.db.adoptUnownedTasks(runId, targetKey)
+
       await this.decompose()
 
       while (!this.stopped) {
