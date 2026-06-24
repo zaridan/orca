@@ -630,8 +630,15 @@ export class OrchestrationDb {
       params.push(filter.coordinatorRunId)
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    // Why (F2 #13 round 2, must-fix #2): `created_at` is second-granularity, so two
+    // tasks seeded in the same second otherwise sort non-deterministically — letting
+    // a same-track `review` dispatch before `implement` into an empty worktree. The
+    // `id` tie-break gives a stable total order across reads. (Cross-task ORDERING
+    // of a track — review must run AFTER implement FINISHES — is enforced by
+    // deps:[predecessor], honored by promoteReadyTasks; this sort is the within-tick
+    // stable-order backstop.)
     return this.db
-      .prepare(`SELECT * FROM tasks ${where} ORDER BY created_at`)
+      .prepare(`SELECT * FROM tasks ${where} ORDER BY created_at, id`)
       .all(...params) as TaskRow[]
   }
 
@@ -679,7 +686,7 @@ export class OrchestrationDb {
         ) latest ON latest.task_id = dc.task_id AND latest.max_rowid = dc.rowid
       ) d ON d.task_id = t.id
       ${where}
-      ORDER BY t.created_at
+      ORDER BY t.created_at, t.id
     `
     return this.db.prepare(sql).all(...params) as (TaskRow & {
       assignee_handle: string | null
