@@ -54,7 +54,30 @@ export async function createDirectorWorktreeShell(
       'skip',
       undefined,
       undefined,
-      `${ORCASTRATOR_DISPLAY_PREFIX}${options.label}`
+      `${ORCASTRATOR_DISPLAY_PREFIX}${options.label}`,
+      // Why: positional args up to compareBaseRef are unused for a director
+      // shell; the trailing options carries suppressActivation so a remote
+      // (SSH) create reveals the worktree without switching the user's active
+      // tab — matching the renderer-side activation suppression at the call site.
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { suppressActivation: true }
     )
     return { worktreeId: result.worktree.id, setup: result.setup }
   } catch (error) {
