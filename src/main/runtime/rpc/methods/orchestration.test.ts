@@ -1367,6 +1367,37 @@ describe('orchestration RPC methods', () => {
       )
       expect(startSpy).not.toHaveBeenCalled()
     })
+
+    // Round 3 should-fix #4: --worktree-backed without --worker-agent is a
+    // worktree-backed BARE-SHELL mode (workers can never emit worker_done). Refuse it.
+    it('refuses --worktree-backed without --worker-agent (bare-shell mode)', async () => {
+      setup()
+      const startSpy = vi.spyOn(db, 'startCoordinatorRun')
+
+      await expect(
+        call('orchestration.run', { spec: 'x', worktree: 'id:abc', worktreeBacked: true })
+      ).rejects.toThrow(/--worktree-backed requires --worker-agent/)
+      expect(startSpy).not.toHaveBeenCalled()
+    })
+
+    it('allows --worktree-backed with a valid --worker-agent', async () => {
+      setup()
+      vi.spyOn(runtime, 'resolveOrchestrationTargetKey').mockResolvedValue('worktree:abc')
+      const startSpy = vi.spyOn(db, 'startCoordinatorRun').mockImplementation(() => {
+        throw new Error('abort-after-capture')
+      })
+
+      await expect(
+        call('orchestration.run', {
+          spec: 'x',
+          worktree: 'id:abc',
+          worktreeBacked: true,
+          workerAgent: 'claude'
+        })
+      ).rejects.toThrow('abort-after-capture')
+      // Got past the coupling guard to the atomic start.
+      expect(startSpy).toHaveBeenCalled()
+    })
   })
 
   describe('orchestration.taskCreate run stamping (#12)', () => {

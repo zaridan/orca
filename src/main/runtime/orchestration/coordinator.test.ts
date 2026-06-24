@@ -5,6 +5,7 @@ import {
   Coordinator,
   DISPATCH_STALE_THRESHOLD,
   parseAllowStaleBaseFromSpec,
+  parseTrackFromSpec,
   worktreeNameForTask,
   type CoordinatorRuntime
 } from './coordinator'
@@ -34,6 +35,11 @@ function createMockRuntime(): CoordinatorRuntime & {
   sentMessages: { handle: string; text: string }[]
   terminals: { handle: string; worktreeId: string; connected: boolean; writable: boolean }[]
   createdTerminals: string[]
+  createTerminalCalls: { worktree?: string; launchAgent?: string }[]
+  throwCreateTerminal: Error | null
+  // round 3: the REAL agent-spawn path the coordinator must use on reuse-relaunch.
+  launchAgentTerminalCalls: { worktree: string; agent: string; prompt: string }[]
+  throwLaunchAgentTerminal: Error | null
   createdWorktrees: CreatedWorktree[]
   removedWorktrees: string[]
   waitForTerminalCalls: { handle: string; condition?: string }[]
@@ -57,6 +63,10 @@ function createMockRuntime(): CoordinatorRuntime & {
       writable: boolean
     }[],
     createdTerminals: [] as string[],
+    createTerminalCalls: [] as { worktree?: string; launchAgent?: string }[],
+    throwCreateTerminal: null as Error | null,
+    launchAgentTerminalCalls: [] as { worktree: string; agent: string; prompt: string }[],
+    throwLaunchAgentTerminal: null as Error | null,
     createdWorktrees: [] as CreatedWorktree[],
     removedWorktrees: [] as string[],
     waitForTerminalCalls: [] as { handle: string; condition?: string }[],
@@ -78,7 +88,11 @@ function createMockRuntime(): CoordinatorRuntime & {
     async listTerminals() {
       return { terminals: mock.terminals }
     },
-    async createTerminal(worktree?: string, opts?: { title?: string }) {
+    async createTerminal(worktree?: string, opts?: { title?: string; launchAgent?: string }) {
+      mock.createTerminalCalls.push({ worktree, launchAgent: opts?.launchAgent })
+      if (mock.throwCreateTerminal) {
+        throw mock.throwCreateTerminal
+      }
       const handle = `term_worker_${mock.createdTerminals.length}`
       mock.createdTerminals.push(handle)
       // Why: in worktree-backed tests createTerminal is called with an
@@ -87,6 +101,23 @@ function createMockRuntime(): CoordinatorRuntime & {
       const worktreeId = worktree?.replace(/^id:/, '') ?? 'wt1'
       mock.terminals.push({ handle, worktreeId, connected: true, writable: true })
       return { handle, worktreeId, title: opts?.title ?? '' }
+    },
+    // Why (round 3): the REAL agent spawn — mirrors OrcaRuntimeService.launchAgentTerminal
+    // (which builds a launch command via buildStartupForAgent). The coordinator must
+    // use THIS, not createTerminal, to relaunch a worker agent on track reuse.
+    async launchAgentTerminal(
+      worktree: string,
+      opts: { agent: string; prompt: string; title?: string }
+    ) {
+      mock.callOrder.push(`launchAgent:${worktree}`)
+      mock.launchAgentTerminalCalls.push({ worktree, agent: opts.agent, prompt: opts.prompt })
+      if (mock.throwLaunchAgentTerminal) {
+        throw mock.throwLaunchAgentTerminal
+      }
+      const handle = `term_agent_${mock.launchAgentTerminalCalls.length - 1}`
+      const worktreeId = worktree.replace(/^id:/, '')
+      mock.terminals.push({ handle, worktreeId, connected: true, writable: true })
+      return { handle, worktreeId }
     },
     async waitForTerminal(handle: string, options?: { condition?: string; timeoutMs?: number }) {
       mock.callOrder.push(`wait:${handle}`)
@@ -1002,6 +1033,455 @@ describe('Coordinator', () => {
     })
   })
 
+  describe('worktree-per-track reuse + serialization (F2 #13 slice 2)', () => {
+    // Round 3 should-fix #3 (safe-by-default): two tasks on the same track with NO
+    // dependency between them are not totally ordered — they could both be ready and
+    // race into the shared worktree (review before implement). The run must REFUSE
+    // such a DAG up front rather than rely on the operator remembering deps. Fails
+    // without the guard: the run would proceed and arbitrarily order them.
+    it('refuses to run when same-track tasks are not ordered by deps', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+
+      db.createTask({ spec: 'implement feature\ntrack: feat-x' })
+      db.createTask({ spec: 'review feature\ntrack: feat-x' }) // no deps → unsafe
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'build it',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+
+      await expect(coordinator.run()).rejects.toThrow(/totally ordered|deps/)
+      // Nothing was dispatched — refusal happens before any worktree is created.
+      expect(runtime.createdWorktrees).toHaveLength(0)
+    })
+
+    // The same unordered DAG is allowed on the legacy (non-worktree-backed) path —
+    // legacy dispatch shares no worktree, so there is no collision to guard against.
+    // The run must NOT reject at decompose (the guard is worktree-backed-only).
+    it('does NOT apply the track-ordering guard on the legacy path', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+      runtime.terminals = [{ handle: 'term_a', worktreeId: 'wt1', connected: true, writable: true }]
+
+      db.createTask({ spec: 'implement feature\ntrack: feat-x' })
+      db.createTask({ spec: 'review feature\ntrack: feat-x' }) // no deps, same track
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'build it',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktree: 'wt1'
+        // worktreeBacked omitted → legacy path, no guard
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+      // The run started and dispatched without the decompose guard rejecting it.
+      expect(runtime.sentMessages.length).toBeGreaterThan(0)
+      expect(runtime.createdWorktrees).toHaveLength(0)
+      coordinator.stop()
+      await runPromise
+    })
+
+    // Slice-2 core: distinct tracks run concurrently up to maxConcurrent. Fails if
+    // serialization is global (would dispatch one at a time) or if reuse keyed
+    // tasks together incorrectly.
+    it('distinct trackKeys: two worktrees dispatched concurrently under maxConcurrent', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+
+      const tA = db.createTask({ spec: 'work A\ntrack: alpha' })
+      const tB = db.createTask({ spec: 'work B\ntrack: beta' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'build it',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude',
+        maxConcurrent: 2
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      // Both distinct tracks dispatched in parallel: two worktrees, two in-flight.
+      expect(runtime.createdWorktrees).toHaveLength(2)
+      expect(db.listTasks({ status: 'dispatched' })).toHaveLength(2)
+      const parents = new Set(runtime.createdWorktrees.map((w) => w.parentWorktreeId))
+      expect(parents).toEqual(new Set(['director-wt']))
+      const childTaskIds = new Set(runtime.createdWorktrees.map((w) => w.taskId))
+      expect(childTaskIds).toEqual(new Set([tA.id, tB.id]))
+
+      insertWorkerDone(db, { taskId: tA.id })
+      insertWorkerDone(db, { taskId: tB.id })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+    })
+
+    // maxConcurrent still bounds distinct tracks: with a limit of 1, two distinct
+    // tracks dispatch one-at-a-time (slot limit), not both at once.
+    it('maxConcurrent bounds concurrent tracks (limit 1 → one worktree at a time)', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+
+      const tA = db.createTask({ spec: 'work A\ntrack: alpha' })
+      const tB = db.createTask({ spec: 'work B\ntrack: beta' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'build it',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude',
+        maxConcurrent: 1
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      // Only one worktree/dispatch despite two distinct ready tracks (slot-bound).
+      expect(runtime.createdWorktrees).toHaveLength(1)
+      expect(db.listTasks({ status: 'dispatched' })).toHaveLength(1)
+
+      const firstId = runtime.createdWorktrees[0].taskId!
+      insertWorkerDone(db, { taskId: firstId })
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      // After the first frees its slot, the second distinct track gets its worktree.
+      expect(runtime.createdWorktrees).toHaveLength(2)
+
+      const secondId = firstId === tA.id ? tB.id : tA.id
+      insertWorkerDone(db, { taskId: secondId })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+    })
+
+    // The `track:` infra hint must not leak into the worker's --- TASK --- block.
+    it('strips the track: hint from the dispatched preamble', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+
+      const task = db.createTask({ spec: 'do the work\ntrack: feat-x' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      const sent = runtime.sentMessages.find((m) => m.handle === 'term_wt_0')
+      expect(sent).toBeDefined()
+      expect(sent!.text).toContain('do the work')
+      expect(sent!.text).not.toContain('track: feat-x')
+      expect(sent!.text).not.toMatch(/^[ \t]*track:/im)
+
+      insertWorkerDone(db, { taskId: task.id })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+    })
+
+    // Legacy (default-off) path also strips the hint and still dispatches to a
+    // bare terminal — proving the strip is path-independent and the flag-off path
+    // is unchanged for non-track specs.
+    it('default-off path strips the track: hint and dispatches to a bare terminal', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+      runtime.terminals = [
+        { handle: 'term_a', worktreeId: 'director-wt', connected: true, writable: true }
+      ]
+
+      const task = db.createTask({ spec: 'legacy work\ntrack: feat-x' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktree: 'director-wt'
+        // worktreeBacked omitted → legacy bare-terminal path
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      expect(runtime.createdWorktrees).toHaveLength(0)
+      const sent = runtime.sentMessages.find((m) => m.handle === 'term_a')
+      expect(sent).toBeDefined()
+      expect(sent!.text).toContain('legacy work')
+      expect(sent!.text).not.toContain('track: feat-x')
+
+      insertWorkerDone(db, { taskId: task.id, from: 'term_a' })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+    })
+
+    // Round 2 must-fix #1 (gate): the tui-idle readiness gate must also fire on a
+    // REUSED agent terminal before the 2nd preamble — the same booting-TUI race.
+    it('reuse path waits for tui-idle before the 2nd preamble (reused agent terminal)', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+
+      const t1 = db.createTask({ spec: 'implement\ntrack: feat-x' })
+      const t2 = db.createTask({ spec: 'review\ntrack: feat-x', deps: [t1.id] })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+      // deps ensure implement (t1) dispatches first; review (t2) is gated until done.
+      const first = t1
+      const second = t2
+      insertWorkerDone(db, { taskId: first.id })
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      // Both dispatches landed in the cached agent terminal, and each send was
+      // preceded by a tui-idle wait on that handle (the 2nd wait before the 2nd send).
+      const waitIdx = runtime.callOrder
+        .map((c, i) => ({ c, i }))
+        .filter((x) => x.c === 'wait:term_wt_0')
+        .map((x) => x.i)
+      const sendIdx = runtime.callOrder
+        .map((c, i) => ({ c, i }))
+        .filter((x) => x.c === 'send:term_wt_0')
+        .map((x) => x.i)
+      expect(waitIdx.length).toBeGreaterThanOrEqual(2)
+      expect(sendIdx.length).toBe(2)
+      expect(waitIdx[1]).toBeLessThan(sendIdx[1])
+
+      insertWorkerDone(db, { taskId: second.id })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+    })
+
+    // Round 3 must-fix #1+#2: when the cached agent terminal is GONE, the reuse path
+    // must relaunch a REAL agent via launchAgentTerminal (the actual spawn) — NOT
+    // createTerminal({ launchAgent }), which only spawns a bare shell tagged as an
+    // agent. Fails against the round-2 bare-shell code: that code called
+    // createTerminal (never launchAgentTerminal), so launchAgentTerminalCalls is
+    // empty and a shell would receive the agent preamble.
+    it('relaunches a REAL worker agent (launchAgentTerminal) in the reused worktree when the cached terminal is gone', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+
+      const t1 = db.createTask({ spec: 'implement\ntrack: feat-x' })
+      const t2 = db.createTask({ spec: 'review\ntrack: feat-x', deps: [t1.id] })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+      insertWorkerDone(db, { taskId: t1.id })
+
+      // Simulate implement's agent terminal exiting after its grace window: the
+      // cached handle is no longer connected, so reuse cannot find it.
+      runtime.terminals.find((t) => t.handle === 'term_wt_0')!.connected = false
+
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      // The worktree was NOT recreated; a REAL agent was relaunched in it via
+      // launchAgentTerminal (NOT a bare-shell createTerminal).
+      expect(runtime.createdWorktrees).toHaveLength(1)
+      const relaunch = runtime.launchAgentTerminalCalls.find((c) => c.worktree === 'id:wt_child_0')
+      expect(relaunch).toBeDefined()
+      expect(relaunch!.agent).toBe('claude')
+      // createTerminal (the bare-shell path) was NOT used to carry the agent.
+      expect(runtime.createTerminalCalls).toHaveLength(0)
+      // The relaunched agent terminal got a tui-idle wait before its preamble.
+      const relaunchedHandle = 'term_agent_0'
+      expect(runtime.callOrder.indexOf(`wait:${relaunchedHandle}`)).toBeLessThan(
+        runtime.callOrder.indexOf(`send:${relaunchedHandle}`)
+      )
+
+      insertWorkerDone(db, { taskId: t2.id, from: relaunchedHandle })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+      expect(result.completedTasks).toContain(t2.id)
+    })
+
+    // Round 3 must-fix #1 / test-gap: if the agent relaunch can't be obtained
+    // (launchAgentTerminal throws), the task must breaker-FAIL after strikes — never
+    // hang — and the shared worktree must NOT be torn down (it holds the
+    // predecessor's work). No preamble is ever sent into a non-agent terminal.
+    it('breaker-fails (no hang) and preserves the shared worktree when the agent relaunch keeps failing', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+
+      const t1 = db.createTask({ spec: 'implement\ntrack: feat-x' })
+      const t2 = db.createTask({ spec: 'review\ntrack: feat-x', deps: [t1.id] })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 10,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 60)
+      })
+      insertWorkerDone(db, { taskId: t1.id })
+
+      // Cached terminal gone AND every agent relaunch attempt fails.
+      runtime.terminals.find((t) => t.handle === 'term_wt_0')!.connected = false
+      runtime.throwLaunchAgentTerminal = new Error('relaunch failed')
+
+      const result = await runPromise
+
+      expect(result.status).toBe('failed')
+      expect(result.failedTasks).toContain(t2.id)
+      expect(db.getTask(t2.id)?.status).toBe('failed')
+      // The first task still completed, and its shared worktree was preserved.
+      expect(result.completedTasks).toContain(t1.id)
+      expect(runtime.createdWorktrees).toHaveLength(1)
+      expect(runtime.removedWorktrees).toHaveLength(0)
+      // The coordinator NEVER fell back to a bare shell for the agent dispatch.
+      expect(runtime.createTerminalCalls).toHaveLength(0)
+      expect(runtime.sentMessages.filter((m) => m.handle.startsWith('term_worker_'))).toHaveLength(
+        0
+      )
+    })
+
+    // Round 2 test-gap: the default (no `track:` hint) is per-task — two no-track
+    // tasks must get DISTINCT worktrees (trackKey = task id). Previously only the
+    // explicit-track distinct case was covered.
+    it('two no-track tasks get distinct worktrees (default trackKey = task id)', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+
+      const t1 = db.createTask({ spec: 'plain work one' })
+      const t2 = db.createTask({ spec: 'plain work two' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude',
+        maxConcurrent: 2
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      expect(runtime.createdWorktrees).toHaveLength(2)
+      const childTaskIds = new Set(runtime.createdWorktrees.map((w) => w.taskId))
+      expect(childTaskIds).toEqual(new Set([t1.id, t2.id]))
+
+      insertWorkerDone(db, { taskId: t1.id })
+      insertWorkerDone(db, { taskId: t2.id })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+    })
+
+    // Round 2 must-fix #2 (ordering, deps route): a same-track successor that
+    // declares deps:[predecessor] runs implement-FIRST deterministically — it is
+    // not even `ready` until implement completes, then reuses implement's worktree.
+    it('same-track successor with deps:[predecessor] dispatches implement-first, then reuses', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+
+      const implement = db.createTask({ spec: 'implement\ntrack: feat-x' })
+      const review = db.createTask({
+        spec: 'review\ntrack: feat-x',
+        deps: [implement.id]
+      })
+
+      // review must start blocked on implement (not ready).
+      expect(db.getTask(review.id)?.status).toBe('pending')
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      // Only implement dispatched first (review is still pending on its dep).
+      expect(runtime.createdWorktrees).toHaveLength(1)
+      expect(runtime.createdWorktrees[0].taskId).toBe(implement.id)
+      expect(db.getTask(implement.id)?.status).toBe('dispatched')
+      expect(db.getTask(review.id)?.status).toBe('pending')
+
+      insertWorkerDone(db, { taskId: implement.id })
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      // review now reuses implement's worktree (no new worktree), in the same
+      // cached terminal — no bare terminal and no agent relaunch were needed.
+      expect(runtime.createdWorktrees).toHaveLength(1)
+      expect(runtime.createdTerminals).toHaveLength(0)
+      expect(runtime.launchAgentTerminalCalls).toHaveLength(0)
+      expect(runtime.sentMessages.filter((m) => m.handle === 'term_wt_0')).toHaveLength(2)
+
+      insertWorkerDone(db, { taskId: review.id })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+      expect(result.completedTasks).toContain(implement.id)
+      expect(result.completedTasks).toContain(review.id)
+    })
+  })
+
   describe('stale-base dispatch guard', () => {
     it('threads drift into the preamble when behind > 0 and under threshold', async () => {
       db = new OrchestrationDb(':memory:')
@@ -1279,5 +1759,63 @@ allow-stale-base: truthy`
     expect(allowStale).toBe(true)
     expect(strippedSpec).toBe('line 1\n')
     expect(strippedSpec.endsWith('allow-stale-base: true')).toBe(false)
+  })
+})
+
+describe('parseTrackFromSpec', () => {
+  it('captures the track key on its own line and strips it', () => {
+    const spec = `Implement the bridge
+track: feat-x`
+    const { trackKey, strippedSpec } = parseTrackFromSpec(spec)
+    expect(trackKey).toBe('feat-x')
+    expect(strippedSpec).toBe('Implement the bridge\n')
+    expect(strippedSpec).not.toContain('track:')
+  })
+
+  it('returns null when no track hint is present (caller defaults to task id)', () => {
+    const spec = 'Just implement it'
+    const { trackKey, strippedSpec } = parseTrackFromSpec(spec)
+    expect(trackKey).toBeNull()
+    expect(strippedSpec).toBe(spec)
+  })
+
+  it('matches case-insensitively and captures a task-id-style key', () => {
+    const spec = `Review the change
+Track: task_abc123`
+    const { trackKey, strippedSpec } = parseTrackFromSpec(spec)
+    expect(trackKey).toBe('task_abc123')
+    expect(strippedSpec).not.toMatch(/[Tt]rack:/)
+  })
+
+  it('does not match the hint embedded inside a sentence', () => {
+    const spec = 'we track: things sometimes'
+    const { trackKey, strippedSpec } = parseTrackFromSpec(spec)
+    expect(trackKey).toBeNull()
+    expect(strippedSpec).toBe(spec)
+  })
+
+  it('handles the hint as the last line with no trailing newline', () => {
+    const spec = 'line 1\ntrack: feat-x'
+    const { trackKey, strippedSpec } = parseTrackFromSpec(spec)
+    expect(trackKey).toBe('feat-x')
+    expect(strippedSpec).toBe('line 1\n')
+  })
+
+  // Round 2 should-fix #3: a `track:` line inside a fenced code block (e.g. a
+  // worker-instruction example) must NOT be parsed or stripped.
+  it('ignores a track: hint inside a fenced code block', () => {
+    const spec = ['Do the work', '```', 'track: not-a-real-track', '```'].join('\n')
+    const { trackKey, strippedSpec } = parseTrackFromSpec(spec)
+    expect(trackKey).toBeNull()
+    expect(strippedSpec).toBe(spec)
+  })
+
+  it('captures the first non-fenced hint even when a fenced example precedes it', () => {
+    const spec = ['Intro', '```', 'track: example-only', '```', 'track: real-track'].join('\n')
+    const { trackKey, strippedSpec } = parseTrackFromSpec(spec)
+    expect(trackKey).toBe('real-track')
+    // The real (last, non-fenced) line is stripped; the fenced example is kept.
+    expect(strippedSpec).toContain('track: example-only')
+    expect(strippedSpec.endsWith('track: real-track')).toBe(false)
   })
 })

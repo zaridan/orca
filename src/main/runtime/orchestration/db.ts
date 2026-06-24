@@ -630,8 +630,15 @@ export class OrchestrationDb {
       params.push(filter.coordinatorRunId)
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    // Why (F2 #13 round 2/3, must-fix #2): `created_at` is second-granularity, so
+    // same-second tasks would otherwise shuffle between reads. The `id` tie-break
+    // removes that per-read non-determinism (a stable total order). NOTE: `id` is
+    // random (not insertion-monotonic), so this does NOT by itself guarantee
+    // implement-before-review — that ORDERING is enforced by deps:[predecessor]
+    // (honored by promoteReadyTasks) plus the coordinator's same-track ordering
+    // guard (assertTrackOrderingSafe). This sort only stabilizes the read order.
     return this.db
-      .prepare(`SELECT * FROM tasks ${where} ORDER BY created_at`)
+      .prepare(`SELECT * FROM tasks ${where} ORDER BY created_at, id`)
       .all(...params) as TaskRow[]
   }
 
@@ -679,7 +686,7 @@ export class OrchestrationDb {
         ) latest ON latest.task_id = dc.task_id AND latest.max_rowid = dc.rowid
       ) d ON d.task_id = t.id
       ${where}
-      ORDER BY t.created_at
+      ORDER BY t.created_at, t.id
     `
     return this.db.prepare(sql).all(...params) as (TaskRow & {
       assignee_handle: string | null

@@ -38,7 +38,8 @@ import {
   shouldRunSetupForCreate
 } from '../hooks'
 import { getBranchConflictKind, getDefaultBaseRef } from '../git/repo'
-import type { OrchestrationDb } from './orchestration/db'
+import { OrchestrationDb } from './orchestration/db'
+import { Coordinator } from './orchestration/coordinator'
 import type { MessagePriority, MessageRow, MessageType } from './orchestration/types'
 import {
   appendNormalizedToTailBuffer,
@@ -1971,6 +1972,287 @@ describe('OrcaRuntimeService', () => {
       })
 
       expect(result.terminalHandle).toBeUndefined()
+    })
+  })
+
+  // F2 #13 slice 2 — the track-reuse path driven through the REAL createWorktree
+  // adapter (not the coordinator's fully-mocked createWorktree). createManagedWorktree
+  // is stubbed (no real git/PTY), so the real adapter shapes {worktreeId, branch,
+  // terminalHandle} and the real Coordinator's track map decides create-vs-reuse.
+  // Proves: two same-track tasks → ONE adapter worktree, serialized, the 2nd
+  // dispatched into the 1st's interactive terminal.
+  describe('createWorktree adapter — real track-reuse path', () => {
+    it('a 2nd same-track task reuses the 1st real-adapter worktree, serialized after it', async () => {
+      const runtime = new OrcaRuntimeService(store)
+      vi.spyOn(
+        runtime as unknown as { resolveWorktreeSelector: (s: string) => Promise<unknown> },
+        'resolveWorktreeSelector'
+      ).mockResolvedValue({ id: 'repo-1::/wt/director', repoId: 'repo-1' })
+
+      // The real adapter calls createManagedWorktree; stub it to return a launched
+      // agent terminal (and register it so the reuse path's listTerminals finds it).
+      const agentTerminals: {
+        handle: string
+        worktreeId: string
+        connected: boolean
+        writable: boolean
+      }[] = []
+      let createCount = 0
+      const cmwSpy = vi.spyOn(runtime, 'createManagedWorktree').mockImplementation(async () => {
+        const idx = createCount++
+        const worktreeId = `repo-1::/wt/track-${idx}`
+        const handle = `agent-term-${idx}`
+        agentTerminals.push({ handle, worktreeId, connected: true, writable: true })
+        return {
+          worktree: { id: worktreeId, git: { branch: `orch-track-${idx}` } },
+          startupTerminal: { spawned: true, handle, surface: 'background' }
+        } as unknown as CreateWorktreeResult
+      })
+
+      // Stub the terminal I/O layer (no real PTYs in a unit test). listTerminals
+      // reflects the agent terminal so the reuse path finds and reuses it.
+      vi.spyOn(runtime, 'listTerminals').mockImplementation(async (selector?: string) => {
+        const id = selector?.replace(/^id:/, '')
+        return {
+          terminals: agentTerminals.filter((t) => !id || t.worktreeId === id)
+        } as unknown as Awaited<ReturnType<OrcaRuntimeService['listTerminals']>>
+      })
+      const sends: { handle: string; text: string }[] = []
+      vi.spyOn(runtime, 'sendTerminal').mockImplementation(
+        async (handle: string, action: { text?: string }) => {
+          sends.push({ handle, text: action.text ?? '' })
+          return { handle, accepted: true, bytesWritten: 0 } as unknown as Awaited<
+            ReturnType<OrcaRuntimeService['sendTerminal']>
+          >
+        }
+      )
+      vi.spyOn(runtime, 'waitForTerminal').mockResolvedValue({
+        handle: 'agent',
+        condition: 'tui-idle'
+      } as unknown as Awaited<ReturnType<OrcaRuntimeService['waitForTerminal']>>)
+      vi.spyOn(runtime, 'probeWorktreeDrift').mockResolvedValue(null)
+      const createTerminalSpy = vi.spyOn(runtime, 'createTerminal')
+
+      const odb = new OrchestrationDb(':memory:')
+      const t1 = odb.createTask({ spec: 'implement\ntrack: shared' })
+      // deps make the track totally ordered (required by the round-3 safe-by-default
+      // guard); review (t2) stays pending until implement (t1) finishes, then reuses.
+      const t2 = odb.createTask({ spec: 'review\ntrack: shared', deps: [t1.id] })
+
+      const coordinator = new Coordinator(odb, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 20,
+        worktree: 'id:repo-1::/wt/director',
+        worktreeBacked: true,
+        workerAgent: 'claude',
+        maxConcurrent: 4
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      // The real adapter created exactly ONE worktree; the 2nd same-track task is
+      // gated (pending on its dep) behind the 1st.
+      expect(cmwSpy).toHaveBeenCalledTimes(1)
+      expect(odb.listTasks({ status: 'dispatched' })).toHaveLength(1)
+      const first = t1
+      const second = t2
+      expect(odb.getTask(second.id)?.status).toBe('pending')
+
+      // Complete the first → the track frees up for the successor.
+      const firstCtx = odb.getDispatchContext(first.id)!
+      odb.insertMessage({
+        from: firstCtx.assignee_handle!,
+        to: 'coord',
+        subject: 'done',
+        type: 'worker_done',
+        payload: JSON.stringify({ taskId: first.id, dispatchId: firstCtx.id })
+      })
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      // STILL one adapter worktree (the 2nd reused it — no recreate, no extra
+      // terminal), and both preambles landed in the SAME interactive terminal.
+      expect(cmwSpy).toHaveBeenCalledTimes(1)
+      expect(createTerminalSpy).not.toHaveBeenCalled()
+      expect(sends.filter((s) => s.handle === 'agent-term-0')).toHaveLength(2)
+
+      const secondCtx = odb.getDispatchContext(second.id)!
+      odb.insertMessage({
+        from: secondCtx.assignee_handle!,
+        to: 'coord',
+        subject: 'done',
+        type: 'worker_done',
+        payload: JSON.stringify({ taskId: second.id, dispatchId: secondCtx.id })
+      })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+      expect(result.completedTasks).toContain(t1.id)
+      expect(result.completedTasks).toContain(t2.id)
+      odb.close()
+    })
+
+    // Round 3 must-fix #1, real-adapter: launchAgentTerminal is the REAL agent
+    // spawn — it must build an actual launch COMMAND (via buildStartupForAgent),
+    // unlike createTerminal({ launchAgent }) which spawns a bare shell and only
+    // tags it. Spy the spawn primitive (createTerminal) and assert a non-empty
+    // agent command is produced. Fails for a bare-shell relaunch (no command).
+    it('launchAgentTerminal builds a real agent launch command (not a bare shell)', async () => {
+      const runtime = new OrcaRuntimeService(store)
+      vi.spyOn(
+        runtime as unknown as { resolveWorktreeSelector: (s: string) => Promise<unknown> },
+        'resolveWorktreeSelector'
+      ).mockResolvedValue({ id: 'repo-1::/wt/track-0', repoId: 'repo-1', path: '/tmp/repo' })
+
+      const createTerminalCalls: { selector?: string; command?: string; launchAgent?: TuiAgent }[] =
+        []
+      vi.spyOn(runtime, 'createTerminal').mockImplementation(
+        async (selector?: string, opts?: { command?: string; launchAgent?: TuiAgent }) => {
+          createTerminalCalls.push({
+            selector,
+            command: opts?.command,
+            launchAgent: opts?.launchAgent
+          })
+          return {
+            handle: 'agent-relaunch',
+            worktreeId: 'repo-1::/wt/track-0'
+          } as unknown as Awaited<ReturnType<OrcaRuntimeService['createTerminal']>>
+        }
+      )
+
+      const created = await runtime.launchAgentTerminal('id:repo-1::/wt/track-0', {
+        agent: 'claude',
+        prompt: ''
+      })
+
+      expect(created.handle).toBe('agent-relaunch')
+      expect(createTerminalCalls).toHaveLength(1)
+      // The spawn carried a REAL command (the agent launch), not an empty shell.
+      expect(createTerminalCalls[0].command).toBeTruthy()
+      expect((createTerminalCalls[0].command ?? '').length).toBeGreaterThan(0)
+      expect(createTerminalCalls[0].launchAgent).toBe('claude')
+    })
+
+    // Round 3 must-fix #1+#2, real-adapter: when the cached agent terminal is gone,
+    // the reuse path must invoke launchAgentTerminal (the real agent spawn), NOT a
+    // bare-shell createTerminal. Drives the real Coordinator; launchAgentTerminal is
+    // spied (so we assert it is the method used) and createManagedWorktree / I/O are
+    // stubbed. Fails against the round-2 bare-shell code (which used createTerminal).
+    it('reuse relaunch invokes launchAgentTerminal (real agent spawn), not a bare-shell createTerminal', async () => {
+      const runtime = new OrcaRuntimeService(store)
+      vi.spyOn(
+        runtime as unknown as { resolveWorktreeSelector: (s: string) => Promise<unknown> },
+        'resolveWorktreeSelector'
+      ).mockResolvedValue({ id: 'repo-1::/wt/director', repoId: 'repo-1' })
+
+      const agentTerminals: {
+        handle: string
+        worktreeId: string
+        connected: boolean
+        writable: boolean
+      }[] = []
+      let createCount = 0
+      const cmwSpy = vi.spyOn(runtime, 'createManagedWorktree').mockImplementation(async () => {
+        const idx = createCount++
+        const worktreeId = `repo-1::/wt/track-${idx}`
+        const handle = `agent-term-${idx}`
+        agentTerminals.push({ handle, worktreeId, connected: true, writable: true })
+        return {
+          worktree: { id: worktreeId, git: { branch: `orch-track-${idx}` } },
+          startupTerminal: { spawned: true, handle, surface: 'background' }
+        } as unknown as CreateWorktreeResult
+      })
+      vi.spyOn(runtime, 'listTerminals').mockImplementation(async (selector?: string) => {
+        const id = selector?.replace(/^id:/, '')
+        return {
+          terminals: agentTerminals.filter((t) => (!id || t.worktreeId === id) && t.connected)
+        } as unknown as Awaited<ReturnType<OrcaRuntimeService['listTerminals']>>
+      })
+      const sends: { handle: string; text: string }[] = []
+      vi.spyOn(runtime, 'sendTerminal').mockImplementation(
+        async (handle: string, action: { text?: string }) => {
+          sends.push({ handle, text: action.text ?? '' })
+          return { handle, accepted: true, bytesWritten: 0 } as unknown as Awaited<
+            ReturnType<OrcaRuntimeService['sendTerminal']>
+          >
+        }
+      )
+      vi.spyOn(runtime, 'waitForTerminal').mockResolvedValue({
+        handle: 'agent',
+        condition: 'tui-idle'
+      } as unknown as Awaited<ReturnType<OrcaRuntimeService['waitForTerminal']>>)
+      vi.spyOn(runtime, 'probeWorktreeDrift').mockResolvedValue(null)
+      // The REAL agent-spawn path — spied so we assert the coordinator uses it.
+      const launchAgentCalls: { selector: string; agent: TuiAgent }[] = []
+      vi.spyOn(runtime, 'launchAgentTerminal').mockImplementation(
+        async (selector: string, opts: { agent: TuiAgent }) => {
+          launchAgentCalls.push({ selector, agent: opts.agent })
+          const worktreeId = selector.replace(/^id:/, '')
+          const handle = `agent-relaunch-${launchAgentCalls.length}`
+          agentTerminals.push({ handle, worktreeId, connected: true, writable: true })
+          return { handle, worktreeId } as unknown as Awaited<
+            ReturnType<OrcaRuntimeService['launchAgentTerminal']>
+          >
+        }
+      )
+      // The bare-shell path must NOT be used to carry an agent dispatch.
+      const createTerminalSpy = vi.spyOn(runtime, 'createTerminal')
+
+      const odb = new OrchestrationDb(':memory:')
+      const t1 = odb.createTask({ spec: 'implement\ntrack: shared' })
+      const t2 = odb.createTask({ spec: 'review\ntrack: shared', deps: [t1.id] })
+
+      const coordinator = new Coordinator(odb, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 20,
+        worktree: 'id:repo-1::/wt/director',
+        worktreeBacked: true,
+        workerAgent: 'claude',
+        maxConcurrent: 4
+      })
+
+      const runPromise = coordinator.run()
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+      const firstCtx = odb.getDispatchContext(t1.id)!
+      odb.insertMessage({
+        from: firstCtx.assignee_handle!,
+        to: 'coord',
+        subject: 'done',
+        type: 'worker_done',
+        payload: JSON.stringify({ taskId: t1.id, dispatchId: firstCtx.id })
+      })
+      // Implement's agent terminal exits → no longer listed for reuse.
+      agentTerminals.find((t) => t.handle === 'agent-term-0')!.connected = false
+
+      await new Promise((r) => {
+        setTimeout(r, 80)
+      })
+
+      // No new worktree; the REAL agent spawn (launchAgentTerminal) was invoked for
+      // the existing worktree — and the bare-shell createTerminal was NOT used.
+      expect(cmwSpy).toHaveBeenCalledTimes(1)
+      expect(launchAgentCalls).toEqual([{ selector: 'id:repo-1::/wt/track-0', agent: 'claude' }])
+      expect(createTerminalSpy).not.toHaveBeenCalled()
+
+      const secondCtx = odb.getDispatchContext(t2.id)!
+      odb.insertMessage({
+        from: secondCtx.assignee_handle!,
+        to: 'coord',
+        subject: 'done',
+        type: 'worker_done',
+        payload: JSON.stringify({ taskId: t2.id, dispatchId: secondCtx.id })
+      })
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+      expect(result.completedTasks).toContain(t2.id)
+      odb.close()
     })
   })
 
