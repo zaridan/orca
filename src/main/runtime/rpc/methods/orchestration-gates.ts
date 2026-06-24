@@ -1,11 +1,22 @@
 import { randomBytes } from 'crypto'
 import { z } from 'zod'
-import type { TuiAgent } from '../../../../shared/types'
+import type { TuiAgent, WorktreeLineage } from '../../../../shared/types'
 import { TUI_AGENT_CONFIG } from '../../../../shared/tui-agent-config'
 import { defineMethod, type RpcMethod } from '../core'
 import { OptionalBoolean, OptionalFiniteNumber, OptionalString, requiredString } from '../schemas'
-import { CoordinatorRunConflictError, type GateStatus } from '../../orchestration/db'
-import { Coordinator } from '../../orchestration/coordinator'
+import {
+  CoordinatorRunConflictError,
+  type GateStatus,
+  type OrchestrationDb,
+  type CoordinatorRun
+} from '../../orchestration/db'
+import { Coordinator, type CoordinatorRuntime } from '../../orchestration/coordinator'
+import {
+  buildAdoptedTrackWorktrees,
+  reconcileCoordinatorRunsOnBoot,
+  type ReconcileRunOnBootResult,
+  type ResumeOutcome
+} from '../../orchestration/boot-resume'
 
 // Why: the most-recently-started coordinator is stored at module scope so
 // orchestration.runStop can signal it to halt. Concurrent runs on different
@@ -117,7 +128,13 @@ export const ORCHESTRATION_GATE_METHODS: RpcMethod[] = [
           spec: params.spec,
           coordinatorHandle,
           pollIntervalMs: params.pollIntervalMs,
-          targetKey
+          targetKey,
+          // Why (F3 #14): persist the in-memory-only coordinator options so a
+          // restart can rebuild THIS run faithfully (worktree-backed vs legacy,
+          // which agent, concurrency) instead of guessing and re-zombieing it.
+          ...(params.maxConcurrent !== undefined ? { maxConcurrent: params.maxConcurrent } : {}),
+          ...(params.worktreeBacked !== undefined ? { worktreeBacked: params.worktreeBacked } : {}),
+          ...(params.workerAgent ? { workerAgent: params.workerAgent } : {})
         })
       } catch (err) {
         if (err instanceof CoordinatorRunConflictError) {
@@ -222,3 +239,153 @@ export const ORCHESTRATION_GATE_METHODS: RpcMethod[] = [
     }
   })
 ]
+
+// Why (F3 #14): the runtime surface resume-on-boot needs. CoordinatorRuntime
+// supplies the dispatch/worktree methods the rebuilt Coordinator uses; the three
+// extras resolve the run's DB, verify the director worktree still exists, and
+// read the lineage map for track re-adoption (the same map Mission Control uses).
+type OrchestrationBootRuntime = CoordinatorRuntime & {
+  getOrchestrationDb(): OrchestrationDb
+  resolveOrchestrationTargetKey(selector?: string): Promise<string | null>
+  listWorktreeLineage(): Promise<Record<string, WorktreeLineage>>
+  // Why (F3 #14, should-fix #4): the runtime boot time fences the atomic resume
+  // claim so two runtimes sharing a DB can't both drive one run, while a later
+  // boot reclaims a crashed resumer's stale claim.
+  getStartedAt(): number
+}
+
+const WORKTREE_TARGET_PREFIX = 'worktree:'
+
+// Why (F3 #14): rebuild and restart a crashed run's coordinator. Returns:
+//  - 'contended' — another runtime won the atomic claim; leave the run running
+//    (it has a live owner), do not touch it.
+//  - 'declined' — WE own the claim but the run is not safely resumable (no
+//    worktree target, pre-v9 unknown mode, or the director worktree is gone), so
+//    the reconciler marks it failed (kills the zombie, unblocks the guard).
+//  - 'resumed' — WE own the claim and started a converging loop.
+// The claim is taken FIRST so a loser never declines→fails a run another runtime
+// is driving. On the happy path it reclaims dead in-flight dispatches (so the loop
+// converges), re-adopts existing track worktrees, registers the coordinator as
+// active (so orchestration.runStop can halt it), and fires the loop — whose .catch
+// force-fails the run if the loop ever rejects un-finalized (hard-rule belt).
+async function resumeCoordinatorRunOnBoot(
+  runtime: OrchestrationBootRuntime,
+  db: OrchestrationDb,
+  run: CoordinatorRun,
+  onLog: (msg: string) => void
+): Promise<ResumeOutcome> {
+  // Atomic, boot-time-fenced claim FIRST: only the winner decides drive-vs-fail,
+  // so a second runtime sharing the DB neither double-drives nor fails a run the
+  // owner is driving.
+  const fenceIso = new Date(runtime.getStartedAt()).toISOString()
+  if (!db.tryClaimRunForResume(run.id, fenceIso)) {
+    onLog(`Resume: run ${run.id} is claimed by another runtime; skipping`)
+    return 'contended'
+  }
+
+  if (!run.target_key || !run.target_key.startsWith(WORKTREE_TARGET_PREFIX)) {
+    onLog(`Resume: run ${run.id} has no worktree target; cannot resume`)
+    return 'declined'
+  }
+  // Why (should-fix #3): a NULL worktree_backed predates v9 — we cannot tell if it
+  // was worktree-backed. Guessing legacy would dispatch into a bare shell that never
+  // reports done → never converges → re-resumes every restart. Fail it instead.
+  // Only a genuine, explicitly-recorded legacy run (worktree_backed = 0) resumes in
+  // legacy mode.
+  if (run.worktree_backed === null) {
+    onLog(`Resume: run ${run.id} predates v9 (worktree_backed unknown); cannot safely resume`)
+    return 'declined'
+  }
+  const directorWorktreeId = run.target_key.slice(WORKTREE_TARGET_PREFIX.length)
+  const directorSelector = `id:${directorWorktreeId}`
+  try {
+    // Throws when the director worktree was deleted while Orca was closed. We fail
+    // closed (favor the hard rule): a run we cannot anchor converges to failed
+    // rather than risk a zombie. (Distinguishing a transient resolve error from a
+    // genuine not-found is a follow-up; fail-closed is the safe default here.)
+    await runtime.resolveOrchestrationTargetKey(directorSelector)
+  } catch {
+    onLog(`Resume: run ${run.id} director worktree ${directorWorktreeId} is gone; cannot resume`)
+    return 'declined'
+  }
+
+  const worktreeBacked = run.worktree_backed === 1
+  const workerAgent = run.worker_agent ?? undefined
+
+  // Converge-safety: a task left 'dispatched' by the crashed loop has a dead,
+  // unmonitored worker — reclaim it to 'ready' so the resumed loop re-dispatches
+  // (or breaker-fails) it rather than spinning forever on a hung dispatch.
+  const reclaimed = db.reclaimInFlightDispatchesForResume(
+    run.id,
+    'reclaimed on boot: coordinator restarted'
+  )
+  if (reclaimed > 0) {
+    onLog(`Resume: run ${run.id} reclaimed ${reclaimed} in-flight dispatch(es)`)
+  }
+
+  const coordinator = new Coordinator(db, runtime, {
+    spec: run.spec,
+    coordinatorHandle: run.coordinator_handle,
+    pollIntervalMs: run.poll_interval_ms,
+    ...(run.max_concurrent != null ? { maxConcurrent: run.max_concurrent } : {}),
+    worktree: directorSelector,
+    ...(worktreeBacked ? { worktreeBacked: true } : {}),
+    ...(workerAgent ? { workerAgent: workerAgent as TuiAgent } : {}),
+    onLog
+  })
+
+  if (worktreeBacked) {
+    const lineage = await runtime.listWorktreeLineage()
+    const entries = buildAdoptedTrackWorktrees(
+      db,
+      run,
+      lineage,
+      directorWorktreeId,
+      workerAgent !== undefined
+    )
+    coordinator.seedAdoptedTrackWorktrees(entries)
+    if (entries.size > 0) {
+      onLog(`Resume: run ${run.id} re-adopted ${entries.size} track worktree(s)`)
+    }
+  }
+
+  activeCoordinator = coordinator
+  coordinator
+    .runFromExistingRun(run.id)
+    .catch((err) => {
+      // Hard-rule belt (must-fix #1): if the loop ever rejects WITHOUT finalizing
+      // (e.g. a future pre-try line in executeLoop throws), force the run to failed
+      // so it can never be left 'running' with no live loop. Best-effort: a DB
+      // closed/locked at shutdown must not crash the process.
+      onLog(`Resume: run ${run.id} loop rejected; marking failed (${String(err)})`)
+      try {
+        db.updateCoordinatorRun(run.id, 'failed')
+      } catch {
+        // ignore — nothing more we can safely do here
+      }
+    })
+    .finally(() => {
+      if (activeCoordinator === coordinator) {
+        activeCoordinator = null
+      }
+    })
+  return 'resumed'
+}
+
+// Why (F3 #14): the boot entry point. Scans running coordinator runs and
+// reconciles each (finalize / resume / fail) so a restart never leaves a zombie
+// that blocks a fresh run for the target. Call once on app boot, before any
+// launch path that checks the per-target active-run guard. Errors are the
+// caller's to isolate — a reconcile failure must not block app startup.
+export async function runOrchestrationBootReconcile(
+  runtime: OrchestrationBootRuntime,
+  onLog?: (msg: string) => void
+): Promise<ReconcileRunOnBootResult[]> {
+  const db = runtime.getOrchestrationDb()
+  const log = onLog ?? (() => {})
+  return reconcileCoordinatorRunsOnBoot({
+    db,
+    resume: (run) => resumeCoordinatorRunOnBoot(runtime, db, run, log),
+    onLog: log
+  })
+}

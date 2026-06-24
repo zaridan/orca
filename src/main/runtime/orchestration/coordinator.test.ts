@@ -197,6 +197,24 @@ function lineageMapFromCreated(created: CreatedWorktree[]): Record<string, Workt
   )
 }
 
+// Why (F3 #14): poll a condition instead of asserting after a fixed delay, so a
+// dispatch that lands slowly under CI load is awaited rather than missed — and the
+// loop is never left ticking after the test moves on to db teardown.
+async function waitFor(
+  condition: () => boolean,
+  { timeoutMs = 3000, stepMs = 5 }: { timeoutMs?: number; stepMs?: number } = {}
+): Promise<void> {
+  const start = Date.now()
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error('waitFor: condition not met within timeout')
+    }
+    await new Promise((r) => {
+      setTimeout(r, stepMs)
+    })
+  }
+}
+
 function insertWorkerDone(
   db: OrchestrationDb,
   params: {
@@ -486,25 +504,40 @@ describe('Coordinator', () => {
     })
 
     const runPromise = coordinator.run()
-
-    await new Promise((r) => {
-      setTimeout(r, 100)
-    })
-
-    // Only 2 should be dispatched
-    const dispatched = db.listTasks({ status: 'dispatched' })
-    expect(dispatched.length).toBe(2)
-
-    // Complete all tasks
-    for (const task of [t1, t2, t3]) {
-      insertWorkerDone(db, { taskId: task.id })
+    try {
+      // Wait for the cap to bind on a CONDITION rather than a fixed delay: under
+      // parallel-test load the first tick can land after a fixed sleep, leaving 0
+      // dispatched and throwing before `await runPromise` — which would strand the
+      // loop past db teardown (an unhandled "database is not open"). maxConcurrent
+      // holds it at exactly 2; assert it does not creep above 2 across a few ticks.
+      await waitFor(() => db.listTasks({ status: 'dispatched' }).length === 2)
       await new Promise((r) => {
-        setTimeout(r, 100)
+        setTimeout(r, 60)
       })
-    }
+      expect(db.listTasks({ status: 'dispatched' }).length).toBe(2)
 
-    const result = await runPromise
-    expect(result.status).toBe('completed')
+      // Complete tasks as they are ACTUALLY dispatched, not in a fixed array order:
+      // the cap picks 2 of the 3 by (created_at, id) — which two is not the array
+      // order — so completing [t1,t2,t3] blindly can target an undispatched task.
+      const remaining = new Set([t1.id, t2.id, t3.id])
+      while (remaining.size > 0) {
+        await waitFor(() =>
+          db.listTasks({ status: 'dispatched' }).some((task) => remaining.has(task.id))
+        )
+        for (const task of db.listTasks({ status: 'dispatched' })) {
+          if (remaining.has(task.id)) {
+            insertWorkerDone(db, { taskId: task.id })
+            remaining.delete(task.id)
+          }
+        }
+      }
+
+      const result = await runPromise
+      expect(result.status).toBe('completed')
+    } finally {
+      coordinator.stop()
+      await runPromise.catch(() => {})
+    }
   })
 
   it('logs a stale warning for dispatched rows past the threshold and does not auto-fail', async () => {
@@ -1682,6 +1715,59 @@ allow-stale-base: true`
       expect(result.status).toBe('completed')
       const sent = runtime.sentMessages.find((m) => m.handle === 'term_a')
       expect(sent!.text).not.toContain('--- BASE DRIFT ---')
+    })
+
+    // F3 #14 (design §8): on resume-on-boot a worktree-backed run re-adopts its
+    // existing track worktrees instead of recreating them. seedAdoptedTrackWorktrees
+    // pre-seeds the track map; the next same-track dispatch must be a HIT (reuse the
+    // existing checkout) — NO createWorktree, and because the cached handle is a
+    // post-restart sentinel, the worker agent is relaunched IN the existing worktree.
+    // Without the seeding this would create a brand-new worktree/branch (a duplicate).
+    it('re-adopts a seeded track worktree on resume: no duplicate worktree, relaunches the agent', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+
+      const task = db.createTask({ spec: 'track: alpha\nimplement the thing' })
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'go',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 20,
+        worktree: 'director-wt',
+        worktreeBacked: true,
+        workerAgent: 'claude'
+      })
+      // Simulate the boot reconciler re-seeding the track map from lineage.
+      coordinator.seedAdoptedTrackWorktrees([
+        [
+          'alpha',
+          { worktreeId: 'wt-existing', terminalHandle: 'orch-readopt:wt-existing', isAgent: true }
+        ]
+      ])
+
+      const runPromise = coordinator.run()
+      try {
+        // Wait for the relaunch+dispatch on a CONDITION (not a fixed delay), then
+        // converge before asserting — so a slow tick under load can't throw an
+        // assertion before we await the loop, which would leave it ticking past
+        // db teardown (an unhandled "database is not open" rejection).
+        await waitFor(() => runtime.launchAgentTerminalCalls.length === 1)
+        insertWorkerDone(db, { taskId: task.id, from: 'term_agent_0' })
+        const result = await runPromise
+        expect(result.status).toBe('completed')
+
+        // Re-adopted, not recreated: no new worktree was forked for the track.
+        expect(runtime.createdWorktrees).toHaveLength(0)
+        // The dead pre-crash terminal handle forced a relaunch in the SAME checkout.
+        expect(runtime.launchAgentTerminalCalls[0].worktree).toBe('id:wt-existing')
+        // The dispatch preamble landed in the relaunched agent terminal.
+        expect(runtime.sentMessages.some((m) => m.handle === 'term_agent_0')).toBe(true)
+      } finally {
+        // Always drain the loop so a failed assertion can never strand a ticking
+        // coordinator past this test's db teardown.
+        coordinator.stop()
+        await runPromise.catch(() => {})
+      }
     })
   })
 })
