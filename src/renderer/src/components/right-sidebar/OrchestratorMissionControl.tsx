@@ -131,6 +131,11 @@ export default function OrchestratorMissionControl({
   const directorRepo = directorWorktree ? reposById.get(directorWorktree.repoId) : undefined
   const directorPath = directorWorktree?.path ?? null
   const directorConnectionId = directorRepo?.connectionId ?? undefined
+  // Why: the log is committed, so a new director worktree inherits prior
+  // sessions' outcomes. Scope Shipped to outcomes logged at/after this
+  // director's creation so foreign work doesn't leak in. Absent for worktrees
+  // discovered on disk → unscoped (legacy behavior, no createdAt to anchor to).
+  const directorCreatedAt = directorWorktree?.createdAt
   const [shippedItems, setShippedItems] = useState<ShippedWorkItem[]>([])
   useEffect(() => {
     if (!directorPath) {
@@ -143,7 +148,7 @@ export default function OrchestratorMissionControl({
       .readFile({ filePath, connectionId: directorConnectionId })
       .then((result) => {
         if (!cancelled) {
-          setShippedItems(parseOrchestrateLogOutcomes(result.content))
+          setShippedItems(parseOrchestrateLogOutcomes(result.content, directorCreatedAt))
         }
       })
       .catch(() => {
@@ -155,7 +160,7 @@ export default function OrchestratorMissionControl({
     return () => {
       cancelled = true
     }
-  }, [directorPath, directorConnectionId, worktreesByRepo])
+  }, [directorPath, directorConnectionId, directorCreatedAt, worktreesByRepo])
 
   // Why: resolve the director repo's `owner/repo` so a shipped branch can link to
   // its merged PR via GitHub head-ref search — reliable even after the branch is
