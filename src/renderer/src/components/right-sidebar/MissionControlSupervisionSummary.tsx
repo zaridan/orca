@@ -26,9 +26,12 @@ export function MissionControlSupervisionSummary({
           {}
         )}
         {' · '}
+        {/* Why (#5): this is pendingTasks (not-yet-terminal), which differs from
+            the tasks-section header's total task count. Label it "outstanding"
+            so the two numbers don't both read as "tasks". */}
         {translate(
           'auto.components.right.sidebar.OrchestratorMissionControl.supervising_counts',
-          '{{value0}} tasks · {{value1}} workers · {{value2}} stalled',
+          '{{value0}} outstanding · {{value1}} workers · {{value2}} stalled',
           {
             value0: activity.pendingTasks,
             value1: activity.activeDispatches,

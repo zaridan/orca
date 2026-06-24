@@ -121,8 +121,8 @@ describe('OrchestratorMissionControl — DAG vs lineage', () => {
     }
     await renderPanel()
     expect(container.querySelector('[data-testid="tasks-section"]')).not.toBeNull()
-    // Counts line from OrchestrationActivity.
-    expect(container.textContent).toContain('3 tasks · 2 workers · 1 stalled')
+    // Counts line from OrchestrationActivity (#5: pendingTasks labeled "outstanding").
+    expect(container.textContent).toContain('3 outstanding · 2 workers · 1 stalled')
     // The lineage "Spawned work" section is replaced, not shown.
     expect(container.textContent).not.toContain('Spawned work')
   })

@@ -22,9 +22,11 @@ export function deriveTaskDotState(node: OrchestrationTaskNode): AgentDotState {
   }
 }
 
-// Why: a short word beside the dot so the row is legible without decoding the
-// glyph — matches the storyboard mock ("working" / "queued" / "done").
-export function deriveTaskStatusLabel(node: OrchestrationTaskNode): string {
+// Why (#7): a stable token (not English) so the row component can route the
+// short status word through i18n. Matches the storyboard mock vocabulary.
+export type TaskStatusLabel = 'queued' | 'working' | 'stalled' | 'blocked' | 'done' | 'failed'
+
+export function deriveTaskStatusLabel(node: OrchestrationTaskNode): TaskStatusLabel {
   switch (node.status) {
     case 'pending':
     case 'ready':
@@ -40,42 +42,46 @@ export function deriveTaskStatusLabel(node: OrchestrationTaskNode): string {
   }
 }
 
-/** The first dependency that is not yet completed, by title (falling back to id)
- *  — what a queued/blocked task is waiting on. */
+/** The first dependency that is not yet completed, by title — what a
+ *  queued/blocked task is waiting on. Null when there is none, or when the
+ *  blocking dep isn't in the synced set (truncated past the cap / unknown) so
+ *  the row can omit the hint rather than render a raw uuid. */
 function firstUnmetDepTitle(
   node: OrchestrationTaskNode,
   nodesById: Map<string, OrchestrationTaskNode>
 ): string | null {
   for (const depId of node.deps) {
     const dep = nodesById.get(depId)
-    if (!dep || dep.status !== 'completed') {
-      return dep?.title ?? depId
+    if (dep && dep.status === 'completed') {
+      continue
     }
+    return dep ? dep.title : null
   }
   return null
 }
 
-// Why: the row's message prefers a live signal (latest heartbeat phase or the
-// worker_done summary). Absent a signal, a not-yet-running task explains itself
-// as waiting on its first unmet dependency. Returns '' when there is nothing
-// meaningful to say (e.g. a done task with no recorded summary).
+// Why (#7): the row's message is either live worker content (rendered verbatim —
+// not translatable) or a "waiting on <dep>" hint (translated by the component).
+// Returns null when there is nothing meaningful to say.
+export type TaskMessage = { kind: 'signal'; text: string } | { kind: 'waiting'; dep: string } | null
+
 export function deriveTaskMessage(
   node: OrchestrationTaskNode,
   nodesById: Map<string, OrchestrationTaskNode>
-): string {
+): TaskMessage {
   if (node.signal?.summary) {
-    return node.signal.summary
+    return { kind: 'signal', text: node.signal.summary }
   }
   if (node.signal?.phase) {
-    return node.signal.phase
+    return { kind: 'signal', text: node.signal.phase }
   }
   if (node.status === 'pending' || node.status === 'blocked') {
     const dep = firstUnmetDepTitle(node, nodesById)
     if (dep) {
-      return `waiting on ${dep}`
+      return { kind: 'waiting', dep }
     }
   }
-  return ''
+  return null
 }
 
 export function indexTaskNodes(dag: OrchestrationRunDag): Map<string, OrchestrationTaskNode> {

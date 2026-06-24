@@ -9306,7 +9306,14 @@
             "recipe": "recipe: {{value0}}",
             "tasks": "Tasks",
             "tasks_empty": "No tasks yet — the coordinator decomposes the work as it plans.",
-            "tasks_truncated": "+{{value0}} more task(s) not shown"
+            "tasks_truncated": "+{{value0}} more task(s) not shown",
+            "task_status_queued": "queued",
+            "task_status_working": "working",
+            "task_status_stalled": "stalled",
+            "task_status_blocked": "blocked",
+            "task_status_done": "done",
+            "task_status_failed": "failed",
+            "task_waiting_on": "waiting on {{value0}}"
           },
           "OrchestratorPanelNotice": {
             "title": "Orcastrator",

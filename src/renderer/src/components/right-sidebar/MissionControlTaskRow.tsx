@@ -1,12 +1,47 @@
 import React from 'react'
 import { AgentStateDot } from '@/components/AgentStateDot'
 import { AgentIcon } from '@/lib/agent-catalog'
+import { translate } from '@/i18n/i18n'
 import {
   deriveTaskDotState,
   deriveTaskMessage,
-  deriveTaskStatusLabel
+  deriveTaskStatusLabel,
+  type TaskMessage,
+  type TaskStatusLabel
 } from '@/lib/orchestrator-task-row'
 import type { OrchestrationTaskNode } from '../../../../shared/runtime-types'
+
+// Why (#7): the short status word is a fixed vocabulary, so map each token to an
+// i18n key (with the English word as the fallback) instead of rendering raw.
+const STATUS_LABEL_FALLBACK: Record<TaskStatusLabel, string> = {
+  queued: 'queued',
+  working: 'working',
+  stalled: 'stalled',
+  blocked: 'blocked',
+  done: 'done',
+  failed: 'failed'
+}
+
+function statusLabelText(label: TaskStatusLabel): string {
+  return translate(
+    `auto.components.right.sidebar.OrchestratorMissionControl.task_status_${label}`,
+    STATUS_LABEL_FALLBACK[label]
+  )
+}
+
+function messageText(message: TaskMessage): string {
+  if (!message) {
+    return ''
+  }
+  if (message.kind === 'signal') {
+    return message.text
+  }
+  return translate(
+    'auto.components.right.sidebar.OrchestratorMissionControl.task_waiting_on',
+    'waiting on {{value0}}',
+    { value0: message.dep }
+  )
+}
 
 // Why (#7 O2): one task in the coordinator's live DAG, rendered in the shared
 // dot | icon | message vocabulary (AgentStateDot + agent glyph) so the Control
@@ -20,8 +55,8 @@ export function MissionControlTaskRow({
   nodesById: Map<string, OrchestrationTaskNode>
 }): React.JSX.Element {
   const dot = deriveTaskDotState(node)
-  const statusLabel = deriveTaskStatusLabel(node)
-  const message = deriveTaskMessage(node, nodesById)
+  const statusLabel = statusLabelText(deriveTaskStatusLabel(node))
+  const message = messageText(deriveTaskMessage(node, nodesById))
   const agent = node.dispatch?.assigneeAgent ?? null
 
   return (

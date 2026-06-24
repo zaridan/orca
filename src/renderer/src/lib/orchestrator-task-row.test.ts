@@ -58,14 +58,14 @@ describe('deriveTaskStatusLabel', () => {
 })
 
 describe('deriveTaskMessage', () => {
-  it('prefers the worker_done summary, then the heartbeat phase', () => {
+  it('prefers the worker_done summary, then the heartbeat phase (rendered verbatim)', () => {
     const empty = new Map<string, OrchestrationTaskNode>()
-    expect(deriveTaskMessage(node({ signal: { phase: null, summary: 'Shipped it' } }), empty)).toBe(
-      'Shipped it'
-    )
+    expect(
+      deriveTaskMessage(node({ signal: { phase: null, summary: 'Shipped it' } }), empty)
+    ).toEqual({ kind: 'signal', text: 'Shipped it' })
     expect(
       deriveTaskMessage(node({ signal: { phase: 'implementing', summary: null } }), empty)
-    ).toBe('implementing')
+    ).toEqual({ kind: 'signal', text: 'implementing' })
   })
 
   it('explains a queued task as waiting on its first unmet dependency', () => {
@@ -77,7 +77,7 @@ describe('deriveTaskMessage', () => {
       truncatedTaskCount: 0,
       tasks: [dep, waiting]
     })
-    expect(deriveTaskMessage(waiting, byId)).toBe('waiting on scaffold routes')
+    expect(deriveTaskMessage(waiting, byId)).toEqual({ kind: 'waiting', dep: 'scaffold routes' })
   })
 
   it('does not show a waiting message once the dependency is complete', () => {
@@ -89,6 +89,19 @@ describe('deriveTaskMessage', () => {
       truncatedTaskCount: 0,
       tasks: [dep, ready]
     })
-    expect(deriveTaskMessage(ready, byId)).toBe('')
+    expect(deriveTaskMessage(ready, byId)).toBeNull()
+  })
+
+  it('omits the waiting hint when the blocking dep is not in the synced set (nit)', () => {
+    // A dep truncated past the 200-task cap (or otherwise unknown) must not
+    // render a raw uuid as "waiting on <uuid>".
+    const waiting = node({ id: 'task_2', status: 'pending', deps: ['dep_truncated'] })
+    const byId = indexTaskNodes({
+      runId: 'r',
+      recipe: null,
+      truncatedTaskCount: 1,
+      tasks: [waiting]
+    })
+    expect(deriveTaskMessage(waiting, byId)).toBeNull()
   })
 })
