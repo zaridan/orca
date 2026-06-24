@@ -3,6 +3,7 @@ import { ExternalLink, GitMerge, Network } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { AgentStateDot } from '@/components/AgentStateDot'
 import { deriveWorktreeAgentDotState } from '@/lib/worktree-agent-dot-state'
+import { selectWorktreeAgentActivityText } from '@/lib/worktree-agent-activity-text'
 import { deriveOrcastratorDotState } from '@/lib/orcastrator-dot-state'
 import {
   selectOrchestrationActivityForTabs,
@@ -329,6 +330,9 @@ export default function OrchestratorMissionControl({
                 }
                 const tabIds = (tabsByWorktree[id] ?? []).map((tab) => tab.id)
                 const dot = deriveWorktreeAgentDotState(tabIds, agentStatusByPaneKey)
+                // Why: mirror DashboardAgentRow's live activity line so a worker
+                // row shows what its agent is currently doing, not just a dot.
+                const activityText = selectWorktreeAgentActivityText(tabIds, agentStatusByPaneKey)
                 const prBadge = prBadgeForWorker(worker)
                 const prUrl = prBadge?.url
                 return (
@@ -338,7 +342,17 @@ export default function OrchestratorMissionControl({
                     headerLeft={
                       <>
                         <AgentStateDot state={dot} size="sm" />
-                        <span className="min-w-0 flex-1 truncate">{worker.displayName ?? id}</span>
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate">{worker.displayName ?? id}</span>
+                          {activityText ? (
+                            <span
+                              className="truncate text-[11px] leading-snug text-muted-foreground"
+                              title={activityText}
+                            >
+                              {activityText}
+                            </span>
+                          ) : null}
+                        </span>
                       </>
                     }
                     headerRight={
