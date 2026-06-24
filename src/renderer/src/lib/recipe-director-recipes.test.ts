@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { compileRecipe, IMPLEMENT_THEN_REVIEW, type Recipe } from './recipe-director-recipes'
-import { parseTrackFromSpec } from '../../../main/runtime/orchestration/coordinator'
+
+// Mirror the coordinator's track-hint contract (parseTrackFromSpec): a leading
+// `track: <key>` line on its own line. Kept local so this renderer test does not
+// import main-side code across the layer boundary.
+function trackHintOf(spec: string): string | null {
+  const match = spec.match(/^[ \t]*track:[ \t]*(\S+)[ \t]*$/im)
+  return match ? match[1] : null
+}
 
 describe('compileRecipe', () => {
   it('compiles implement_then_review to two same-track tasks with review after implement', () => {
@@ -18,18 +25,20 @@ describe('compileRecipe', () => {
 
     // Both carry a `track:` hint the coordinator parses, and it is the SAME track
     // → one worktree, one branch, one PR.
-    const implementTrack = parseTrackFromSpec(implement.spec).trackKey
-    const reviewTrack = parseTrackFromSpec(review.spec).trackKey
+    const implementTrack = trackHintOf(implement.spec)
+    const reviewTrack = trackHintOf(review.spec)
     expect(implementTrack).not.toBeNull()
     expect(implementTrack).toBe(reviewTrack)
   })
 
-  it('strips the track hint cleanly so the worker spec survives', () => {
+  it('puts the track hint on the first line so the worker spec follows it', () => {
     const compiled = compileRecipe(IMPLEMENT_THEN_REVIEW)
     for (const task of compiled) {
-      const { strippedSpec } = parseTrackFromSpec(task.spec)
-      expect(strippedSpec).not.toMatch(/^track:/m)
-      expect(strippedSpec.trim().length).toBeGreaterThan(0)
+      // First line is the hint; the body (worker instructions) follows after it.
+      expect(task.spec).toMatch(/^track: \S+\n/)
+      const body = task.spec.replace(/^track: \S+\n+/, '')
+      expect(body).not.toMatch(/^track:/m)
+      expect(body.trim().length).toBeGreaterThan(0)
     }
   })
 
