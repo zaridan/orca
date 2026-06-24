@@ -441,6 +441,31 @@ describe('Store', () => {
     })
   })
 
+  it('clears a stale linked PR persisted on the primary worktree', async () => {
+    // Why: the primary (default-branch) worktree must never carry a PR; an
+    // earlier build could persist one, so load-time cleanup drops it on disk.
+    const primaryWorktreeId = 'r1::/repo'
+    const featureWorktreeId = 'r1::/repo/.worktrees/feature'
+    writeDataFile({
+      schemaVersion: 1,
+      repos: [makeRepo({ id: 'r1', path: '/repo' })],
+      worktreeMeta: {
+        [primaryWorktreeId]: { linkedPR: 363 },
+        [featureWorktreeId]: { linkedPR: 77 }
+      }
+    })
+
+    const store = await createStore()
+
+    // Primary loses its stale PR; the feature worktree keeps its real link.
+    expect(store.getWorktreeMeta(primaryWorktreeId)?.linkedPR).toBeNull()
+    expect(store.getWorktreeMeta(featureWorktreeId)?.linkedPR).toBe(77)
+    store.flush()
+    const persisted = readDataFile() as PersistedState
+    expect(persisted.worktreeMeta[primaryWorktreeId]?.linkedPR).toBeNull()
+    expect(persisted.worktreeMeta[featureWorktreeId]?.linkedPR).toBe(77)
+  })
+
   it('migrates legacy WSL agent settings into the global Windows runtime default', async () => {
     writeDataFile({
       schemaVersion: 1,

@@ -31,7 +31,7 @@ type PRRefreshOutcomeObserver = (
 
 type PRBranchLookupCandidate = Pick<
   GitHubPRRefreshCandidate,
-  'localGitOptions' | 'linkedPRNumber' | 'fallbackPRNumber' | 'fallbackPRSource'
+  'localGitOptions' | 'linkedPRNumber' | 'fallbackPRNumber' | 'fallbackPRSource' | 'isMainWorktree'
 >
 
 function shouldAcceptMergedFallbackPR(candidate: PRBranchLookupCandidate): boolean {
@@ -51,6 +51,11 @@ function hostedReviewOptionArgs(
   }
   if (shouldAcceptMergedFallbackPR(candidate)) {
     options.acceptMergedFallbackPR = true
+  }
+  // Why: the primary worktree is categorically PR-free; flag it so the lookup
+  // ignores any stale persisted linked/fallback number and skips branch matching.
+  if (candidate.isMainWorktree) {
+    options.isPrimaryWorktree = true
   }
   return Object.keys(options).length > 0 ? [options] : []
 }
