@@ -42,6 +42,11 @@ export async function createDirectorWorktreeShell(
   try {
     // Why: 'skip' setup — a director coordinates, it doesn't build, so it does not
     // need the repo's setup scripts run in its checkout.
+    // Token-free invariant (#9): this call MUST NOT pass `createdWithAgent`. The
+    // shell is agent-free only because that arg stays undefined — otherwise
+    // activateAndRevealWorktree's `opts?.startup ?? buildCreatedAgentReopenStartup(wt)`
+    // fallback would relaunch an LLM in the director pane (a director-pane token
+    // cost). The arg list intentionally stops at displayName for exactly this reason.
     const result = await store.createWorktree(
       repoId,
       `orcastrator-${options.label}`,

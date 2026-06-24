@@ -5,8 +5,6 @@
 // abstraction (#8) are deliberately out of scope: this module ships the concrete
 // `implement_then_review` recipe and the pure compiler the launch path uses.
 
-import type { TuiAgent } from '../../../shared/types'
-
 /** A single unit of work in a recipe. Compiled 1:1 into an orchestration task. */
 export type RecipeTask = {
   /** Stable, recipe-local key. Used to wire `dependsOn` to created task ids and
@@ -20,8 +18,9 @@ export type RecipeTask = {
   /** Recipe-local keys of tasks that must FINISH before this one runs. Same-track
    *  tasks MUST be totally ordered by deps or the coordinator refuses the run. */
   dependsOn?: string[]
-  /** Per-task worker agent override; defaults to the run's `workerAgent`. */
-  agent?: TuiAgent
+  // Per-task agent override is intentionally omitted: #9 runs every task with the
+  // run's single workerAgent. Re-add when #10/#11 need heterogeneous agents (it
+  // also needs a per-task agent param on orchestration.taskCreate/dispatch).
 }
 
 /** A fixed, deterministic task DAG the director runs without spending LLM tokens. */
@@ -75,7 +74,6 @@ export type CompiledRecipeTask = {
   spec: string
   /** Recipe-local keys this task waits on (resolved to task ids at launch). */
   dependsOn: string[]
-  agent?: TuiAgent
 }
 
 // Why (slice 2 / coordinator §3.3): a task declares its track in the spec text via
@@ -128,8 +126,7 @@ export function compileRecipe(recipe: Recipe): CompiledRecipeTask[] {
     ordered.push({
       key: task.key,
       spec: prependTrackHint(task.spec, task.track ?? task.key),
-      dependsOn: [...(task.dependsOn ?? [])],
-      ...(task.agent ? { agent: task.agent } : {})
+      dependsOn: [...(task.dependsOn ?? [])]
     })
   }
 

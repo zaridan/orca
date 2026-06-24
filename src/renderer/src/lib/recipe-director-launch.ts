@@ -22,9 +22,14 @@ function resolveWorkerAgent(defaultTuiAgent: TuiAgent | 'blank' | null | undefin
 // Why: the run's coordinator inbox AND the live Control Panel key on the director
 // pane (getPaneKeyForTerminalHandle(coordinator_handle)). Binding the run's `from`
 // to the shell's terminal handle surfaces the DAG under the director and routes
-// worker_done/heartbeat to a real inbox. Best-effort: the shell's blank terminal
-// is created asynchronously, so on a miss we let the run derive its own handle —
-// the run still works, it just isn't pane-anchored to the director.
+// worker_done/heartbeat to a real inbox.
+//
+// Opportunistic by design: we do NOT await terminal readiness before resolving the
+// active handle (unlike the LLM path, which waits via pasteDraftWhenAgentReady — it
+// has an agent to wait for; a blank shell has no readiness signal). On a cold shell
+// the resolve can miss, in which case the run derives its own coordinator handle —
+// the run still works correctly, the DAG just isn't pane-anchored to the director
+// (cosmetic). Pane-anchoring is owned by the #11 picker, which can await readiness.
 async function resolveDirectorShellHandle(worktreeSelector: string): Promise<string | undefined> {
   try {
     const response = await window.api.runtime.call({
@@ -57,6 +62,11 @@ export type LaunchRecipeDirectorOptions = {
  *  3. start a worktree-backed coordinator run anchored on the shell.
  * The director shell itself runs no agent → no director LLM tokens. The live
  * Control Panel renders the run automatically.
+ *
+ * GATING: this function is intentionally UNGATED. The `experimentalOrchestrators`
+ * gate belongs at the call site — the #11 director-type picker, which does not
+ * exist yet. The caller (#11) MUST check `experimentalOrchestrators` before
+ * invoking this; do not call it from any always-on UI path.
  */
 export async function launchRecipeDirector(
   project: Project,
@@ -107,9 +117,19 @@ export async function launchRecipeDirector(
   // task to the shell so run-start adoptUnownedTasks claims it.
   const idByKey = new Map<string, string>()
   for (const task of compiled) {
-    const depIds = task.dependsOn
-      .map((key) => idByKey.get(key))
-      .filter((id): id is string => id !== undefined)
+    // Why: compileRecipe already topo-sorts and validates deps, so every dependsOn
+    // key MUST already be in idByKey. Throw on a miss rather than silently dropping
+    // it — a dropped dep would let review go ready before implement and surface far
+    // downstream as the coordinator's confusing same-track ordering refusal.
+    const depIds = task.dependsOn.map((key) => {
+      const id = idByKey.get(key)
+      if (id === undefined) {
+        throw new Error(
+          `Recipe '${recipe.name}' task '${task.key}' depends on unmapped key '${key}'`
+        )
+      }
+      return id
+    })
     const { task: created } = await window.api.orchestration.taskCreate({
       spec: task.spec,
       taskTitle: task.key,
