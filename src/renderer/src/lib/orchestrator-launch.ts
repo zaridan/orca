@@ -74,9 +74,13 @@ export async function launchOrchestratorForProject(
     allowEmptyPromptLaunch: true
   })
 
+  // Why: a director is launched programmatically — reveal it in the sidebar +
+  // Mission Control DAG, but suppress the active-tab switch so the user is not
+  // yanked off their current worktree when the Orcastrator boots.
   const activation = activateAndRevealWorktree(worktreeId, {
     sidebarRevealBehavior: 'auto',
     setup,
+    suppressActivation: true,
     ...buildDirectWorkItemStartupOpts(agent, startupPlan, 'sidebar')
   })
   if (!activation) {

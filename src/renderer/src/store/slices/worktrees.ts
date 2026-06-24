@@ -1977,7 +1977,11 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
                           ...(startup.startupCommandDelivery
                             ? { startupCommandDelivery: startup.startupCommandDelivery }
                             : {}),
-                          activate: true
+                          // Why: programmatic (director/coordinator) creates pass
+                          // suppressActivation so the host reveals the worktree
+                          // without switching the user's active tab to it; manual
+                          // creates leave it unset and still activate.
+                          activate: options?.suppressActivation !== true
                         }
                       : {})
                   },

@@ -90,9 +90,13 @@ export async function launchRecipeDirector(
   // no /orcastrate. This is the token-free invariant: nothing here seeds an LLM
   // into the director shell. It still gives the shell a focusable surface (and a
   // terminal handle for pane-anchoring the run).
+  // Why: a recipe director is launched programmatically — reveal it (sidebar +
+  // Mission Control DAG) but suppress the active-tab switch so spawning the
+  // director does not yank the user off their current worktree.
   const activation = activateAndRevealWorktree(shell.worktreeId, {
     sidebarRevealBehavior: 'auto',
-    setup: shell.setup
+    setup: shell.setup,
+    suppressActivation: true
   })
   if (!activation) {
     toast.error(

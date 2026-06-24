@@ -49,6 +49,9 @@ describe('createDirectorWorktreeShell', () => {
     // ...and CRUCIALLY no createdWithAgent — otherwise activation would relaunch an
     // LLM in the director pane, breaking the token-free invariant.
     expect(args[CREATED_WITH_AGENT_ARG_INDEX]).toBeUndefined()
+    // ...and the trailing options suppress host activation so an SSH create
+    // reveals the director without switching the user's active tab to it.
+    expect(args.at(-1)).toEqual({ suppressActivation: true })
   })
 
   it('returns null and toasts when the project has no repo', async () => {

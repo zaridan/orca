@@ -118,6 +118,8 @@ describe('launchRecipeDirector', () => {
     expect(worktreeId).toBe('wt_director')
     expect(opts.startup).toBeUndefined()
     expect(opts.issueCommand).toBeUndefined()
+    // Programmatic launch reveals the shell without yanking the user's active tab.
+    expect(opts.suppressActivation).toBe(true)
   })
 
   it('falls back to claude when the default agent is a blank shell', async () => {
