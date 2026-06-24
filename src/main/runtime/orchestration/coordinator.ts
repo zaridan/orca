@@ -14,13 +14,19 @@ export type CoordinatorRuntime = {
   }>
   createTerminal(
     worktreeSelector?: string,
-    // Why (round 2, must-fix #1): `launchAgent` lets the coordinator relaunch a
-    // worker AGENT inside an EXISTING track worktree when the cached agent terminal
-    // is gone — instead of silently opening a bare shell and firing the agent
-    // preamble into it (which never produces worker_done → the dispatch hangs
-    // forever). Optional + additive: OrcaRuntimeService.createTerminal already
-    // supports it; the legacy/no-agent path omits it and gets a plain shell.
-    opts?: { command?: string; title?: string; launchAgent?: TuiAgent }
+    opts?: { command?: string; title?: string }
+  ): Promise<{ handle: string; worktreeId: string }>
+  // Why (round 3, must-fix #1): the REAL agent spawn. createTerminal only spawns
+  // its `command` (a plain shell when unset) and treats `launchAgent` as a mere
+  // metadata tag — it does NOT run an agent. launchAgentTerminal builds the actual
+  // agent launch command (buildStartupForAgent) and spawns it. The coordinator
+  // uses THIS to relaunch a worker agent in an EXISTING track worktree when the
+  // cached terminal is gone, so the dispatch preamble never lands in a bare shell.
+  // OPTIONAL/additive: a runtime without it cannot relaunch an agent, and the
+  // coordinator refuses to downgrade to a shell (breaker-accounts instead).
+  launchAgentTerminal?(
+    worktreeSelector: string,
+    opts: { agent: TuiAgent; prompt: string; title?: string }
   ): Promise<{ handle: string; worktreeId: string }>
   waitForTerminal(
     handle: string,
@@ -100,6 +106,9 @@ export function parseAllowStaleBaseFromSpec(spec: string): {
 // A `track:` line inside a worker-instruction example must not be parsed as the
 // real key (which would mis-route the track AND corrupt the preamble by stripping
 // an example line). Only the first non-fenced `track:` line on its own line wins.
+// Safe degradation (round 3 nit): an unclosed/mismatched fence leaves `inFence`
+// set, so the rest of the spec is skipped and no key is found → returns null →
+// the caller defaults to the task id (per-task, collision-free), never a wrong key.
 const TRACK_LINE_RE = /^[ \t]*track:[ \t]*(\S+)[ \t]*\r?$/i
 const CODE_FENCE_RE = /^[ \t]*(?:```|~~~)/
 
@@ -364,8 +373,91 @@ export class Coordinator {
         'No tasks found. Create tasks with orchestration.taskCreate before running the coordinator.'
       )
     }
+    // Why (round 3, should-fix #3): same-track tasks share ONE worktree, so they
+    // must be totally ordered — otherwise two of them can be `ready` at once and
+    // the dispatch loop picks an arbitrary one (id is random, not insertion order),
+    // letting `review` run before `implement` into an empty branch. We refuse to
+    // run an unsafe DAG up front rather than relying on the operator remembering
+    // deps. Only worktree-backed runs care (legacy dispatch shares no worktree).
+    if (this.opts.worktreeBacked) {
+      this.assertTrackOrderingSafe(existing)
+    }
     this.opts.onLog(`Found ${existing.length} tasks in DAG`)
     this.state.phase = 'dispatching'
+  }
+
+  // Why (round 3, should-fix #3): a track = one shared worktree, so its tasks must
+  // form a dependency chain (a total order). If two tasks on the same track are
+  // not ordered by deps, they could be simultaneously `ready` and race into the
+  // shared checkout (the canonical implement+review-without-deps bug). Refuse the
+  // run with an actionable error instead of shipping correctness that hinges on
+  // unenforced operator discipline. Throws (decompose's caller marks the run
+  // failed) — safe by default: nothing is dispatched.
+  private assertTrackOrderingSafe(tasks: TaskRow[]): void {
+    const byTrack = new Map<string, TaskRow[]>()
+    for (const task of tasks) {
+      const key = this.trackKeyForTask(task)
+      const group = byTrack.get(key)
+      if (group) {
+        group.push(task)
+      } else {
+        byTrack.set(key, [task])
+      }
+    }
+
+    const taskIds = new Set(tasks.map((t) => t.id))
+    const directDeps = new Map<string, string[]>()
+    for (const task of tasks) {
+      directDeps.set(task.id, this.parseDeps(task))
+    }
+    // a depends (transitively) on b?
+    const dependsOn = (a: string, b: string): boolean => {
+      const seen = new Set<string>()
+      const stack = [...(directDeps.get(a) ?? [])]
+      while (stack.length > 0) {
+        const next = stack.pop()!
+        if (next === b) {
+          return true
+        }
+        if (seen.has(next) || !taskIds.has(next)) {
+          continue
+        }
+        seen.add(next)
+        stack.push(...(directDeps.get(next) ?? []))
+      }
+      return false
+    }
+
+    for (const [trackKey, group] of byTrack) {
+      if (group.length < 2) {
+        continue
+      }
+      for (let i = 0; i < group.length; i++) {
+        for (let j = i + 1; j < group.length; j++) {
+          const a = group[i]
+          const b = group[j]
+          if (!dependsOn(a.id, b.id) && !dependsOn(b.id, a.id)) {
+            throw new Error(
+              `Track '${trackKey}' has unordered tasks ${a.id} and ${b.id}: same-track tasks ` +
+                `share one worktree and must be totally ordered. Declare a dependency between ` +
+                `them (e.g. the review task should carry deps:[<implement task id>]) so they ` +
+                `serialize in order. Refusing to run to avoid reviewing an empty branch.`
+            )
+          }
+        }
+      }
+    }
+  }
+
+  // Why (round 3): task.deps is a JSON array of task ids; parse defensively so a
+  // malformed value degrades to "no deps" instead of throwing mid-validation.
+  private parseDeps(task: Pick<TaskRow, 'deps'>): string[] {
+    try {
+      const parsed = JSON.parse(task.deps)
+      return Array.isArray(parsed) ? parsed.filter((d): d is string => typeof d === 'string') : []
+    } catch {
+      return []
+    }
   }
 
   private async tick(): Promise<boolean> {
@@ -908,21 +1000,26 @@ export class Coordinator {
     return true
   }
 
-  // Why (slice 2, design §5.3 / Q4; round 2 must-fix #1): pick the terminal for a
+  // Why (slice 2, design §5.3 / Q4; round 3 must-fix #1): pick the terminal for a
   // same-track re-dispatch. Prefer the cached worker-agent terminal when it is
   // still connected/writable — per-track serialization guarantees it is idle now,
   // and reusing it keeps the worker's context for the handoff.
   //
-  // If the cached terminal is GONE, we must NOT silently downgrade an agent run to
-  // a bare shell: sending the agent preamble into a plain shell never produces
-  // worker_done, so the track stays busy on a dead dispatch forever (this is the
+  // If the cached terminal is GONE, we must NOT downgrade an agent run to a bare
+  // shell: sending the agent preamble into a plain shell never produces
+  // worker_done, so the track stays busy on a dead dispatch (this is the
   // implement→review path — implement's agent exits after its grace window, then
   // review reuses the track). So when this run launches workers as agents, we
-  // RELAUNCH the worker agent in the SAME worktree (createTerminal launchAgent —
-  // an agent terminal in the existing checkout, NOT a new worktree, so the
-  // predecessor's commits are preserved). A no-agent run opens a plain shell, the
-  // same kind it started with. A failure to open either returns null → the caller
-  // breaker-accounts it (and leaves the shared worktree intact).
+  // RELAUNCH the worker agent in the SAME worktree via launchAgentTerminal — the
+  // REAL agent spawn (createTerminal's `launchAgent` is only a tag; it spawns a
+  // shell). It targets the existing checkout, NOT a new worktree, so the
+  // predecessor's commits are preserved. An empty prompt is fine: the agent is
+  // spawned here and the dispatch preamble is sent afterwards via sendTerminal
+  // (dispatchTask), exactly like slice-1's create→sendTerminal flow. A no-agent
+  // run opens a plain shell, the same kind it started with. Any failure (or a
+  // runtime without launchAgentTerminal) returns null → the caller breaker-accounts
+  // it and leaves the shared worktree intact. Never returns a non-agent terminal
+  // for an agent run.
   private async resolveTrackTerminal(track: {
     worktreeId: string
     terminalHandle: string
@@ -942,16 +1039,35 @@ export class Coordinator {
     // Decide agent-vs-shell from the RUN config, not the cached flag, so a prior
     // fallback can never permanently downgrade an agent track to a shell.
     const wantsAgent = this.opts.workerAgent !== undefined
+    if (wantsAgent) {
+      if (!this.runtime.launchAgentTerminal) {
+        // No real agent-spawn capability → refuse to dispatch into a shell.
+        this.opts.onLog(
+          `Cannot relaunch the worker agent in reused worktree ${track.worktreeId}: runtime lacks launchAgentTerminal`
+        )
+        return null
+      }
+      try {
+        const created = await this.runtime.launchAgentTerminal(`id:${track.worktreeId}`, {
+          agent: this.opts.workerAgent!,
+          prompt: '',
+          title: `Worker (track reuse)`
+        })
+        return { handle: created.handle, isAgent: true }
+      } catch (err) {
+        this.opts.onLog(
+          `Failed to relaunch the worker agent in reused worktree ${track.worktreeId}: ${err}`
+        )
+        return null
+      }
+    }
     try {
       const created = await this.runtime.createTerminal(`id:${track.worktreeId}`, {
-        title: `Worker (track reuse)`,
-        ...(wantsAgent ? { launchAgent: this.opts.workerAgent } : {})
+        title: `Worker (track reuse)`
       })
-      return { handle: created.handle, isAgent: wantsAgent }
+      return { handle: created.handle, isAgent: false }
     } catch (err) {
-      this.opts.onLog(
-        `Failed to ${wantsAgent ? 'relaunch the worker agent' : 'open a terminal'} in reused worktree ${track.worktreeId}: ${err}`
-      )
+      this.opts.onLog(`Failed to open a terminal in reused worktree ${track.worktreeId}: ${err}`)
       return null
     }
   }

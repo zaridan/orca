@@ -37,6 +37,9 @@ function createMockRuntime(): CoordinatorRuntime & {
   createdTerminals: string[]
   createTerminalCalls: { worktree?: string; launchAgent?: string }[]
   throwCreateTerminal: Error | null
+  // round 3: the REAL agent-spawn path the coordinator must use on reuse-relaunch.
+  launchAgentTerminalCalls: { worktree: string; agent: string; prompt: string }[]
+  throwLaunchAgentTerminal: Error | null
   createdWorktrees: CreatedWorktree[]
   removedWorktrees: string[]
   waitForTerminalCalls: { handle: string; condition?: string }[]
@@ -62,6 +65,8 @@ function createMockRuntime(): CoordinatorRuntime & {
     createdTerminals: [] as string[],
     createTerminalCalls: [] as { worktree?: string; launchAgent?: string }[],
     throwCreateTerminal: null as Error | null,
+    launchAgentTerminalCalls: [] as { worktree: string; agent: string; prompt: string }[],
+    throwLaunchAgentTerminal: null as Error | null,
     createdWorktrees: [] as CreatedWorktree[],
     removedWorktrees: [] as string[],
     waitForTerminalCalls: [] as { handle: string; condition?: string }[],
@@ -96,6 +101,23 @@ function createMockRuntime(): CoordinatorRuntime & {
       const worktreeId = worktree?.replace(/^id:/, '') ?? 'wt1'
       mock.terminals.push({ handle, worktreeId, connected: true, writable: true })
       return { handle, worktreeId, title: opts?.title ?? '' }
+    },
+    // Why (round 3): the REAL agent spawn — mirrors OrcaRuntimeService.launchAgentTerminal
+    // (which builds a launch command via buildStartupForAgent). The coordinator must
+    // use THIS, not createTerminal, to relaunch a worker agent on track reuse.
+    async launchAgentTerminal(
+      worktree: string,
+      opts: { agent: string; prompt: string; title?: string }
+    ) {
+      mock.callOrder.push(`launchAgent:${worktree}`)
+      mock.launchAgentTerminalCalls.push({ worktree, agent: opts.agent, prompt: opts.prompt })
+      if (mock.throwLaunchAgentTerminal) {
+        throw mock.throwLaunchAgentTerminal
+      }
+      const handle = `term_agent_${mock.launchAgentTerminalCalls.length - 1}`
+      const worktreeId = worktree.replace(/^id:/, '')
+      mock.terminals.push({ handle, worktreeId, connected: true, writable: true })
+      return { handle, worktreeId }
     },
     async waitForTerminal(handle: string, options?: { condition?: string; timeoutMs?: number }) {
       mock.callOrder.push(`wait:${handle}`)
@@ -1012,17 +1034,17 @@ describe('Coordinator', () => {
   })
 
   describe('worktree-per-track reuse + serialization (F2 #13 slice 2)', () => {
-    // Slice-2 core: two tasks sharing a trackKey share ONE worktree, serialize
-    // (the 2nd waits while the 1st is in flight), and the 2nd lands in the 1st's
-    // worktree (the implement→review handoff). Fails without the track map: each
-    // task would get its own worktree and they would not serialize on the track.
-    it('same trackKey: one worktree, serialized, 2nd reuses the 1st worktree', async () => {
+    // Round 3 should-fix #3 (safe-by-default): two tasks on the same track with NO
+    // dependency between them are not totally ordered — they could both be ready and
+    // race into the shared worktree (review before implement). The run must REFUSE
+    // such a DAG up front rather than rely on the operator remembering deps. Fails
+    // without the guard: the run would proceed and arbitrarily order them.
+    it('refuses to run when same-track tasks are not ordered by deps', async () => {
       db = new OrchestrationDb(':memory:')
       const runtime = createMockRuntime()
 
-      // Both tasks declare the same track → they must share one worktree.
-      const t1 = db.createTask({ spec: 'implement feature\ntrack: feat-x' })
-      const t2 = db.createTask({ spec: 'review feature\ntrack: feat-x' })
+      db.createTask({ spec: 'implement feature\ntrack: feat-x' })
+      db.createTask({ spec: 'review feature\ntrack: feat-x' }) // no deps → unsafe
 
       const coordinator = new Coordinator(db, runtime, {
         spec: 'build it',
@@ -1030,47 +1052,42 @@ describe('Coordinator', () => {
         pollIntervalMs: 30,
         worktree: 'director-wt',
         worktreeBacked: true,
-        workerAgent: 'claude',
-        maxConcurrent: 4 // generous: prove serialization is by-track, not by-slot
+        workerAgent: 'claude'
+      })
+
+      await expect(coordinator.run()).rejects.toThrow(/totally ordered|deps/)
+      // Nothing was dispatched — refusal happens before any worktree is created.
+      expect(runtime.createdWorktrees).toHaveLength(0)
+    })
+
+    // The same unordered DAG is allowed on the legacy (non-worktree-backed) path —
+    // legacy dispatch shares no worktree, so there is no collision to guard against.
+    // The run must NOT reject at decompose (the guard is worktree-backed-only).
+    it('does NOT apply the track-ordering guard on the legacy path', async () => {
+      db = new OrchestrationDb(':memory:')
+      const runtime = createMockRuntime()
+      runtime.terminals = [{ handle: 'term_a', worktreeId: 'wt1', connected: true, writable: true }]
+
+      db.createTask({ spec: 'implement feature\ntrack: feat-x' })
+      db.createTask({ spec: 'review feature\ntrack: feat-x' }) // no deps, same track
+
+      const coordinator = new Coordinator(db, runtime, {
+        spec: 'build it',
+        coordinatorHandle: 'coord',
+        pollIntervalMs: 30,
+        worktree: 'wt1'
+        // worktreeBacked omitted → legacy path, no guard
       })
 
       const runPromise = coordinator.run()
-
-      // Let the first tick run: exactly one of the two same-track tasks dispatches.
       await new Promise((r) => {
         setTimeout(r, 80)
       })
-
-      // Only ONE worktree was created for the track, and only ONE task dispatched —
-      // the other is held back (serialized), still ready.
-      expect(runtime.createdWorktrees).toHaveLength(1)
-      expect(db.listTasks({ status: 'dispatched' })).toHaveLength(1)
-      const firstDispatched = db.getTask(t1.id)?.status === 'dispatched' ? t1 : t2
-      const secondWaiting = firstDispatched.id === t1.id ? t2 : t1
-      expect(db.getTask(secondWaiting.id)?.status).toBe('ready')
-      // The track's branch was named after whichever task led the track.
-      expect(runtime.createdWorktrees[0].taskId).toBe(firstDispatched.id)
-
-      // Complete the first task → the track frees up.
-      insertWorkerDone(db, { taskId: firstDispatched.id })
-
-      await new Promise((r) => {
-        setTimeout(r, 80)
-      })
-
-      // STILL one worktree (the 2nd reused it, did not create a new one), and the
-      // 2nd was dispatched into the SAME worktree's terminal (term_wt_0). No bare
-      // terminal was ever created.
-      expect(runtime.createdWorktrees).toHaveLength(1)
-      expect(runtime.createdTerminals).toHaveLength(0)
-      const sendsToTrackTerminal = runtime.sentMessages.filter((m) => m.handle === 'term_wt_0')
-      expect(sendsToTrackTerminal).toHaveLength(2)
-
-      insertWorkerDone(db, { taskId: secondWaiting.id })
-      const result = await runPromise
-      expect(result.status).toBe('completed')
-      expect(result.completedTasks).toContain(t1.id)
-      expect(result.completedTasks).toContain(t2.id)
+      // The run started and dispatched without the decompose guard rejecting it.
+      expect(runtime.sentMessages.length).toBeGreaterThan(0)
+      expect(runtime.createdWorktrees).toHaveLength(0)
+      coordinator.stop()
+      await runPromise
     })
 
     // Slice-2 core: distinct tracks run concurrently up to maxConcurrent. Fails if
@@ -1230,7 +1247,7 @@ describe('Coordinator', () => {
       const runtime = createMockRuntime()
 
       const t1 = db.createTask({ spec: 'implement\ntrack: feat-x' })
-      const t2 = db.createTask({ spec: 'review\ntrack: feat-x' })
+      const t2 = db.createTask({ spec: 'review\ntrack: feat-x', deps: [t1.id] })
 
       const coordinator = new Coordinator(db, runtime, {
         spec: 'go',
@@ -1245,8 +1262,9 @@ describe('Coordinator', () => {
       await new Promise((r) => {
         setTimeout(r, 80)
       })
-      const first = db.getTask(t1.id)?.status === 'dispatched' ? t1 : t2
-      const second = first.id === t1.id ? t2 : t1
+      // deps ensure implement (t1) dispatches first; review (t2) is gated until done.
+      const first = t1
+      const second = t2
       insertWorkerDone(db, { taskId: first.id })
       await new Promise((r) => {
         setTimeout(r, 80)
@@ -1271,16 +1289,18 @@ describe('Coordinator', () => {
       expect(result.status).toBe('completed')
     })
 
-    // Round 2 must-fix #1: when the cached agent terminal is GONE, the reuse path
-    // must RELAUNCH the worker agent in the SAME worktree (never downgrade to a
-    // bare shell). Fails without the fix: createTerminal would be called without
-    // launchAgent (a plain shell) and the agent preamble would hang.
-    it('relaunches the worker agent in the reused worktree when the cached terminal is gone', async () => {
+    // Round 3 must-fix #1+#2: when the cached agent terminal is GONE, the reuse path
+    // must relaunch a REAL agent via launchAgentTerminal (the actual spawn) — NOT
+    // createTerminal({ launchAgent }), which only spawns a bare shell tagged as an
+    // agent. Fails against the round-2 bare-shell code: that code called
+    // createTerminal (never launchAgentTerminal), so launchAgentTerminalCalls is
+    // empty and a shell would receive the agent preamble.
+    it('relaunches a REAL worker agent (launchAgentTerminal) in the reused worktree when the cached terminal is gone', async () => {
       db = new OrchestrationDb(':memory:')
       const runtime = createMockRuntime()
 
       const t1 = db.createTask({ spec: 'implement\ntrack: feat-x' })
-      const t2 = db.createTask({ spec: 'review\ntrack: feat-x' })
+      const t2 = db.createTask({ spec: 'review\ntrack: feat-x', deps: [t1.id] })
 
       const coordinator = new Coordinator(db, runtime, {
         spec: 'go',
@@ -1295,45 +1315,46 @@ describe('Coordinator', () => {
       await new Promise((r) => {
         setTimeout(r, 80)
       })
-      const first = db.getTask(t1.id)?.status === 'dispatched' ? t1 : t2
-      const second = first.id === t1.id ? t2 : t1
-      insertWorkerDone(db, { taskId: first.id })
+      insertWorkerDone(db, { taskId: t1.id })
 
       // Simulate implement's agent terminal exiting after its grace window: the
       // cached handle is no longer connected, so reuse cannot find it.
-      const gone = runtime.terminals.find((t) => t.handle === 'term_wt_0')!
-      gone.connected = false
+      runtime.terminals.find((t) => t.handle === 'term_wt_0')!.connected = false
 
       await new Promise((r) => {
         setTimeout(r, 80)
       })
 
-      // The worktree was NOT recreated; an AGENT terminal was relaunched in it.
+      // The worktree was NOT recreated; a REAL agent was relaunched in it via
+      // launchAgentTerminal (NOT a bare-shell createTerminal).
       expect(runtime.createdWorktrees).toHaveLength(1)
-      const relaunch = runtime.createTerminalCalls.find((c) => c.worktree === 'id:wt_child_0')
+      const relaunch = runtime.launchAgentTerminalCalls.find((c) => c.worktree === 'id:wt_child_0')
       expect(relaunch).toBeDefined()
-      expect(relaunch!.launchAgent).toBe('claude')
-      // The relaunched terminal got a tui-idle wait before its preamble.
-      const relaunchedHandle = runtime.createdTerminals.at(-1)!
+      expect(relaunch!.agent).toBe('claude')
+      // createTerminal (the bare-shell path) was NOT used to carry the agent.
+      expect(runtime.createTerminalCalls).toHaveLength(0)
+      // The relaunched agent terminal got a tui-idle wait before its preamble.
+      const relaunchedHandle = 'term_agent_0'
       expect(runtime.callOrder.indexOf(`wait:${relaunchedHandle}`)).toBeLessThan(
         runtime.callOrder.indexOf(`send:${relaunchedHandle}`)
       )
 
-      insertWorkerDone(db, { taskId: second.id, from: relaunchedHandle })
+      insertWorkerDone(db, { taskId: t2.id, from: relaunchedHandle })
       const result = await runPromise
       expect(result.status).toBe('completed')
-      expect(result.completedTasks).toContain(second.id)
+      expect(result.completedTasks).toContain(t2.id)
     })
 
-    // Round 2 must-fix #1 / test-gap: if the reuse terminal can't be obtained
-    // (relaunch throws), the task must breaker-FAIL after strikes — never hang —
-    // and the shared worktree must NOT be torn down (it holds the predecessor's work).
-    it('breaker-fails (no hang) and preserves the shared worktree when reuse relaunch keeps failing', async () => {
+    // Round 3 must-fix #1 / test-gap: if the agent relaunch can't be obtained
+    // (launchAgentTerminal throws), the task must breaker-FAIL after strikes — never
+    // hang — and the shared worktree must NOT be torn down (it holds the
+    // predecessor's work). No preamble is ever sent into a non-agent terminal.
+    it('breaker-fails (no hang) and preserves the shared worktree when the agent relaunch keeps failing', async () => {
       db = new OrchestrationDb(':memory:')
       const runtime = createMockRuntime()
 
       const t1 = db.createTask({ spec: 'implement\ntrack: feat-x' })
-      const t2 = db.createTask({ spec: 'review\ntrack: feat-x' })
+      const t2 = db.createTask({ spec: 'review\ntrack: feat-x', deps: [t1.id] })
 
       const coordinator = new Coordinator(db, runtime, {
         spec: 'go',
@@ -1348,24 +1369,23 @@ describe('Coordinator', () => {
       await new Promise((r) => {
         setTimeout(r, 60)
       })
-      const first = db.getTask(t1.id)?.status === 'dispatched' ? t1 : t2
-      const second = first.id === t1.id ? t2 : t1
-      insertWorkerDone(db, { taskId: first.id })
+      insertWorkerDone(db, { taskId: t1.id })
 
-      // Cached terminal gone AND every relaunch attempt fails.
+      // Cached terminal gone AND every agent relaunch attempt fails.
       runtime.terminals.find((t) => t.handle === 'term_wt_0')!.connected = false
-      runtime.throwCreateTerminal = new Error('relaunch failed')
+      runtime.throwLaunchAgentTerminal = new Error('relaunch failed')
 
       const result = await runPromise
 
       expect(result.status).toBe('failed')
-      expect(result.failedTasks).toContain(second.id)
-      expect(db.getTask(second.id)?.status).toBe('failed')
+      expect(result.failedTasks).toContain(t2.id)
+      expect(db.getTask(t2.id)?.status).toBe('failed')
       // The first task still completed, and its shared worktree was preserved.
-      expect(result.completedTasks).toContain(first.id)
+      expect(result.completedTasks).toContain(t1.id)
       expect(runtime.createdWorktrees).toHaveLength(1)
       expect(runtime.removedWorktrees).toHaveLength(0)
-      // No preamble was ever sent into a non-agent shell for the successor.
+      // The coordinator NEVER fell back to a bare shell for the agent dispatch.
+      expect(runtime.createTerminalCalls).toHaveLength(0)
       expect(runtime.sentMessages.filter((m) => m.handle.startsWith('term_worker_'))).toHaveLength(
         0
       )
@@ -1447,8 +1467,11 @@ describe('Coordinator', () => {
         setTimeout(r, 80)
       })
 
-      // review now reuses implement's worktree (no new worktree), in the same terminal.
+      // review now reuses implement's worktree (no new worktree), in the same
+      // cached terminal — no bare terminal and no agent relaunch were needed.
       expect(runtime.createdWorktrees).toHaveLength(1)
+      expect(runtime.createdTerminals).toHaveLength(0)
+      expect(runtime.launchAgentTerminalCalls).toHaveLength(0)
       expect(runtime.sentMessages.filter((m) => m.handle === 'term_wt_0')).toHaveLength(2)
 
       insertWorkerDone(db, { taskId: review.id })
