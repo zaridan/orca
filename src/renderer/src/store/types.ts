@@ -23,6 +23,7 @@ import type { RateLimitSlice } from './slices/rate-limits'
 import type { SshSlice } from './slices/ssh'
 import type { AgentStatusSlice } from './slices/agent-status'
 import type { OrchestrationActivitySlice } from './slices/orchestration-activity'
+import type { OrchestrationRunDagSlice } from './slices/orchestration-run-dag'
 import type { DiffCommentsSlice } from './slices/diffComments'
 import type { DetectedAgentsSlice } from './slices/detected-agents'
 import type { WorktreeNavHistorySlice } from './slices/worktree-nav-history'
@@ -59,6 +60,7 @@ export type AppState = RepoSlice &
   SshSlice &
   AgentStatusSlice &
   OrchestrationActivitySlice &
+  OrchestrationRunDagSlice &
   DiffCommentsSlice &
   DetectedAgentsSlice &
   WorktreeNavHistorySlice &

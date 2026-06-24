@@ -12,6 +12,7 @@ import type {
   ProjectGroup,
   Tab,
   TerminalLayoutSnapshot,
+  TuiAgent,
   WorktreeLineage,
   WorktreeMeta,
   WorkspaceLineage,
@@ -1007,6 +1008,67 @@ const store = {
     branchPrefixCustom: ''
   }),
   getProjects: () => []
+}
+
+// Why (#2/#6): the run-DAG builder is gated on experimentalOrchestrators, so
+// tests that exercise it opt in via a store whose settings enable the flag.
+function storeWithOrchestratorsFlag(): typeof store {
+  return {
+    ...store,
+    getSettings: () => ({ ...store.getSettings(), experimentalOrchestrators: true })
+  }
+}
+
+// Why (#6): a row in the shape listTasksWithDispatch returns, used to feed the
+// DAG builder a deterministic dispatched task without a real DB.
+function makeDagTaskRow(overrides: {
+  id: string
+  assignee_handle?: string
+}): Record<string, unknown> {
+  return {
+    id: overrides.id,
+    parent_id: null,
+    created_by_terminal_handle: null,
+    coordinator_run_id: 'run-a',
+    target_key: 'repo:/x',
+    task_title: overrides.id,
+    display_name: null,
+    spec: overrides.id,
+    status: 'dispatched',
+    deps: '[]',
+    result: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+    completed_at: null,
+    assignee_handle: overrides.assignee_handle ?? 'term_worker',
+    dispatch_id: `ctx_${overrides.id}`,
+    dispatch_status: 'dispatched',
+    dispatch_last_heartbeat_at: '2026-06-01T00:00:00.000Z',
+    dispatch_dispatched_at: '2025-06-01T00:00:00.000Z'
+  }
+}
+
+// Why (#6): a heartbeat message in the shape getAllMessagesForHandle returns,
+// carrying the taskId the DAG builder keys signals on.
+function makeSignalMessage(overrides: { taskId: string; phase: string }): Record<string, unknown> {
+  return {
+    id: `msg_${overrides.taskId}`,
+    from_handle: 'term_worker',
+    to_handle: 'term_coord',
+    subject: 'alive',
+    body: '',
+    type: 'heartbeat',
+    priority: 'normal',
+    thread_id: null,
+    payload: JSON.stringify({
+      taskId: overrides.taskId,
+      dispatchId: `ctx_${overrides.taskId}`,
+      phase: overrides.phase
+    }),
+    read: 0,
+    sequence: 1,
+    created_at: '2026-01-01T00:00:00.000Z',
+    delivered_at: null
+  }
 }
 
 function makeHeadlessTerminalLayout(
@@ -17567,6 +17629,178 @@ describe('OrcaRuntimeService', () => {
     })
 
     expect(result.orchestrationActivityByPaneKey).toBeUndefined()
+  })
+
+  // Why (#2): the DAG builder is gated on experimentalOrchestrators so un-opted-in
+  // users with a running coordinator don't pay the hot-path cost.
+  it('omits the run DAG when experimentalOrchestrators is off', () => {
+    const runtime = new OrcaRuntimeService(store) // store.getSettings has no flag
+    const coordinatorLeafId = '11111111-1111-4111-8111-111111111111'
+    const coordinatorHandle = runtime.preAllocateHandleForPty('pty-coordinator')
+    const listTasksWithDispatch = vi.fn(() => [])
+    runtime.setOrchestrationDb({
+      listCoordinatorRuns: vi.fn(() => [{ id: 'run-a', coordinator_handle: coordinatorHandle }]),
+      listTasksWithDispatch,
+      getAllMessagesForHandle: vi.fn(() => []),
+      getRunDagChangeToken: vi.fn(() => 'tok')
+    } as never)
+    runtime.attachWindow(1)
+
+    const result = runtime.syncWindowGraph(1, {
+      tabs: [
+        {
+          tabId: 'tab-coordinator',
+          worktreeId: TEST_WORKTREE_ID,
+          title: 'Codex',
+          activeLeafId: coordinatorLeafId,
+          layout: null
+        }
+      ],
+      leaves: [
+        {
+          tabId: 'tab-coordinator',
+          worktreeId: TEST_WORKTREE_ID,
+          leafId: coordinatorLeafId,
+          paneRuntimeId: 1,
+          ptyId: 'pty-coordinator',
+          paneTitle: null
+        }
+      ]
+    })
+
+    expect(result.orchestrationRunDagByPaneKey).toBeUndefined()
+    // The heavy query never ran — the flag gate short-circuits before it.
+    expect(listTasksWithDispatch).not.toHaveBeenCalled()
+  })
+
+  // Why (#6): two concurrent runs on distinct panes must not bleed — pane
+  // resolution, task scoping, and per-handle signal scoping each stay run-local.
+  it('keys each running coordinator run DAG to its own pane without bleeding', () => {
+    const runtime = new OrcaRuntimeService(storeWithOrchestratorsFlag())
+    const leafA = '22222222-2222-4222-8222-222222222222'
+    const leafB = '33333333-3333-4333-8333-333333333333'
+    const paneKeyA = makePaneKey('tab-coord-a', leafA)
+    const paneKeyB = makePaneKey('tab-coord-b', leafB)
+    const handleA = runtime.preAllocateHandleForPty('pty-coord-a')
+    const handleB = runtime.preAllocateHandleForPty('pty-coord-b')
+
+    runtime.setOrchestrationDb({
+      listCoordinatorRuns: vi.fn(() => [
+        { id: 'run-a', coordinator_handle: handleA },
+        { id: 'run-b', coordinator_handle: handleB }
+      ]),
+      listTasksWithDispatch: vi.fn(({ coordinatorRunId }: { coordinatorRunId: string }) =>
+        coordinatorRunId === 'run-a'
+          ? [makeDagTaskRow({ id: 'task-a', assignee_handle: 'term_worker_a' })]
+          : [makeDagTaskRow({ id: 'task-b', assignee_handle: 'term_worker_b' })]
+      ),
+      getAllMessagesForHandle: vi.fn((handle: string) =>
+        handle === handleA
+          ? [makeSignalMessage({ taskId: 'task-a', phase: 'implementing' })]
+          : [makeSignalMessage({ taskId: 'task-b', phase: 'reviewing' })]
+      ),
+      getRunDagChangeToken: vi.fn((runId: string) => `${runId}:1`)
+    } as never)
+    runtime.attachWindow(1)
+
+    const result = runtime.syncWindowGraph(1, {
+      tabs: [
+        {
+          tabId: 'tab-coord-a',
+          worktreeId: TEST_WORKTREE_ID,
+          title: 'A',
+          activeLeafId: leafA,
+          layout: null
+        },
+        {
+          tabId: 'tab-coord-b',
+          worktreeId: TEST_WORKTREE_ID,
+          title: 'B',
+          activeLeafId: leafB,
+          layout: null
+        }
+      ],
+      leaves: [
+        {
+          tabId: 'tab-coord-a',
+          worktreeId: TEST_WORKTREE_ID,
+          leafId: leafA,
+          paneRuntimeId: 1,
+          ptyId: 'pty-coord-a',
+          paneTitle: null
+        },
+        {
+          tabId: 'tab-coord-b',
+          worktreeId: TEST_WORKTREE_ID,
+          leafId: leafB,
+          paneRuntimeId: 2,
+          ptyId: 'pty-coord-b',
+          paneTitle: null
+        }
+      ]
+    })
+
+    const dagA = result.orchestrationRunDagByPaneKey?.[paneKeyA]
+    const dagB = result.orchestrationRunDagByPaneKey?.[paneKeyB]
+    expect(dagA?.runId).toBe('run-a')
+    expect(dagA?.tasks.map((task) => task.id)).toEqual(['task-a'])
+    expect(dagA?.tasks[0]?.dispatch?.assigneeHandle).toBe('term_worker_a')
+    expect(dagA?.tasks[0]?.signal).toEqual({ phase: 'implementing', summary: null })
+    expect(dagB?.runId).toBe('run-b')
+    expect(dagB?.tasks.map((task) => task.id)).toEqual(['task-b'])
+    expect(dagB?.tasks[0]?.dispatch?.assigneeHandle).toBe('term_worker_b')
+    // Run B's signal never bleeds into run A.
+    expect(dagB?.tasks[0]?.signal).toEqual({ phase: 'reviewing', summary: null })
+  })
+
+  // Why (#1, perf): the heavy listTasksWithDispatch/getAllMessagesForHandle run
+  // only when the cheap change token moves, not on every coalesced sync tick.
+  it('reuses the cached run DAG snapshot while the change token is unchanged', () => {
+    const runtime = new OrcaRuntimeService(storeWithOrchestratorsFlag())
+    const leafId = '44444444-4444-4444-8444-444444444444'
+    const handle = runtime.preAllocateHandleForPty('pty-coordinator')
+    let token = 'tok-1'
+    const listTasksWithDispatch = vi.fn(() => [makeDagTaskRow({ id: 'task-a' })])
+    const getAllMessagesForHandle = vi.fn(() => [] as unknown[])
+    runtime.setOrchestrationDb({
+      listCoordinatorRuns: vi.fn(() => [{ id: 'run-a', coordinator_handle: handle }]),
+      listTasksWithDispatch,
+      getAllMessagesForHandle,
+      getRunDagChangeToken: vi.fn(() => token)
+    } as never)
+    runtime.attachWindow(1)
+
+    const graph = {
+      tabs: [
+        {
+          tabId: 'tab-coordinator',
+          worktreeId: TEST_WORKTREE_ID,
+          title: 'Codex',
+          activeLeafId: leafId,
+          layout: null
+        }
+      ],
+      leaves: [
+        {
+          tabId: 'tab-coordinator',
+          worktreeId: TEST_WORKTREE_ID,
+          leafId,
+          paneRuntimeId: 1,
+          ptyId: 'pty-coordinator',
+          paneTitle: null
+        }
+      ]
+    }
+
+    runtime.syncWindowGraph(1, graph)
+    runtime.syncWindowGraph(1, graph) // token unchanged → served from cache
+    expect(listTasksWithDispatch).toHaveBeenCalledTimes(1)
+    expect(getAllMessagesForHandle).toHaveBeenCalledTimes(1)
+
+    token = 'tok-2' // a real change → recompute
+    runtime.syncWindowGraph(1, graph)
+    expect(listTasksWithDispatch).toHaveBeenCalledTimes(2)
+    expect(getAllMessagesForHandle).toHaveBeenCalledTimes(2)
   })
 
   it('falls back to cwd lineage when the caller terminal handle is stale', async () => {

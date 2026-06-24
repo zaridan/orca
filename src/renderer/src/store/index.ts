@@ -25,6 +25,7 @@ import { createRateLimitSlice } from './slices/rate-limits'
 import { createSshSlice } from './slices/ssh'
 import { createAgentStatusSlice } from './slices/agent-status'
 import { createOrchestrationActivitySlice } from './slices/orchestration-activity'
+import { createOrchestrationRunDagSlice } from './slices/orchestration-run-dag'
 import { createDiffCommentsSlice } from './slices/diffComments'
 import { createDetectedAgentsSlice } from './slices/detected-agents'
 import { createWorktreeNavHistorySlice } from './slices/worktree-nav-history'
@@ -64,6 +65,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createSshSlice(...a),
   ...createAgentStatusSlice(...a),
   ...createOrchestrationActivitySlice(...a),
+  ...createOrchestrationRunDagSlice(...a),
   ...createDiffCommentsSlice(...a),
   ...createDetectedAgentsSlice(...a),
   ...createWorktreeNavHistorySlice(...a),

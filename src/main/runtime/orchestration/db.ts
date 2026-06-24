@@ -700,6 +700,12 @@ export class OrchestrationDb {
   }): (TaskRow & {
     assignee_handle: string | null
     dispatch_id: string | null
+    // Why (#6 O1): the active dispatch's lifecycle + liveness, surfaced so the
+    // Control Panel sync can render per-worker state (stale heartbeat, etc.).
+    // Aliased to avoid colliding with the task's own `status` from `t.*`.
+    dispatch_status: DispatchStatus | null
+    dispatch_last_heartbeat_at: string | null
+    dispatch_dispatched_at: string | null
   })[] {
     const whereClauses: string[] = []
     const params: Database.BindValue[] = []
@@ -717,8 +723,11 @@ export class OrchestrationDb {
     const sql = `
       SELECT
         t.*,
-        d.assignee_handle AS assignee_handle,
-        d.id              AS dispatch_id
+        d.assignee_handle    AS assignee_handle,
+        d.id                 AS dispatch_id,
+        d.status             AS dispatch_status,
+        d.last_heartbeat_at  AS dispatch_last_heartbeat_at,
+        d.dispatched_at      AS dispatch_dispatched_at
       FROM tasks t
       LEFT JOIN (
         SELECT dc.*
@@ -736,7 +745,37 @@ export class OrchestrationDb {
     return this.db.prepare(sql).all(...params) as (TaskRow & {
       assignee_handle: string | null
       dispatch_id: string | null
+      dispatch_status: DispatchStatus | null
+      dispatch_last_heartbeat_at: string | null
+      dispatch_dispatched_at: string | null
     })[]
+  }
+
+  // Why (#6 O1, perf): a cheap high-water mark used to skip rebuilding a run's
+  // DAG snapshot on graph-sync ticks where nothing changed. Combines the max
+  // rowid of the run's tasks + dispatch_contexts (covers inserts: new task, new
+  // dispatch) with the max message sequence for the coordinator handle (covers
+  // heartbeat / worker_done arrivals, which drive the task/dispatch UPDATEs that
+  // rowid alone would miss). A coordinator-initiated dispatch fail with no new
+  // message/row is the one transition this can lag; it self-heals on the next
+  // dispatch insert or message — acceptable for a display panel.
+  getRunDagChangeToken(coordinatorRunId: string, coordinatorHandle: string): string {
+    const taskMax = (
+      this.db
+        .prepare('SELECT MAX(rowid) AS m FROM tasks WHERE coordinator_run_id = ?')
+        .get(coordinatorRunId) as { m: number | null }
+    ).m
+    const dispatchMax = (
+      this.db
+        .prepare('SELECT MAX(rowid) AS m FROM dispatch_contexts WHERE coordinator_run_id = ?')
+        .get(coordinatorRunId) as { m: number | null }
+    ).m
+    const messageMax = (
+      this.db
+        .prepare('SELECT MAX(sequence) AS m FROM messages WHERE to_handle = ?')
+        .get(coordinatorHandle) as { m: number | null }
+    ).m
+    return `${taskMax ?? 0}:${dispatchMax ?? 0}:${messageMax ?? 0}`
   }
 
   updateTaskStatus(id: string, status: TaskStatus, result?: string): TaskRow | undefined {

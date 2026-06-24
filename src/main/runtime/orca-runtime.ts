@@ -40,6 +40,11 @@ import { homedir } from 'os'
 import { isAbsolute, join, resolve } from 'path'
 import { mkdir, readFile, readdir, rm, stat } from 'fs/promises'
 import { OrchestrationDb } from './orchestration/db'
+import {
+  buildRunDagSnapshot,
+  indexLatestWorkerSignals,
+  RUN_DAG_SIGNAL_SCAN_LIMIT
+} from './orchestration/run-dag-snapshot'
 import { formatMessagesForInjection } from './orchestration/formatter'
 import type {
   Automation,
@@ -273,6 +278,7 @@ import type {
   RuntimeSyncWindowGraph,
   RuntimeWorktreeListResult,
   OrchestrationActivity,
+  OrchestrationRunDag,
   BrowserTabInfo,
   BrowserScreencastResult
 } from '../../shared/runtime-types'
@@ -757,6 +763,7 @@ type RuntimeStore = {
     defaultLinearTeamSelection?: GlobalSettings['defaultLinearTeamSelection']
     githubProjects?: GlobalSettings['githubProjects']
     experimentalNewWorktreeCardStyle?: GlobalSettings['experimentalNewWorktreeCardStyle']
+    experimentalOrchestrators?: GlobalSettings['experimentalOrchestrators']
     compactWorktreeCards?: GlobalSettings['compactWorktreeCards']
     gitlabProjects?: GlobalSettings['gitlabProjects']
     experimentalWorktreeSymlinks?: boolean
@@ -1820,6 +1827,11 @@ export class OrcaRuntimeService {
   private resolvedWorktreeCache: ResolvedWorktreeCache | null = null
   private resolvedWorktreeInFlight: ResolvedWorktreeInFlight | null = null
   private resolvedWorktreeGeneration = 0
+  // Why (#6 O1, perf): cache each run's last-built DAG snapshot keyed by run id,
+  // alongside the cheap change token it was built from, so the heavy
+  // listTasksWithDispatch/getAllMessagesForHandle work is skipped on graph-sync
+  // ticks where the run is unchanged. Pruned to the running set each build.
+  private orchestrationRunDagCache = new Map<string, { token: string; dag: OrchestrationRunDag }>()
   private cloneInFlightByPath = new Map<string, Promise<void>>()
   private agentDetector: AgentDetector | null = null
   private _orchestrationDb: OrchestrationDb | null = null
@@ -2736,11 +2748,18 @@ export class OrcaRuntimeService {
     }
 
     const agentOrchestrationByPaneKey = this.buildAgentOrchestrationByPaneKey()
-    const orchestrationActivityByPaneKey = this.buildOrchestrationActivityByPaneKey()
+    // Why (nit): resolve the running runs + hung threshold once and share them
+    // across both orchestration builders instead of each re-querying.
+    const runningOrchestration = this.collectRunningOrchestration()
+    const orchestrationActivityByPaneKey =
+      this.buildOrchestrationActivityByPaneKey(runningOrchestration)
+    const orchestrationRunDagByPaneKey =
+      this.buildOrchestrationRunDagByPaneKey(runningOrchestration)
     return {
       ...this.getStatus(),
       ...(agentOrchestrationByPaneKey ? { agentOrchestrationByPaneKey } : {}),
-      ...(orchestrationActivityByPaneKey ? { orchestrationActivityByPaneKey } : {})
+      ...(orchestrationActivityByPaneKey ? { orchestrationActivityByPaneKey } : {}),
+      ...(orchestrationRunDagByPaneKey ? { orchestrationRunDagByPaneKey } : {})
     }
   }
 
@@ -17610,18 +17629,39 @@ export class OrcaRuntimeService {
   // the renderer maps that pane to its Orcastrator and shows a "supervising"
   // dot instead of a misleading completion check. Counts are scoped per run
   // (#12) so each Orcastrator's dot reflects only its own tasks/dispatches.
-  private buildOrchestrationActivityByPaneKey(): Record<string, OrchestrationActivity> | undefined {
+  // Why (nit): the running runs + hung threshold are needed by both the activity
+  // and the DAG builders; compute them once per sync tick. `listCoordinatorRuns`
+  // is a single indexed query; the threshold mirrors the coordinator's own
+  // hung-worker window (10 min) so every "stalled" read agrees.
+  private collectRunningOrchestration():
+    | {
+        db: OrchestrationDb
+        runs: ReturnType<OrchestrationDb['listCoordinatorRuns']>
+        staleThresholdIso: string
+      }
+    | undefined {
     const db = this.getOrchestrationDbIfAvailable()
     if (!db?.listCoordinatorRuns) {
       return undefined
     }
-    const runningRuns = db.listCoordinatorRuns({ status: 'running' })
-    if (runningRuns.length === 0) {
+    const runs = db.listCoordinatorRuns({ status: 'running' })
+    if (runs.length === 0) {
       return undefined
     }
-    // Why: mirror the coordinator's own hung-worker threshold (10 min) so the
-    // sidebar's "stalled" read agrees with the coordinator's escalation logic.
-    const staleThresholdIso = new Date(Date.now() - ORCHESTRATION_HUNG_THRESHOLD_MS).toISOString()
+    return {
+      db,
+      runs,
+      staleThresholdIso: new Date(Date.now() - ORCHESTRATION_HUNG_THRESHOLD_MS).toISOString()
+    }
+  }
+
+  private buildOrchestrationActivityByPaneKey(
+    running: ReturnType<OrcaRuntimeService['collectRunningOrchestration']>
+  ): Record<string, OrchestrationActivity> | undefined {
+    if (!running) {
+      return undefined
+    }
+    const { db, runs: runningRuns, staleThresholdIso } = running
 
     const activityByPaneKey: Record<string, OrchestrationActivity> = {}
     for (const run of runningRuns) {
@@ -17639,6 +17679,92 @@ export class OrcaRuntimeService {
       }
     }
     return Object.keys(activityByPaneKey).length > 0 ? activityByPaneKey : undefined
+  }
+
+  // Why (#6 O1): sync each running coordinator's live task DAG (tasks + active
+  // dispatch detail + latest worker signal) keyed by coordinator paneKey, so
+  // Mission Control can render the DAG instead of only the aggregate counts.
+  // Run-scoped per #12 so two concurrent runs sharing the DB never bleed.
+  private buildOrchestrationRunDagByPaneKey(
+    running: ReturnType<OrcaRuntimeService['collectRunningOrchestration']>
+  ): Record<string, OrchestrationRunDag> | undefined {
+    // Why (#2): the DAG sync is only consumed by the Mission Control panel, which
+    // is behind experimentalOrchestrators. Gate the builder on the same flag so
+    // un-opted-in users with a running coordinator don't pay the per-tick cost
+    // (#1) for a panel they can't see.
+    if (this.store?.getSettings().experimentalOrchestrators !== true) {
+      this.orchestrationRunDagCache.clear()
+      return undefined
+    }
+    if (!running) {
+      this.orchestrationRunDagCache.clear()
+      return undefined
+    }
+    const { db, runs: runningRuns, staleThresholdIso } = running
+    // Why: same defensive guards as before — these methods exist on the real DB
+    // but may be absent on partial fakes in tests.
+    if (!db.listTasksWithDispatch || !db.getAllMessagesForHandle || !db.getRunDagChangeToken) {
+      return undefined
+    }
+
+    const dagByPaneKey: Record<string, OrchestrationRunDag> = {}
+    for (const run of runningRuns) {
+      // Why (nit): one malformed run must not throw out of syncWindowGraph and
+      // forfeit the whole tick (leaves + activity + the other runs' DAGs).
+      try {
+        const paneKey = this.getPaneKeyForTerminalHandle(run.coordinator_handle)
+        // Why: skip runs whose coordinator pane is not in this window — no row.
+        // (Its cache entry is preserved below: it is still a running run.)
+        if (!paneKey) {
+          continue
+        }
+        // Why (#1, perf): the cheap change token is computed every tick; the heavy
+        // listTasksWithDispatch/getAllMessagesForHandle only run when it changed.
+        const token = db.getRunDagChangeToken(run.id, run.coordinator_handle)
+        const cached = this.orchestrationRunDagCache.get(run.id)
+        if (cached && cached.token === token) {
+          dagByPaneKey[paneKey] = cached.dag
+          continue
+        }
+        const tasks = db.listTasksWithDispatch({ coordinatorRunId: run.id })
+        // Why: worker_done/heartbeat are addressed to the run's coordinator
+        // handle, scoping signals to the run without a run column on messages.
+        const signalsByTaskId = indexLatestWorkerSignals(
+          db.getAllMessagesForHandle(run.coordinator_handle, RUN_DAG_SIGNAL_SCAN_LIMIT, [
+            'heartbeat',
+            'worker_done'
+          ])
+        )
+        const dag = buildRunDagSnapshot({
+          runId: run.id,
+          // Recipe directors (#9) will populate this; LLM directors have none.
+          recipe: null,
+          tasks,
+          staleThresholdIso,
+          signalsByTaskId,
+          resolveAgent: (handle) => this.getLivePtyForHandle(handle)?.pty.launchAgent ?? null
+        })
+        if (dag.truncatedTaskCount > 0) {
+          console.warn(
+            `[orchestration] run ${run.id} DAG truncated: ${dag.truncatedTaskCount} task(s) dropped from sync payload`
+          )
+        }
+        this.orchestrationRunDagCache.set(run.id, { token, dag })
+        dagByPaneKey[paneKey] = dag
+      } catch (error) {
+        console.warn(`[orchestration] failed to build DAG for run ${run.id}:`, error)
+      }
+    }
+    // Why: drop cache entries for runs that are no longer running so the cache
+    // can't grow without bound. Keyed on the running set (not this window's
+    // panes), so a run live in another window keeps its cached snapshot.
+    const runningRunIds = new Set(runningRuns.map((run) => run.id))
+    for (const cachedRunId of this.orchestrationRunDagCache.keys()) {
+      if (!runningRunIds.has(cachedRunId)) {
+        this.orchestrationRunDagCache.delete(cachedRunId)
+      }
+    }
+    return Object.keys(dagByPaneKey).length > 0 ? dagByPaneKey : undefined
   }
 
   private getAgentStatusOrchestrationContextForHandle(

@@ -9299,7 +9299,21 @@
             "shipped": "Shipped",
             "shipped_note": "디렉터의 로그 기준 — 병합 후 워크트리는 제거되지만, 각 브랜치는 병합된 풀 리퀘스트에 매칭됩니다.",
             "pr_number": "PR #{{value0}}",
-            "view_pr": "View PR"
+            "view_pr": "View PR",
+            "supervising": "Supervising",
+            "supervising_stalled": "Supervision stalled",
+            "supervising_counts": "{{value0}} tasks · {{value1}} workers · {{value2}} stalled",
+            "recipe": "recipe: {{value0}}",
+            "tasks": "Tasks",
+            "tasks_empty": "No tasks yet — the coordinator decomposes the work as it plans.",
+            "tasks_truncated": "+{{value0}} more task(s) not shown",
+            "task_status_queued": "queued",
+            "task_status_working": "working",
+            "task_status_stalled": "stalled",
+            "task_status_blocked": "blocked",
+            "task_status_done": "done",
+            "task_status_failed": "failed",
+            "task_waiting_on": "waiting on {{value0}}"
           },
           "OrchestratorPanelNotice": {
             "title": "Orcastrator",
