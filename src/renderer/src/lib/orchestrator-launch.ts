@@ -74,13 +74,13 @@ export async function launchOrchestratorForProject(
     allowEmptyPromptLaunch: true
   })
 
-  // Why: a director is launched programmatically — reveal it in the sidebar +
-  // Mission Control DAG, but suppress the active-tab switch so the user is not
-  // yanked off their current worktree when the Orcastrator boots.
+  // Why: opening a new Orcastrator is a deliberate, manual user action (clicking
+  // "+" in the ORCASTRATORS section), so it SHOULD take focus and become the
+  // active tab — exactly like the "+" for a regular worktree. (A programmatic
+  // worker spawn is the opposite case and still suppresses activation.)
   const activation = activateAndRevealWorktree(worktreeId, {
     sidebarRevealBehavior: 'auto',
     setup,
-    suppressActivation: true,
     ...buildDirectWorkItemStartupOpts(agent, startupPlan, 'sidebar')
   })
   if (!activation) {

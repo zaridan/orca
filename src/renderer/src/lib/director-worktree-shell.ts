@@ -54,30 +54,11 @@ export async function createDirectorWorktreeShell(
       'skip',
       undefined,
       undefined,
-      `${ORCASTRATOR_DISPLAY_PREFIX}${options.label}`,
-      // Why: positional args up to compareBaseRef are unused for a director
-      // shell; the trailing options carries suppressActivation so a remote
-      // (SSH) create reveals the worktree without switching the user's active
-      // tab — matching the renderer-side activation suppression at the call site.
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      { suppressActivation: true }
+      // Why: a new Orcastrator is opened by a deliberate user action, so the host
+      // create must activate — we pass no trailing suppressActivation option, so an
+      // SSH/remote create focuses the new director, matching the renderer-side
+      // activation at the call site.
+      `${ORCASTRATOR_DISPLAY_PREFIX}${options.label}`
     )
     return { worktreeId: result.worktree.id, setup: result.setup }
   } catch (error) {

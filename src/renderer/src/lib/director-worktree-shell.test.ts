@@ -23,6 +23,9 @@ import { createDirectorWorktreeShell } from './director-worktree-shell'
 // makes activation relaunch an agent — sits well after displayName.
 const CREATED_WITH_AGENT_ARG_INDEX = 10
 const SETUP_DECISION_ARG_INDEX = 3
+// The trailing `options` positional (gates host-side activate) sits last in the
+// createWorktree signature, after compareBaseRef.
+const CREATE_OPTIONS_ARG_INDEX = 25
 
 const PROJECT: Project = {
   id: 'proj_1',
@@ -49,9 +52,10 @@ describe('createDirectorWorktreeShell', () => {
     // ...and CRUCIALLY no createdWithAgent — otherwise activation would relaunch an
     // LLM in the director pane, breaking the token-free invariant.
     expect(args[CREATED_WITH_AGENT_ARG_INDEX]).toBeUndefined()
-    // ...and the trailing options suppress host activation so an SSH create
-    // reveals the director without switching the user's active tab to it.
-    expect(args.at(-1)).toEqual({ suppressActivation: true })
+    // ...and NO trailing suppressActivation option: opening a new Orcastrator is a
+    // deliberate user action, so an SSH/remote create must activate (focus) it.
+    const trailingOptions = args[CREATE_OPTIONS_ARG_INDEX]
+    expect(trailingOptions?.suppressActivation).toBeUndefined()
   })
 
   it('returns null and toasts when the project has no repo', async () => {
