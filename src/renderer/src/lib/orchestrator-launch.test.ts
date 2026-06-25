@@ -71,15 +71,16 @@ beforeEach(() => {
 })
 
 describe('launchOrchestratorForProject', () => {
-  it('reveals the director worktree but suppresses the active-tab switch', async () => {
+  it('activates the new Orcastrator (a deliberate user action takes focus)', async () => {
     const ok = await launchOrchestratorForProject(PROJECT)
     expect(ok).toBe(true)
 
     expect(harness.activate).toHaveBeenCalledTimes(1)
     const [worktreeId, opts] = harness.activate.mock.calls[0]
     expect(worktreeId).toBe('wt_director')
-    // The programmatic launch must NOT yank the user's active tab.
-    expect(opts.suppressActivation).toBe(true)
+    // Opening a new Orcastrator is manual and intentional — it must take focus,
+    // unlike a programmatic worker spawn (which still suppresses activation).
+    expect(opts.suppressActivation).toBeFalsy()
     // ...while still revealing it in the sidebar tree + Mission Control DAG.
     expect(opts.sidebarRevealBehavior).toBe('auto')
   })
